@@ -1,0 +1,37 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# VSCode
+.vscode/
+
+
+# LangGraph
+.langgraph/
+.langgraph_api/
+
+# Lock files    (for package managers)
+uv.lock
+poetry.lock
+
+# Other
+.DS_Store
+.idea/
+.pytest_cache/
+.ruff_cache/
+.vscode/
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# DB files
+trades.db

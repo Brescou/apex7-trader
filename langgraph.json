@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "apex7": "./agent.py:agent_graph"
+  },
+  "env": ".env"
+}
