@@ -10,9 +10,10 @@ import plotly.graph_objects as go
 from dash import Input, Output, State, ctx, dcc, html
 from dash.dash_table import DataTable
 
-from agent import build_graph, get_simulation_mode, set_simulation_mode
-from config import AGENT_INTERVAL, DEATH_THRESHOLD, INITIAL_BALANCE, SIMULATION_MODE
+from agent import get_simulation_mode, set_simulation_mode
+from config import AGENT_GRAPH, AGENT_INTERVAL, DEATH_THRESHOLD, INITIAL_BALANCE, SIMULATION_MODE
 from data import Portfolio
+from graph_registry import get_graph, get_graph_info
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DESIGN TOKENS
@@ -40,14 +41,19 @@ DB_PATH  = Path(__file__).parent / "trades.db"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _ctrl: dict = {"paused": False, "step": False}
-_state: dict = {}
+_state: dict = {
+    "graph_id":  AGENT_GRAPH,
+    "last_votes": [],   # last agent_votes from multi-agent cycle
+    "last_arb":   {},   # last arbitration result
+}
 
 
-def _agent_loop(p: Portfolio) -> None:
+def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
     import traceback
-    from agent import AgentState
-    graph = build_graph(p)
+    graph = get_graph(graph_id, p)
     cycle = 0
+    is_multi = graph_id == "multi"
+
     while not p.is_dead:
         while _ctrl["paused"] and not _ctrl["step"] and not p.is_dead:
             time.sleep(0.3)
@@ -57,7 +63,7 @@ def _agent_loop(p: Portfolio) -> None:
         cycle += 1
         p.log(f"=== CYCLE {cycle} START ===")
         try:
-            initial: AgentState = {
+            initial: dict = {
                 "balance":             p.cash,
                 "positions":           dict(p.positions),
                 "portfolio_history":   [],
@@ -76,9 +82,24 @@ def _agent_loop(p: Portfolio) -> None:
                 "alive":               True,
                 "skip_research":       False,
             }
+            if is_multi:
+                initial.update({
+                    "supervisor_brief": "",
+                    "agent_role":       "",
+                    "agent_votes":      [],
+                    "tech_vote":        None,
+                    "analyst_vote":     None,
+                    "risk_vote":        None,
+                    "macro_vote":       None,
+                    "arbitration":      None,
+                })
             result = graph.invoke(initial)
             for entry in result.get("log", []):
                 p.log(entry["message"], entry.get("level", "info"))
+            # Store multi-agent votes for dashboard
+            if is_multi:
+                _state["last_votes"] = result.get("agent_votes", [])
+                _state["last_arb"]   = result.get("arbitration", {}) or {}
             if not result.get("alive", True):
                 p.is_dead = True
                 p.log("DEATH CONDITION MET", "critical")
@@ -100,14 +121,14 @@ def _agent_loop(p: Portfolio) -> None:
                 elapsed += 1.0
 
 
-def _launch(p: Portfolio) -> threading.Thread:
-    t = threading.Thread(target=_agent_loop, args=(p,), daemon=True)
+def _launch(p: Portfolio, graph_id: str = "simple") -> threading.Thread:
+    t = threading.Thread(target=_agent_loop, args=(p, graph_id), daemon=True)
     t.start()
     return t
 
 
 _state["portfolio"] = Portfolio()
-_state["thread"] = _launch(_state["portfolio"])
+_state["thread"]    = _launch(_state["portfolio"], _state["graph_id"])
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # EMOTION SYSTEM
@@ -183,19 +204,26 @@ def _classify(msg: str, level: str) -> tuple[str, str]:
 
 def _classify_v2(msg: str, level: str) -> tuple[str, str]:
     """Returns (badge_label, color) with proper sell coloring based on profit."""
-    if level == "critical":                           return "DEATH",     "#ff2020"
-    if level == "error":                              return "ERR",       ORANGE
-    if level == "warning":                            return "WARN",      YELLOW
-    if msg.startswith("BUY "):                        return "BUY",       BLUE
+    if level == "critical":                               return "DEATH",     "#ff2020"
+    if level == "error":                                  return "ERR",       ORANGE
+    if level == "warning":                                return "WARN",      YELLOW
+    if msg.startswith("BUY "):                            return "BUY",       BLUE
     if msg.startswith("SELL "):
         return ("SELL WIN", GREEN) if "+" in msg else ("SELL LOSS", RED)
-    if msg.startswith("HOLD "):                       return "HOLD",      GRAY
-    if msg.startswith("Skip "):                       return "SKIP",      YELLOW
-    if "Anthropic" in msg or "web search" in msg:     return "AI",        PURPLE
-    if msg.startswith("Analysis:"):                   return "INTEL",     PURPLE
-    if msg.startswith("[SIM]"):                       return "SIM",       ORANGE
-    if msg.startswith("=== CYCLE"):                   return "CYC",       BORDER
-    if msg.startswith(("Fetching", "Prices")):        return "MKT",       BORDER
+    if msg.startswith("HOLD "):                           return "HOLD",      GRAY
+    if msg.startswith("Skip "):                           return "SKIP",      YELLOW
+    if "Anthropic" in msg or "web search" in msg:         return "AI",        PURPLE
+    if msg.startswith("Analysis:"):                       return "INTEL",     PURPLE
+    # Multi-agent badges
+    if msg.startswith("[SIM][TECH]") or msg.startswith("technician:"):  return "TECH",   BLUE
+    if msg.startswith("[SIM][ANLST]") or msg.startswith("analyst:"):    return "ANLST",  "#06b6d4"
+    if msg.startswith("[SIM][RISK]") or msg.startswith("risk_manager:"): return "RISK",  RED
+    if msg.startswith("[SIM][MACRO]") or msg.startswith("macro_watcher:"): return "MACRO", YELLOW
+    if msg.startswith("supervisor:"):                     return "SUPV",      PURPLE
+    if msg.startswith("arbitrate:"):                      return "ARBIT",     GREEN
+    if msg.startswith("[SIM]"):                           return "SIM",       ORANGE
+    if msg.startswith("=== CYCLE"):                       return "CYC",       BORDER
+    if msg.startswith(("Fetching", "Prices")):            return "MKT",       BORDER
     return "LOG", BORDER
 
 
@@ -356,6 +384,7 @@ def _tab_live() -> html.Div:
         html.Div([
             html.Div(id="sec-portfolio", style={"padding": "16px 14px 0"}),
             html.Div(id="sec-emotion",   style={"padding": "0 14px 12px"}),
+            html.Div(id="sec-graph",     style={"padding": "0 14px 12px"}),
             html.Div(id="sec-stats",     style={"padding": "0 14px 12px"}),
             html.Div(id="sec-positions", style={"padding": "0 14px 12px"}),
         ], style={
@@ -627,6 +656,7 @@ app.layout = html.Div(
     children=[
         dcc.Store(id="ctrl-store",  data={"paused": False}),
         dcc.Store(id="mode-store",  data={"sim": get_simulation_mode()}),
+        dcc.Store(id="graph-store", data={"graph_id": AGENT_GRAPH}),
         dcc.Interval(id="tick",           interval=2000,  n_intervals=0),
         dcc.Interval(id="analytics-tick", interval=30000, n_intervals=0),
 
@@ -650,8 +680,23 @@ app.layout = html.Div(
             # Center: mode badge
             html.Div(id="mode-badge"),
 
-            # Right: mode toggle + controls
+            # Right: graph selector + mode toggle + controls
             html.Div([
+                dcc.Dropdown(
+                    id="graph-selector",
+                    options=[
+                        {"label": "⚡ SIMPLE",       "value": "simple"},
+                        {"label": "🧠 MULTI-AGENT",  "value": "multi"},
+                    ],
+                    value=AGENT_GRAPH,
+                    clearable=False,
+                    style={
+                        "width": "170px", "fontSize": "11px",
+                        "background": BG_CARD, "color": TEXT_MAIN,
+                        "fontFamily": FONT,
+                    },
+                ),
+                html.Div(style={"width": "1px", "height": "14px", "background": BORDER}),
                 dcc.RadioItems(
                     id="mode-radio",
                     options=[
@@ -835,11 +880,35 @@ def _controls(_, __, ___, store):
         old.is_dead = True
         time.sleep(0.15)
         p = Portfolio()
-        _state["portfolio"] = p
-        _state["thread"] = _launch(p)
+        _state["portfolio"]   = p
+        _state["last_votes"]  = []
+        _state["last_arb"]    = {}
+        _state["thread"]      = _launch(p, _state.get("graph_id", "simple"))
         _ctrl["paused"] = False
         store["paused"] = False
     return store
+
+
+@app.callback(
+    Output("graph-store", "data"),
+    Input("graph-selector", "value"),
+    prevent_initial_call=True,
+)
+def _switch_graph(graph_id: str) -> dict:
+    """Switch the active graph, restart portfolio and agent thread."""
+    _state["graph_id"] = graph_id
+    old = _state["portfolio"]
+    old.is_dead = True
+    time.sleep(0.2)
+    p = Portfolio()
+    _state["portfolio"]  = p
+    _state["last_votes"] = []
+    _state["last_arb"]   = {}
+    _ctrl["paused"]      = False
+    _state["thread"]     = _launch(p, graph_id)
+    info = get_graph_info(graph_id)
+    p.log(f"Graph switched to {info['label']}")
+    return {"graph_id": graph_id}
 
 
 @app.callback(
@@ -851,6 +920,7 @@ def _controls(_, __, ___, store):
         Output("btn-pause",     "className"),
         Output("sec-portfolio", "children"),
         Output("sec-emotion",   "children"),
+        Output("sec-graph",     "children"),
         Output("sec-stats",     "children"),
         Output("sec-positions", "children"),
         Output("chart-vals",    "children"),
@@ -858,9 +928,9 @@ def _controls(_, __, ___, store):
         Output("activity-log",  "children"),
     ],
     [Input("tick", "n_intervals"), Input("ctrl-store", "data")],
-    State("main-tabs", "value"),
+    [State("main-tabs", "value"), State("graph-store", "data")],
 )
-def _refresh(_, store, active_tab):
+def _refresh(_, store, active_tab, graph_store):
     p       = _state["portfolio"]
     prices  = p.last_prices
     total   = p.total_value(prices)
@@ -916,7 +986,7 @@ def _refresh(_, store, active_tab):
                 "fontSize": "12px", "color": RED, "textAlign": "center",
             }),
         ], style={"padding": "16px 14px"})
-        sec_emotion = sec_stats = sec_positions = html.Div()
+        sec_graph = sec_emotion = sec_stats = sec_positions = html.Div()
 
     else:
         # ── PORTFOLIO VALUE ──
@@ -988,6 +1058,87 @@ def _refresh(_, store, active_tab):
             }),
         ])
 
+        # ── GRAPH INFO PANEL ──
+        graph_id   = (graph_store or {}).get("graph_id", _state.get("graph_id", "simple"))
+        graph_info = get_graph_info(graph_id)
+        gc         = graph_info["color"]
+        is_multi   = graph_id == "multi"
+
+        vote_rows = []
+        if is_multi and _state.get("last_votes"):
+            vote_map = {v.get("agent", ""): v for v in _state["last_votes"]}
+            agent_cfg = [
+                ("technician",    "TECH",  BLUE,    lambda v: f"{v.get('action','?')} {v.get('symbol','')} RSI={v.get('key_indicators',{}).get('rsi','?')}"),
+                ("analyst",       "ANLST", "#06b6d4",lambda v: f"{v.get('action','?')} {v.get('symbol','')} sent={v.get('sentiment_score',0):+.2f}"),
+                ("risk_manager",  "RISK",  RED,     lambda v: f"score={v.get('risk_score','?')}/10 {v.get('sizing_recommendation','?')}"),
+                ("macro_watcher", "MACRO", YELLOW,  lambda v: f"{v.get('market_regime','?')} {v.get('macro_bias','?')}"),
+            ]
+            for agent_key, badge, ac, fmt in agent_cfg:
+                v = vote_map.get(agent_key, {})
+                conf_w = int(float(v.get("confidence", 0.5)) * 40)
+                vote_rows.append(html.Div([
+                    html.Span(badge, style={
+                        "fontSize": "8px", "fontWeight": "700", "padding": "1px 5px",
+                        "borderRadius": "2px", "background": f"{ac}22", "color": ac,
+                        "marginRight": "7px", "flexShrink": "0", "width": "40px",
+                        "textAlign": "center",
+                    }),
+                    html.Span(fmt(v) if v else "—", style={
+                        "fontSize": "9px", "color": TEXT_DIM, "flex": "1",
+                        "overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap",
+                    }),
+                    html.Div(
+                        html.Div(style={"width": f"{conf_w}px", "height": "100%",
+                                        "background": ac, "borderRadius": "1px"}),
+                        style={"width": "40px", "height": "3px", "background": f"{ac}22",
+                               "borderRadius": "1px", "overflow": "hidden", "flexShrink": "0"},
+                    ),
+                ], style={"display": "flex", "alignItems": "center", "marginBottom": "4px"}))
+
+        arb = _state.get("last_arb", {})
+        consensus_badge = html.Div()
+        if is_multi and arb:
+            consensus     = arb.get("consensus_level", "")
+            cons_col      = GREEN if consensus == "strong" else (YELLOW if consensus == "moderate" else RED)
+            dissenting    = arb.get("dissenting_agents", [])
+            consensus_badge = html.Div([
+                html.Span(f"consensus: {consensus}", style={"fontSize": "9px", "color": cons_col}),
+                html.Span(f"  dissent: {', '.join(dissenting) or '—'}", style={"fontSize": "9px", "color": TEXT_DIM}),
+            ], style={"marginTop": "6px"})
+
+        sec_graph = html.Div([
+            _section_label("ACTIVE GRAPH"),
+            html.Div([
+                html.Div([
+                    html.Span(graph_info["label"], style={
+                        "fontSize": "10px", "fontWeight": "700", "color": gc,
+                        "letterSpacing": "0.06em",
+                    }),
+                    html.Div([
+                        html.Span(f"💰 {graph_info['cost']}", style={
+                            "fontSize": "8px", "color": TEXT_DIM,
+                            "background": f"{gc}18", "padding": "1px 5px",
+                            "borderRadius": "2px", "marginRight": "4px",
+                        }),
+                        html.Span(graph_info["latency"], style={
+                            "fontSize": "8px", "color": TEXT_DIM,
+                        }),
+                    ], style={"marginTop": "3px"}),
+                    html.Div(graph_info["description"], style={
+                        "fontSize": "9px", "color": TEXT_DIM,
+                        "fontStyle": "italic", "marginTop": "4px",
+                    }),
+                ]),
+            ], style={
+                "background": BG_CARD, "border": f"1px solid {gc}33",
+                "borderLeft": f"2px solid {gc}",
+                "borderRadius": "3px", "padding": "8px 10px",
+                "marginBottom": "8px" if vote_rows else "0",
+            }),
+            *(vote_rows or []),
+            consensus_badge,
+        ])
+
         # ── METRICS ──
         dd_c = RED if dd > 20 else (YELLOW if dd > 10 else TEXT_DIM)
         sec_stats = html.Div([
@@ -1037,7 +1188,7 @@ def _refresh(_, store, active_tab):
 
     return (
         page_style, topbar_style, dot_cls, str(cyc) if cyc else "—", pause_cls,
-        sec_portfolio, sec_emotion, sec_stats, sec_positions,
+        sec_portfolio, sec_emotion, sec_graph, sec_stats, sec_positions,
         chart_vals, fig, log_items,
     )
 
