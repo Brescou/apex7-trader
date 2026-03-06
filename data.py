@@ -53,17 +53,11 @@ class Portfolio:
             amount_usd = min(amount_usd, max_amount, self.cash)
             if amount_usd < 1:
                 return {"success": False, "error": "Insufficient cash"}
+            if symbol in self.positions:
+                return
             shares = amount_usd / price
             self.cash -= amount_usd
-            if symbol in self.positions:
-                pos = self.positions[symbol]
-                total = pos["shares"] + shares
-                self.positions[symbol] = {
-                    "shares": total,
-                    "avg_price": (pos["shares"] * pos["avg_price"] + shares * price) / total,
-                }
-            else:
-                self.positions[symbol] = {"shares": shares, "avg_price": price}
+            self.positions[symbol] = {"shares": shares, "avg_price": price}
             trade = {
                 "time": datetime.now().isoformat(),
                 "action": "BUY",
@@ -99,6 +93,17 @@ class Portfolio:
             self.trade_history.append(trade)
             return {"success": True, **trade}
 
+    def open_symbols(self) -> list[str]:
+        with self._lock:
+            return list(self.positions.keys())
+
+    def closed_trades_since(self, ts: str) -> list[dict]:
+        with self._lock:
+            return [
+                t for t in self.trade_history
+                if t["action"] == "SELL" and t["time"] >= ts
+            ]
+
     def record_value(self, prices: dict[str, float]):
         with self._lock:
             self.value_history.append(
@@ -116,3 +121,23 @@ class Portfolio:
         with self._lock:
             self.agent_log.append(entry)
         print(f"[APEX-7/{level.upper()}] {message}")
+
+
+class LiveFeed:
+    def __init__(self, symbols: list[str] | str):
+        if isinstance(symbols, str):
+            symbols = [symbols]
+        self.symbols = symbols
+
+    def fetch(self) -> dict[str, float]:
+        import yfinance as yf
+        result = {}
+        for sym in self.symbols:
+            try:
+                ticker = yf.Ticker(sym)
+                hist = ticker.history(period="1d", interval="1m")
+                if not hist.empty:
+                    result[sym] = float(hist["Close"].iloc[-1])
+            except Exception:
+                pass
+        return result

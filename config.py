@@ -24,7 +24,11 @@ SIMULATION_MODE = os.getenv("SIMULATION_MODE", "false").lower() == "true"
 SIM_VOLATILITY  = float(os.getenv("SIM_VOLATILITY", "0.02"))   # 2% par défaut
 SIM_DRIFT       = float(os.getenv("SIM_DRIFT", "0.0001"))       # léger biais haussier
 
+STOP_LOSS_PCT = 0.05
+
 AGENT_GRAPH = os.getenv("AGENT_GRAPH", "simple")
 # "simple" → agent.py      (1 agent Claude Sonnet)
 # "multi"  → agent_multi.py (4 agents spécialisés + arbitration)
+
+POSTMORTEM_HOUR = 22
 
