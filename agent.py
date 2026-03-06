@@ -103,6 +103,29 @@ CREATE TABLE IF NOT EXISTS patterns (
     timestamp TEXT,
     pattern   TEXT
 );
+CREATE TABLE IF NOT EXISTS agent_memory (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp    TEXT,
+    agent_name   TEXT,
+    symbol       TEXT,
+    vote         TEXT,
+    confidence   REAL,
+    was_correct  INTEGER,
+    lesson       TEXT,
+    source       TEXT DEFAULT 'simulation'
+);
+CREATE TABLE IF NOT EXISTS postmortem (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp       TEXT,
+    symbol          TEXT,
+    buy_price       REAL,
+    sell_price      REAL,
+    pnl_pct         REAL,
+    holding_hours   REAL,
+    agents_correct  TEXT,
+    summary         TEXT,
+    source          TEXT DEFAULT 'simulation'
+);
 """
 
 

@@ -3,12 +3,15 @@
 import json
 import operator
 import random
+import sqlite3
+from datetime import datetime, date
 from typing import Annotated, List, Optional, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 from agent import (
+    DB_PATH,
     HAIKU_ID,
     SONNET_ID,
     _entry,
@@ -19,6 +22,7 @@ from agent import (
     _sim_mode,
     _sim_price_history,
     _sim_rsi,
+    _ts,
     haiku,
     load_memory_node,
     make_execute_node,
@@ -120,11 +124,31 @@ def sim_technician(state: MultiAgentState) -> dict:
         macd, bb, trend = "neutral", "mid", "sideways"
 
     vote = {
-        "agent": "technician", "action": action, "symbol": sym,
-        "confidence": conf, "allocation_pct": alloc, "reasoning": reason,
+        "agent": "technician",
+        "agent_name": "Technician",
+        "action": action, "symbol": sym,
+        "confidence": conf, "allocation_pct": alloc,
+        "reasoning": reason,
+        "signals": [
+            f"RSI({rsi_v:.1f}): {'oversold' if rsi_v < 35 else 'overbought' if rsi_v > 65 else 'neutral'}",
+            f"MACD: {macd}",
+            f"Bollinger Band: {bb}",
+            f"Trend: {trend}",
+        ],
         "key_indicators": {"rsi": round(rsi_v, 1), "macd": macd, "bb": bb, "trend": trend},
     }
     logs.append(_entry(f"[SIM][TECH] {action} {sym} conf={conf:.0%} RSI={rsi_v:.1f}"))
+    try:
+        _con = sqlite3.connect(DB_PATH)
+        _con.execute(
+            "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
+            "VALUES (?,?,?,?,?,NULL,NULL,?)",
+            (_ts(), "technician", sym, action, float(conf), "simulation")
+        )
+        _con.commit()
+        _con.close()
+    except Exception:
+        pass
     return {"agent_votes": [vote], "tech_vote": vote, "log": logs}
 
 
@@ -160,11 +184,29 @@ def sim_analyst(state: MultiAgentState) -> dict:
         catalysts = []
 
     vote = {
-        "agent": "analyst", "action": action, "symbol": sym,
-        "confidence": conf, "allocation_pct": alloc, "reasoning": reason,
+        "agent": "analyst",
+        "agent_name": "Analyst",
+        "action": action, "symbol": sym,
+        "confidence": conf, "allocation_pct": alloc,
+        "reasoning": reason,
+        "signals": [
+            f"Aggregate sentiment: {avg_sent:+.2f}",
+            f"Market bias: {'bullish' if avg_sent > 0.15 else 'bearish' if avg_sent < -0.15 else 'neutral'}",
+        ] + catalysts,
         "catalysts": catalysts, "sentiment_score": round(avg_sent, 2),
     }
     logs.append(_entry(f"[SIM][ANLST] {action} {sym} conf={conf:.0%} sent={avg_sent:+.2f}"))
+    try:
+        _con = sqlite3.connect(DB_PATH)
+        _con.execute(
+            "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
+            "VALUES (?,?,?,?,?,NULL,NULL,?)",
+            (_ts(), "analyst", sym, action, float(conf), "simulation")
+        )
+        _con.commit()
+        _con.close()
+    except Exception:
+        pass
     return {"agent_votes": [vote], "analyst_vote": vote, "log": logs}
 
 
@@ -196,17 +238,36 @@ def sim_risk_manager(state: MultiAgentState) -> dict:
 
     vote = {
         "agent": "risk_manager",
+        "agent_name": "Risk Manager",
         "risk_score": risk_score,
         "max_safe_allocation_pct": float(max_alloc),
         "var_1d": round(var_1d, 2),
         "portfolio_exposure_after": round(exposure * 100, 1),
         "sizing_recommendation": sizing,
         "reasoning": reason,
+        "signals": [
+            f"Risk score: {risk_score}/10",
+            f"Portfolio danger ratio: {danger_ratio:.2f} (death at {DEATH_THRESHOLD/INITIAL_BALANCE:.2f})",
+            f"Exposure: {exposure:.0%}",
+            f"VaR 95% 1d: ${var_1d:.0f}",
+            f"Sizing: {sizing}",
+        ] + warnings,
         "warnings": warnings,
         # risk_manager votes HOLD (doesn't pick direction)
         "action": "HOLD", "symbol": "", "confidence": 0.5, "allocation_pct": max_alloc,
     }
     logs.append(_entry(f"[SIM][RISK] score={risk_score}/10 sizing={sizing} VaR=${var_1d:.0f}"))
+    try:
+        _con = sqlite3.connect(DB_PATH)
+        _con.execute(
+            "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
+            "VALUES (?,?,?,?,?,NULL,NULL,?)",
+            (_ts(), "risk_manager", "", "HOLD", 0.5, "simulation")
+        )
+        _con.commit()
+        _con.close()
+    except Exception:
+        pass
     return {"agent_votes": [vote], "risk_vote": vote, "log": logs}
 
 
@@ -237,13 +298,34 @@ def sim_macro_watcher(state: MultiAgentState) -> dict:
 
     vote = {
         "agent": "macro_watcher",
+        "agent_name": "Macro Watcher",
         "market_regime": regime, "macro_bias": bias,
         "recommended_exposure": exposure, "sector_rotation": rotation,
-        "reasoning": reason, "macro_score": round(macro_score, 2),
+        "reasoning": reason,
+        "signals": [
+            f"Market regime: {regime}",
+            f"Macro bias: {bias}",
+            f"Portfolio health: {pv/INITIAL_BALANCE:.0%} of initial capital",
+            f"Aggregate sentiment: {avg_sent:+.2f}",
+            f"Recommended exposure: {exposure}%",
+            f"Sector rotation: {rotation}",
+        ],
+        "macro_score": round(macro_score, 2),
         # macro_watcher also doesn't vote on specific direction
         "action": "HOLD", "symbol": "", "confidence": 0.5, "allocation_pct": 0,
     }
     logs.append(_entry(f"[SIM][MACRO] {regime} {bias} exposure={exposure}%"))
+    try:
+        _con = sqlite3.connect(DB_PATH)
+        _con.execute(
+            "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
+            "VALUES (?,?,?,?,?,NULL,NULL,?)",
+            (_ts(), "macro_watcher", "", "HOLD", 0.5, "simulation")
+        )
+        _con.commit()
+        _con.close()
+    except Exception:
+        pass
     return {"agent_votes": [vote], "macro_vote": vote, "log": logs}
 
 
@@ -305,6 +387,14 @@ def technician_node(state: MultiAgentState) -> dict:
     pos    = state["positions"]
     logs   = [_entry("technician: technical analysis")]
 
+    _con = sqlite3.connect(DB_PATH)
+    _rows = _con.execute(
+        "SELECT lesson FROM agent_memory WHERE agent_name='technician' AND lesson IS NOT NULL "
+        "ORDER BY timestamp DESC LIMIT 5"
+    ).fetchall()
+    _con.close()
+    recent_lessons = [r[0] for r in _rows if r[0]]
+
     rsi_map = {
         sym: _sim_rsi(_sim_price_history.get(sym, [prices.get(sym, 100.0)]))
         for sym in WATCHLIST if sym in prices
@@ -325,6 +415,8 @@ def technician_node(state: MultiAgentState) -> dict:
         "Tu ignores les news et le macro. Tu es méthodique, précis, factuel. "
         "Retourne UNIQUEMENT du JSON valide."
     )
+    if recent_lessons:
+        system += "\nTes erreurs récentes :\n" + "\n".join(f"  • {l}" for l in recent_lessons)
     user = (
         f"TECHNICAL ANALYSIS — Cycle #{state['round']}\n\n"
         f"PRIX ACTUELS:\n{json.dumps({s: f'${p:.2f}' for s, p in prices.items()}, indent=2)}\n\n"
@@ -349,7 +441,29 @@ def technician_node(state: MultiAgentState) -> dict:
                 "reasoning": "Parse error — defaulting to HOLD",
                 "key_indicators": {"rsi": 50.0, "macd": "neutral", "bb": "mid", "trend": "sideways"}}
     vote["agent"] = "technician"
+    vote["agent_name"] = "Technician"
+    # Build signals from key_indicators if present, otherwise from rsi_map
+    ki = vote.get("key_indicators", {})
+    rsi_val = ki.get("rsi") or rsi_map.get(vote.get("symbol", ""), 50.0)
+    vote.setdefault("signals", [
+        f"RSI({rsi_val:.1f}): {'oversold' if rsi_val < 35 else 'overbought' if rsi_val > 65 else 'neutral'}",
+        f"MACD: {ki.get('macd', 'N/A')}",
+        f"Bollinger Band: {ki.get('bb', 'N/A')}",
+        f"Trend: {ki.get('trend', 'N/A')}",
+    ])
     logs.append(_entry(f"technician: {vote.get('action')} {vote.get('symbol','')} conf={vote.get('confidence',0):.0%}"))
+    try:
+        _con = sqlite3.connect(DB_PATH)
+        _con.execute(
+            "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
+            "VALUES (?,?,?,?,?,NULL,NULL,?)",
+            (_ts(), "technician", vote.get("symbol", ""), vote.get("action", "HOLD"),
+             float(vote.get("confidence", 0.5)), "live")
+        )
+        _con.commit()
+        _con.close()
+    except Exception:
+        pass
     return {"agent_votes": [vote], "tech_vote": vote, "log": logs}
 
 
@@ -362,6 +476,14 @@ def analyst_node(state: MultiAgentState) -> dict:
     sentiment = state.get("sentiment", {})
     logs      = [_entry("analyst: fundamental + sentiment analysis")]
 
+    _con = sqlite3.connect(DB_PATH)
+    _rows = _con.execute(
+        "SELECT lesson FROM agent_memory WHERE agent_name='analyst' AND lesson IS NOT NULL "
+        "ORDER BY timestamp DESC LIMIT 5"
+    ).fetchall()
+    _con.close()
+    recent_lessons = [r[0] for r in _rows if r[0]]
+
     system = (
         "Tu es un analyste financier fondamental senior. "
         "Tu analyses les catalyseurs, earnings, actualités, sentiment de marché. "
@@ -369,6 +491,8 @@ def analyst_node(state: MultiAgentState) -> dict:
         "Tu penses en termes de valeur intrinsèque et de catalyseurs. "
         "Retourne UNIQUEMENT du JSON valide."
     )
+    if recent_lessons:
+        system += "\nTes erreurs récentes :\n" + "\n".join(f"  • {l}" for l in recent_lessons)
     user = (
         f"FUNDAMENTAL ANALYSIS — Cycle #{state['round']}\n\n"
         f"NEWS RÉCENTES:\n{(state.get('news') or 'Aucune news')[:600]}\n\n"
@@ -393,7 +517,26 @@ def analyst_node(state: MultiAgentState) -> dict:
                 "reasoning": "Parse error — defaulting to HOLD",
                 "catalysts": [], "sentiment_score": 0.0}
     vote["agent"] = "analyst"
+    vote["agent_name"] = "Analyst"
+    sent_score = vote.get("sentiment_score", 0.0)
+    catalysts_list = vote.get("catalysts", [])
+    vote.setdefault("signals", [
+        f"Sentiment score: {sent_score:+.2f}",
+        f"Market bias: {'bullish' if sent_score > 0.15 else 'bearish' if sent_score < -0.15 else 'neutral'}",
+    ] + catalysts_list)
     logs.append(_entry(f"analyst: {vote.get('action')} {vote.get('symbol','')} conf={vote.get('confidence',0):.0%}"))
+    try:
+        _con = sqlite3.connect(DB_PATH)
+        _con.execute(
+            "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
+            "VALUES (?,?,?,?,?,NULL,NULL,?)",
+            (_ts(), "analyst", vote.get("symbol", ""), vote.get("action", "HOLD"),
+             float(vote.get("confidence", 0.5)), "live")
+        )
+        _con.commit()
+        _con.close()
+    except Exception:
+        pass
     return {"agent_votes": [vote], "analyst_vote": vote, "log": logs}
 
 
@@ -406,6 +549,14 @@ def risk_manager_node(state: MultiAgentState) -> dict:
     balance = state["balance"]
     pv      = _portfolio_value(state)
     logs    = [_entry("risk_manager: risk metrics calculation")]
+
+    _con = sqlite3.connect(DB_PATH)
+    _rows = _con.execute(
+        "SELECT lesson FROM agent_memory WHERE agent_name='risk_manager' AND lesson IS NOT NULL "
+        "ORDER BY timestamp DESC LIMIT 5"
+    ).fetchall()
+    _con.close()
+    recent_lessons = [r[0] for r in _rows if r[0]]
 
     # Python-pure calculations
     exposure     = (pv - balance) / pv if pv > 0 else 0.0
@@ -425,6 +576,8 @@ def risk_manager_node(state: MultiAgentState) -> dict:
         "Tu calcules, tu mesures, tu protèges le capital. "
         "Retourne UNIQUEMENT du JSON valide."
     )
+    if recent_lessons:
+        system += "\nTes erreurs récentes :\n" + "\n".join(f"  • {l}" for l in recent_lessons)
     user = (
         f"RISK ASSESSMENT — Cycle #{state['round']}\n\n"
         f"MÉTRIQUES CALCULÉES (Python pur) :\n"
@@ -456,17 +609,38 @@ def risk_manager_node(state: MultiAgentState) -> dict:
                 "reasoning": "Parse error — conservative defaults applied",
                 "warnings": ["Parse error"]}
     vote["agent"] = "risk_manager"
+    vote["agent_name"] = "Risk Manager"
     # risk_manager doesn't vote on direction
     vote.setdefault("action", "HOLD")
     vote.setdefault("symbol", "")
     vote.setdefault("confidence", 0.5)
     vote.setdefault("allocation_pct", vote.get("max_safe_allocation_pct", MAX_ALLOC_PCT))
+    vote.setdefault("signals", [
+        f"Risk score: {vote.get('risk_score', 5)}/10",
+        f"Danger ratio: {danger_ratio:.2f} (death at {DEATH_THRESHOLD/INITIAL_BALANCE:.2f})",
+        f"Exposure: {exposure:.0%}",
+        f"VaR 95% 1d: ${var_1d:.2f}",
+        f"Kelly allocation: {kelly_alloc:.1f}%",
+        f"Sizing: {vote.get('sizing_recommendation', 'N/A')}",
+    ] + vote.get("warnings", []))
 
     logs.append(_entry(
         f"risk_manager: score={vote.get('risk_score',5)}/10 "
         f"sizing={vote.get('sizing_recommendation','?')} "
         f"VaR=${vote.get('var_1d',0):.0f}"
     ))
+    try:
+        _con = sqlite3.connect(DB_PATH)
+        _con.execute(
+            "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
+            "VALUES (?,?,?,?,?,NULL,NULL,?)",
+            (_ts(), "risk_manager", vote.get("symbol", ""), vote.get("action", "HOLD"),
+             float(vote.get("confidence", 0.5)), "live")
+        )
+        _con.commit()
+        _con.close()
+    except Exception:
+        pass
     return {"agent_votes": [vote], "risk_vote": vote, "log": logs}
 
 
@@ -479,6 +653,14 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
     pos       = state["positions"]
     logs      = [_entry("macro_watcher: regime analysis")]
 
+    _con = sqlite3.connect(DB_PATH)
+    _rows = _con.execute(
+        "SELECT lesson FROM agent_memory WHERE agent_name='macro_watcher' AND lesson IS NOT NULL "
+        "ORDER BY timestamp DESC LIMIT 5"
+    ).fetchall()
+    _con.close()
+    recent_lessons = [r[0] for r in _rows if r[0]]
+
     avg_sent = sum(sentiment.values()) / max(len(sentiment), 1)
 
     system = (
@@ -487,6 +669,8 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
         "Tu ignores les actions individuelles. Tu regardes le tableau global. "
         "Retourne UNIQUEMENT du JSON valide."
     )
+    if recent_lessons:
+        system += "\nTes erreurs récentes :\n" + "\n".join(f"  • {l}" for l in recent_lessons)
     user = (
         f"MACRO ANALYSIS — Cycle #{state['round']}\n\n"
         f"PORTFOLIO HEALTH: ${pv:.2f} ({pv/INITIAL_BALANCE:.0%} of initial)\n"
@@ -513,15 +697,36 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
                 "sector_rotation": "balanced", "reasoning": "Parse error — neutral stance",
                 "macro_score": 0.0}
     vote["agent"] = "macro_watcher"
+    vote["agent_name"] = "Macro Watcher"
     vote.setdefault("action", "HOLD")
     vote.setdefault("symbol", "")
     vote.setdefault("confidence", 0.5)
     vote.setdefault("allocation_pct", 0)
+    vote.setdefault("signals", [
+        f"Market regime: {vote.get('market_regime', 'N/A')}",
+        f"Macro bias: {vote.get('macro_bias', 'N/A')}",
+        f"Portfolio health: {pv/INITIAL_BALANCE:.0%} of initial capital",
+        f"Aggregate sentiment: {avg_sent:+.2f}",
+        f"Recommended exposure: {vote.get('recommended_exposure', 'N/A')}%",
+        f"Sector rotation: {vote.get('sector_rotation', 'N/A')}",
+    ])
 
     logs.append(_entry(
         f"macro_watcher: {vote.get('market_regime','?')} {vote.get('macro_bias','?')} "
         f"score={vote.get('macro_score',0):+.2f}"
     ))
+    try:
+        _con = sqlite3.connect(DB_PATH)
+        _con.execute(
+            "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
+            "VALUES (?,?,?,?,?,NULL,NULL,?)",
+            (_ts(), "macro_watcher", vote.get("symbol", ""), vote.get("action", "HOLD"),
+             float(vote.get("confidence", 0.5)), "live")
+        )
+        _con.commit()
+        _con.close()
+    except Exception:
+        pass
     return {"agent_votes": [vote], "macro_vote": vote, "log": logs}
 
 
@@ -667,6 +872,23 @@ def arbitrate_node(state: MultiAgentState) -> dict:
 
     skip_res = state.get("skip_research", False) or composite_conf >= 0.72
 
+    # Update was_correct for the agent_memory rows just inserted this cycle
+    try:
+        _con = sqlite3.connect(DB_PATH)
+        for _agent_name in ["technician", "analyst", "risk_manager", "macro_watcher"]:
+            _av = vote_map.get(_agent_name, {})
+            _correct = 1 if _av.get("action", "HOLD") == final_action else 0
+            _con.execute(
+                "UPDATE agent_memory SET was_correct=? WHERE id=("
+                "SELECT id FROM agent_memory WHERE agent_name=? AND was_correct IS NULL "
+                "ORDER BY timestamp DESC LIMIT 1)",
+                (_correct, _agent_name)
+            )
+        _con.commit()
+        _con.close()
+    except Exception as _e:
+        logs.append(_entry(f"arbitrate: agent_memory update error: {_e}", "warning"))
+
     logs.append(_entry(
         f"arbitrate: {final_action} {symbol} conf={composite_conf:.0%} "
         f"consensus={consensus} dissenting={dissenting}"
@@ -683,6 +905,74 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         "skip_research": skip_res,
         "log":           logs,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DAILY POSTMORTEM
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def run_daily_postmortem(portfolio: Portfolio, db_path=DB_PATH) -> None:
+    """Generate postmortem entries for all SELL trades since midnight."""
+    midnight = datetime.combine(date.today(), datetime.min.time()).isoformat()
+    source   = "simulation" if _sim_mode["enabled"] else "live"
+
+    sells = portfolio.closed_trades_since(midnight)
+    if not sells:
+        return
+
+    con = sqlite3.connect(db_path)
+    for trade in sells:
+        symbol     = trade["symbol"]
+        sell_price = trade["price"]
+        sell_time  = datetime.fromisoformat(trade["time"])
+
+        # Find the most recent matching BUY in trade_history
+        buy_trade = next(
+            (t for t in reversed(portfolio.trade_history)
+             if t["action"] == "BUY" and t["symbol"] == symbol),
+            None
+        )
+        if not buy_trade:
+            continue
+
+        buy_price     = buy_trade["price"]
+        buy_time      = datetime.fromisoformat(buy_trade["time"])
+        holding_hours = (sell_time - buy_time).total_seconds() / 3600
+        pnl_pct       = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0.0
+
+        rows = con.execute(
+            "SELECT agent_name FROM agent_memory "
+            "WHERE symbol=? AND was_correct=1 AND vote='SELL' "
+            "ORDER BY timestamp DESC LIMIT 4",
+            (symbol,)
+        ).fetchall()
+        agents_correct = json.dumps([r[0] for r in rows])
+
+        if _sim_mode["enabled"]:
+            summary = f"[SIM] P&L {pnl_pct:+.2f}% sur {holding_hours:.1f}h — signal RSI."
+        else:
+            prompt = (
+                f"Postmortem de trade — {symbol}\n"
+                f"Achat: ${buy_price:.2f} | Vente: ${sell_price:.2f} | "
+                f"P&L: {pnl_pct:+.2f}% | Durée: {holding_hours:.1f}h\n"
+                f"Agents corrects: {agents_correct}\n\n"
+                "En 2 phrases maximum, quelle leçon retenir de ce trade ? "
+                "Sois factuel et critique."
+            )
+            summary = _llm(haiku, HAIKU_ID,
+                           [{"role": "user", "content": prompt}],
+                           max_tokens=120).strip()
+
+        con.execute(
+            "INSERT INTO postmortem "
+            "(timestamp,symbol,buy_price,sell_price,pnl_pct,holding_hours,"
+            "agents_correct,summary,source) VALUES (?,?,?,?,?,?,?,?,?)",
+            (_ts(), symbol, buy_price, sell_price, round(pnl_pct, 4),
+             round(holding_hours, 4), agents_correct, summary, source)
+        )
+
+    con.commit()
+    con.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

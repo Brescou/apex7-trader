@@ -3,15 +3,17 @@
 import sqlite3
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import dash
 import plotly.graph_objects as go
-from dash import Input, Output, State, ctx, dcc, html
+from dash import Input, Output, State, ctx, dcc, html, MATCH
 from dash.dash_table import DataTable
 
 from agent import get_simulation_mode, set_simulation_mode
-from config import AGENT_GRAPH, AGENT_INTERVAL, DEATH_THRESHOLD, INITIAL_BALANCE, SIMULATION_MODE
+from agent_multi import run_daily_postmortem
+from config import AGENT_GRAPH, AGENT_INTERVAL, DEATH_THRESHOLD, INITIAL_BALANCE, POSTMORTEM_HOUR, SIMULATION_MODE
 from data import Portfolio
 from graph_registry import get_graph, get_graph_info
 
@@ -129,6 +131,28 @@ def _launch(p: Portfolio, graph_id: str = "simple") -> threading.Thread:
 
 _state["portfolio"] = Portfolio()
 _state["thread"]    = _launch(_state["portfolio"], _state["graph_id"])
+
+_last_postmortem_date = None
+
+
+def _postmortem_loop(p: Portfolio) -> None:
+    global _last_postmortem_date
+    while True:
+        time.sleep(60)
+        now   = datetime.now()
+        today = now.date()
+        if now.hour == POSTMORTEM_HOUR and _last_postmortem_date != today:
+            try:
+                run_daily_postmortem(p)
+                _last_postmortem_date = today
+            except Exception as _e:
+                p.log(f"Postmortem error: {_e}", "error")
+
+
+threading.Thread(
+    target=_postmortem_loop, args=(_state["portfolio"],),
+    daemon=True, name="apex7-postmortem"
+).start()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # EMOTION SYSTEM
@@ -375,6 +399,315 @@ def _load_trades_db() -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# AGENT CARD HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _conf_bar_inline(conf: float, color: str) -> html.Div:
+    w = int(conf * 40)
+    return html.Div(
+        html.Div(style={"width": f"{w}px", "height": "100%",
+                        "background": color, "borderRadius": "1px"}),
+        style={"width": "40px", "height": "3px", "background": f"{color}22",
+               "borderRadius": "1px", "overflow": "hidden", "flexShrink": "0"},
+    )
+
+
+def _action_chip(action: str) -> html.Span:
+    c = {"BUY": BLUE, "SELL": RED, "HOLD": GRAY}.get(action.upper(), GRAY)
+    return html.Span(action, style={
+        "fontSize": "9px", "fontWeight": "700",
+        "padding": "1px 5px", "borderRadius": "2px",
+        "background": f"{c}22", "color": c, "marginRight": "6px", "flexShrink": "0",
+    })
+
+
+def _sim_chip() -> html.Span:
+    return html.Span("SIM", style={
+        "fontSize": "8px", "padding": "1px 4px", "borderRadius": "2px",
+        "background": f"{ORANGE}33", "color": ORANGE, "marginLeft": "6px",
+    })
+
+
+def _card_hdr_standard(icon: str, label: str, color: str, action: str,
+                        symbol: str, conf: float, is_sim: bool) -> list:
+    children = [
+        html.Span(f"{icon} {label}", style={
+            "fontSize": "9px", "fontWeight": "700", "color": color,
+            "marginRight": "10px", "flexShrink": "0",
+        }),
+        _action_chip(action),
+        html.Span(symbol or "—", style={
+            "fontSize": "9px", "color": TEXT_MAIN, "flex": "1",
+            "overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap",
+        }),
+        _conf_bar_inline(conf, color),
+        html.Span(f"{conf:.0%}", style={
+            "fontSize": "9px", "color": color, "marginLeft": "5px", "flexShrink": "0",
+        }),
+    ]
+    if is_sim:
+        children.append(_sim_chip())
+    return children
+
+
+def _body_style(color: str, expanded: bool) -> dict:
+    return {
+        "display": "block" if expanded else "none",
+        "background": BG_CARD,
+        "border": f"1px solid {color}18",
+        "borderLeft": f"2px solid {color}",
+        "borderTop": "none",
+        "borderRadius": "0 0 3px 3px",
+        "padding": "8px 10px",
+    }
+
+
+def _ind_cell(label: str, val: str, color: str = TEXT_MAIN) -> html.Div:
+    return html.Div([
+        html.Div(label, style={"fontSize": "9px", "color": TEXT_DIM, "letterSpacing": "0.08em"}),
+        html.Div(val, style={"fontSize": "10px", "color": color, "fontWeight": "700", "marginTop": "2px"}),
+    ], style={"padding": "5px 7px", "background": f"{BLUE}08", "borderRadius": "2px"})
+
+
+def _tech_body_children(v: dict) -> list:
+    ind     = v.get("key_indicators", {})
+    rsi_raw = ind.get("rsi", 50)
+    macd    = str(ind.get("macd",  "—"))
+    bb      = str(ind.get("bb",    "—"))
+    trend   = str(ind.get("trend", "—"))
+    reasoning = v.get("reasoning", "")
+
+    def _ind_color(s: str) -> str:
+        sl = s.lower()
+        if any(w in sl for w in ("bull", "up", "lower", "over")):
+            return GREEN
+        if any(w in sl for w in ("bear", "down", "upper")):
+            return RED
+        return TEXT_MAIN
+
+    rsi_val = f"{float(rsi_raw):.1f}" if isinstance(rsi_raw, (int, float)) else str(rsi_raw)
+    rsi_col = RED if isinstance(rsi_raw, (int, float)) and rsi_raw < 35 else (
+              GREEN if isinstance(rsi_raw, (int, float)) and rsi_raw > 65 else TEXT_MAIN)
+
+    return [
+        html.Div(reasoning, style={
+            "fontSize": "11px", "color": TEXT_DIM, "fontStyle": "italic",
+            "marginBottom": "8px", "lineHeight": "1.4",
+        }),
+        html.Div([
+            _ind_cell("RSI",   rsi_val, rsi_col),
+            _ind_cell("MACD",  macd,    _ind_color(macd)),
+            _ind_cell("BB",    bb,      _ind_color(bb)),
+            _ind_cell("TREND", trend,   _ind_color(trend)),
+        ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "4px"}),
+    ]
+
+
+def _sent_bar(score: float) -> html.Div:
+    pct = (score + 1) / 2 * 100
+    col = GREEN if score > 0.1 else (RED if score < -0.1 else GRAY)
+    return html.Div([
+        html.Div("SENTIMENT", style={
+            "fontSize": "9px", "color": TEXT_DIM,
+            "letterSpacing": "0.1em", "marginBottom": "4px",
+        }),
+        html.Div([
+            html.Div(style={
+                "width": "100%", "height": "100%",
+                "background": f"linear-gradient(to right, {RED}, {GRAY} 50%, {GREEN})",
+            }),
+            html.Div(style={
+                "position": "absolute", "top": "-3px", "bottom": "-3px",
+                "left": f"{pct:.1f}%", "width": "2px",
+                "background": col, "borderRadius": "1px",
+                "transform": "translateX(-50%)",
+            }),
+        ], style={
+            "position": "relative", "height": "4px", "borderRadius": "2px",
+            "overflow": "visible", "marginBottom": "4px",
+        }),
+        html.Div(f"{score:+.2f}", style={"fontSize": "10px", "color": col, "fontWeight": "700"}),
+    ])
+
+
+def _analyst_body_children(v: dict) -> list:
+    reasoning  = v.get("reasoning", "")
+    sent_score = float(v.get("sentiment_score", 0.0))
+    catalysts  = v.get("catalysts", []) or []
+
+    items: list = [
+        html.Div(reasoning, style={
+            "fontSize": "11px", "color": TEXT_DIM, "fontStyle": "italic",
+            "marginBottom": "8px", "lineHeight": "1.4",
+        }),
+        html.Div(_sent_bar(sent_score), style={"marginBottom": "7px" if catalysts else "0"}),
+    ]
+    for cat in catalysts[:2]:
+        items.append(html.Div(f"→ {cat}", style={
+            "fontSize": "10px", "color": TEXT_DIM,
+            "borderLeft": f"2px solid {GREEN}44", "paddingLeft": "6px",
+            "marginBottom": "3px",
+        }))
+    return items
+
+
+def _risk_body_children(v: dict) -> list:
+    reasoning  = v.get("reasoning", "")
+    risk_score = int(v.get("risk_score", 5))
+    warnings   = v.get("warnings", []) or []
+    var_1d     = float(v.get("var_1d", 0))
+    exposure   = float(v.get("portfolio_exposure_after", 0))
+    score_col  = GREEN if risk_score <= 3 else (ORANGE if risk_score <= 6 else RED)
+
+    items: list = [
+        html.Div(reasoning, style={
+            "fontSize": "11px", "color": TEXT_DIM, "fontStyle": "italic",
+            "marginBottom": "8px", "lineHeight": "1.4",
+        }),
+        html.Div([
+            html.Div("RISK SCORE", style={
+                "fontSize": "9px", "color": TEXT_DIM, "letterSpacing": "0.1em",
+            }),
+            html.Div(f"{risk_score}/10", style={
+                "fontSize": "22px", "fontWeight": "700", "color": score_col,
+                "lineHeight": "1", "marginTop": "2px",
+            }),
+        ], style={"marginBottom": "7px"}),
+    ]
+    for w in warnings:
+        items.append(html.Div(f"\u26a0 {w}", style={
+            "fontSize": "10px", "color": RED, "marginBottom": "3px",
+        }))
+    items.append(html.Div([
+        html.Span(f"VaR 1d: ${var_1d:.0f}", style={
+            "fontSize": "10px", "color": TEXT_DIM, "marginRight": "12px",
+        }),
+        html.Span(f"Exposure: {exposure:.0f}%", style={"fontSize": "10px", "color": TEXT_DIM}),
+    ], style={"marginTop": "4px" if warnings else "0"}))
+    return items
+
+
+def _macro_bar(score: float) -> html.Div:
+    pct = (score + 1) / 2 * 100
+    col = GREEN if score > 0.1 else (RED if score < -0.1 else GRAY)
+    return html.Div([
+        html.Div("MACRO SCORE", style={
+            "fontSize": "9px", "color": TEXT_DIM,
+            "letterSpacing": "0.1em", "marginBottom": "4px",
+        }),
+        html.Div([
+            html.Div(style={
+                "width": "100%", "height": "100%",
+                "background": f"linear-gradient(to right, {RED}, {GRAY} 50%, {GREEN})",
+            }),
+            html.Div(style={
+                "position": "absolute", "top": "-3px", "bottom": "-3px",
+                "left": f"{pct:.1f}%", "width": "2px",
+                "background": col, "borderRadius": "1px",
+                "transform": "translateX(-50%)",
+            }),
+        ], style={
+            "position": "relative", "height": "4px", "borderRadius": "2px",
+            "overflow": "visible", "marginBottom": "4px",
+        }),
+        html.Div(f"{score:+.2f}", style={"fontSize": "10px", "color": col, "fontWeight": "700"}),
+    ])
+
+
+def _macro_body_children(v: dict) -> list:
+    reasoning   = v.get("reasoning", "")
+    macro_score = float(v.get("macro_score", 0.0))
+    regime      = v.get("market_regime", "transitional")
+    regime_col  = GREEN if regime == "risk-on" else (RED if regime == "risk-off" else ORANGE)
+
+    return [
+        html.Div(reasoning, style={
+            "fontSize": "11px", "color": TEXT_DIM, "fontStyle": "italic",
+            "marginBottom": "8px", "lineHeight": "1.4",
+        }),
+        html.Div(_macro_bar(macro_score), style={"marginBottom": "8px"}),
+        html.Span(regime, style={
+            "fontSize": "9px", "fontWeight": "700", "padding": "2px 7px",
+            "borderRadius": "2px", "background": f"{regime_col}22", "color": regime_col,
+        }),
+    ]
+
+
+def _arb_card_children(arb: dict) -> list:
+    if not arb:
+        return [html.Div("⟳ Waiting for arbitration...", style={
+            "color": TEXT_DIM, "fontSize": "11px", "textAlign": "center",
+            "padding": "12px 0", "fontStyle": "italic",
+        })]
+
+    consensus  = arb.get("consensus_level", "")
+    cons_col   = GREEN if consensus == "strong" else (YELLOW if consensus == "moderate" else RED)
+    action     = arb.get("action", "HOLD")
+    symbol     = arb.get("symbol", "")
+    alloc_pct  = float(arb.get("allocation_pct", 0))
+    reasoning  = arb.get("reasoning", "")
+    dissenting = arb.get("dissenting_agents", []) or []
+    thoughts   = arb.get("thoughts", "")
+    action_c   = {"BUY": BLUE, "SELL": RED, "HOLD": GRAY}.get(action, GRAY)
+
+    # Weak consensus blinks
+    cons_style = {
+        "fontSize": "9px", "fontWeight": "700", "padding": "2px 7px",
+        "borderRadius": "2px", "background": f"{cons_col}22", "color": cons_col,
+    }
+
+    items: list = [
+        html.Div([
+            html.Span("CONSENSUS", style={
+                "fontSize": "8px", "color": TEXT_DIM,
+                "letterSpacing": "0.12em", "marginRight": "6px",
+            }),
+            html.Span(consensus.upper() if consensus else "—", style=cons_style),
+        ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
+
+        html.Div([
+            html.Span(action, style={
+                "fontSize": "12px", "fontWeight": "700", "color": action_c, "marginRight": "8px",
+            }),
+            html.Span(symbol or "—", style={
+                "fontSize": "12px", "color": TEXT_MAIN, "marginRight": "8px",
+            }),
+            html.Span(f"{alloc_pct:.0f}%", style={"fontSize": "10px", "color": TEXT_DIM}),
+        ], style={"display": "flex", "alignItems": "baseline", "marginBottom": "7px"}),
+
+        html.Div(reasoning, style={
+            "fontSize": "11px", "color": TEXT_MAIN, "lineHeight": "1.4",
+            "marginBottom": "6px" if (dissenting or thoughts) else "0",
+        }),
+    ]
+    for d in dissenting:
+        items.append(html.Div(f"\u26a0 {d.upper()} disagrees", style={
+            "fontSize": "10px", "color": ORANGE, "marginBottom": "3px",
+        }))
+    if thoughts:
+        items.append(html.Div(f"Internal: {thoughts}", style={
+            "fontSize": "10px", "color": TEXT_DIM, "fontStyle": "italic",
+            "borderLeft": f"2px solid {GRAY}33", "paddingLeft": "6px",
+            "marginTop": "5px",
+        }))
+    return items
+
+
+def _build_arb_card(arb: dict) -> html.Div:
+    return html.Div([
+        _section_label("\u2696 ARBITRATION"),
+        html.Div(
+            _arb_card_children(arb),
+            style={
+                "background": BG_HOVER, "border": f"2px solid {BORDER}",
+                "borderLeft": f"2px solid {GREEN}",
+                "borderRadius": "3px", "padding": "10px 12px",
+            },
+        ),
+    ], style={"marginTop": "8px"})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # TAB CONTENT LAYOUTS (static skeletons — filled by callbacks)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -385,6 +718,165 @@ def _tab_live() -> html.Div:
             html.Div(id="sec-portfolio", style={"padding": "16px 14px 0"}),
             html.Div(id="sec-emotion",   style={"padding": "0 14px 12px"}),
             html.Div(id="sec-graph",     style={"padding": "0 14px 12px"}),
+
+            # ── AGENT CARDS PANEL (multi-agent mode) ─────────────────────
+            html.Div([
+                # TECHNICIAN
+                html.Div([
+                    html.Div([
+                        html.Div(id="card-tech-hdr", style={
+                            "display": "flex", "alignItems": "center", "flex": "1",
+                            "overflow": "hidden",
+                        }),
+                        html.Button(
+                            "▼ Reasoning",
+                            id={"type": "reasoning-toggle", "index": "tech"},
+                            n_clicks=0,
+                            style={
+                                "background": "transparent", "border": "none",
+                                "color": TEXT_DIM, "fontFamily": FONT,
+                                "fontSize": "9px", "cursor": "pointer",
+                                "letterSpacing": "0.05em", "flexShrink": "0",
+                                "padding": "0 0 0 8px",
+                            },
+                        ),
+                    ], style={
+                        "display": "flex", "alignItems": "center",
+                        "background": f"{BLUE}0a", "border": f"1px solid {BLUE}22",
+                        "borderLeft": f"2px solid {BLUE}",
+                        "borderRadius": "3px", "padding": "7px 9px",
+                    }),
+                    dcc.Collapse(
+                        html.Div(id="card-tech-body", style={
+                            "background": BG_CARD,
+                            "border": f"1px solid {BLUE}18",
+                            "borderLeft": f"2px solid {BLUE}",
+                            "borderTop": "none",
+                            "borderRadius": "0 0 3px 3px",
+                            "padding": "8px 10px",
+                        }),
+                        id={"type": "reasoning-collapse", "index": "tech"},
+                        is_open=False,
+                    ),
+                ], style={"marginBottom": "5px"}),
+                # ANALYST
+                html.Div([
+                    html.Div([
+                        html.Div(id="card-analyst-hdr", style={
+                            "display": "flex", "alignItems": "center", "flex": "1",
+                            "overflow": "hidden",
+                        }),
+                        html.Button(
+                            "▼ Reasoning",
+                            id={"type": "reasoning-toggle", "index": "analyst"},
+                            n_clicks=0,
+                            style={
+                                "background": "transparent", "border": "none",
+                                "color": TEXT_DIM, "fontFamily": FONT,
+                                "fontSize": "9px", "cursor": "pointer",
+                                "letterSpacing": "0.05em", "flexShrink": "0",
+                                "padding": "0 0 0 8px",
+                            },
+                        ),
+                    ], style={
+                        "display": "flex", "alignItems": "center",
+                        "background": f"{GREEN}0a", "border": f"1px solid {GREEN}22",
+                        "borderLeft": f"2px solid {GREEN}",
+                        "borderRadius": "3px", "padding": "7px 9px",
+                    }),
+                    dcc.Collapse(
+                        html.Div(id="card-analyst-body", style={
+                            "background": BG_CARD,
+                            "border": f"1px solid {GREEN}18",
+                            "borderLeft": f"2px solid {GREEN}",
+                            "borderTop": "none",
+                            "borderRadius": "0 0 3px 3px",
+                            "padding": "8px 10px",
+                        }),
+                        id={"type": "reasoning-collapse", "index": "analyst"},
+                        is_open=False,
+                    ),
+                ], style={"marginBottom": "5px"}),
+                # RISK MANAGER
+                html.Div([
+                    html.Div([
+                        html.Div(id="card-risk-hdr", style={
+                            "display": "flex", "alignItems": "center", "flex": "1",
+                            "overflow": "hidden",
+                        }),
+                        html.Button(
+                            "▼ Reasoning",
+                            id={"type": "reasoning-toggle", "index": "risk"},
+                            n_clicks=0,
+                            style={
+                                "background": "transparent", "border": "none",
+                                "color": TEXT_DIM, "fontFamily": FONT,
+                                "fontSize": "9px", "cursor": "pointer",
+                                "letterSpacing": "0.05em", "flexShrink": "0",
+                                "padding": "0 0 0 8px",
+                            },
+                        ),
+                    ], style={
+                        "display": "flex", "alignItems": "center",
+                        "background": f"{ORANGE}0a", "border": f"1px solid {ORANGE}22",
+                        "borderLeft": f"2px solid {ORANGE}",
+                        "borderRadius": "3px", "padding": "7px 9px",
+                    }),
+                    dcc.Collapse(
+                        html.Div(id="card-risk-body", style={
+                            "background": BG_CARD,
+                            "border": f"1px solid {ORANGE}18",
+                            "borderLeft": f"2px solid {ORANGE}",
+                            "borderTop": "none",
+                            "borderRadius": "0 0 3px 3px",
+                            "padding": "8px 10px",
+                        }),
+                        id={"type": "reasoning-collapse", "index": "risk"},
+                        is_open=False,
+                    ),
+                ], style={"marginBottom": "5px"}),
+                # MACRO WATCHER
+                html.Div([
+                    html.Div([
+                        html.Div(id="card-macro-hdr", style={
+                            "display": "flex", "alignItems": "center", "flex": "1",
+                            "overflow": "hidden",
+                        }),
+                        html.Button(
+                            "▼ Reasoning",
+                            id={"type": "reasoning-toggle", "index": "macro"},
+                            n_clicks=0,
+                            style={
+                                "background": "transparent", "border": "none",
+                                "color": TEXT_DIM, "fontFamily": FONT,
+                                "fontSize": "9px", "cursor": "pointer",
+                                "letterSpacing": "0.05em", "flexShrink": "0",
+                                "padding": "0 0 0 8px",
+                            },
+                        ),
+                    ], style={
+                        "display": "flex", "alignItems": "center",
+                        "background": f"{PURPLE}0a", "border": f"1px solid {PURPLE}22",
+                        "borderLeft": f"2px solid {PURPLE}",
+                        "borderRadius": "3px", "padding": "7px 9px",
+                    }),
+                    dcc.Collapse(
+                        html.Div(id="card-macro-body", style={
+                            "background": BG_CARD,
+                            "border": f"1px solid {PURPLE}18",
+                            "borderLeft": f"2px solid {PURPLE}",
+                            "borderTop": "none",
+                            "borderRadius": "0 0 3px 3px",
+                            "padding": "8px 10px",
+                        }),
+                        id={"type": "reasoning-collapse", "index": "macro"},
+                        is_open=False,
+                    ),
+                ], style={"marginBottom": "5px"}),
+                # ARBITRATION — always visible
+                html.Div(id="card-arb"),
+            ], id="sec-agent-cards", style={"padding": "0 14px 12px"}),
+
             html.Div(id="sec-stats",     style={"padding": "0 14px 12px"}),
             html.Div(id="sec-positions", style={"padding": "0 14px 12px"}),
         ], style={
@@ -657,6 +1149,7 @@ app.layout = html.Div(
         dcc.Store(id="ctrl-store",  data={"paused": False}),
         dcc.Store(id="mode-store",  data={"sim": get_simulation_mode()}),
         dcc.Store(id="graph-store", data={"graph_id": AGENT_GRAPH}),
+        dcc.Store(id="agent-cards-state", data={"tech": False, "analyst": False, "risk": False, "macro": False}),
         dcc.Interval(id="tick",           interval=2000,  n_intervals=0),
         dcc.Interval(id="analytics-tick", interval=30000, n_intervals=0),
 
@@ -913,19 +1406,33 @@ def _switch_graph(graph_id: str) -> dict:
 
 @app.callback(
     [
-        Output("page-bg",       "style"),
-        Output("top-bar",       "style"),
-        Output("status-dot",    "className"),
-        Output("round-num",     "children"),
-        Output("btn-pause",     "className"),
-        Output("sec-portfolio", "children"),
-        Output("sec-emotion",   "children"),
-        Output("sec-graph",     "children"),
-        Output("sec-stats",     "children"),
-        Output("sec-positions", "children"),
-        Output("chart-vals",    "children"),
-        Output("sparkline",     "figure"),
-        Output("activity-log",  "children"),
+        Output("page-bg",           "style"),
+        Output("top-bar",           "style"),
+        Output("status-dot",        "className"),
+        Output("round-num",         "children"),
+        Output("btn-pause",         "className"),
+        Output("sec-portfolio",     "children"),
+        Output("sec-emotion",       "children"),
+        Output("sec-graph",         "children"),
+        Output("sec-stats",         "children"),
+        Output("sec-positions",     "children"),
+        Output("chart-vals",        "children"),
+        Output("sparkline",         "figure"),
+        Output("activity-log",      "children"),
+        # Agent card headers
+        Output("card-tech-hdr",     "children"),
+        Output("card-analyst-hdr",  "children"),
+        Output("card-risk-hdr",     "children"),
+        Output("card-macro-hdr",    "children"),
+        # Agent card bodies (children only — style handled by separate callback)
+        Output("card-tech-body",    "children"),
+        Output("card-analyst-body", "children"),
+        Output("card-risk-body",    "children"),
+        Output("card-macro-body",   "children"),
+        # Arbitration card
+        Output("card-arb",          "children"),
+        # Agent cards panel visibility
+        Output("sec-agent-cards",   "style"),
     ],
     [Input("tick", "n_intervals"), Input("ctrl-store", "data")],
     [State("main-tabs", "value"), State("graph-store", "data")],
@@ -967,6 +1474,10 @@ def _refresh(_, store, active_tab, graph_store):
     else:              dot_cls = "dot dot-alive"
 
     pause_cls = "cbtn cbtn-pause on" if paused else "cbtn cbtn-pause"
+
+    # Determine graph mode (needed for cards visibility in both alive/dead states)
+    _graph_id_cur = (graph_store or {}).get("graph_id", _state.get("graph_id", "simple"))
+    is_multi = _graph_id_cur == "multi"
 
     # ── DEATH STATE ──────────────────────────────────────────────────────────
     if dead:
@@ -1059,52 +1570,9 @@ def _refresh(_, store, active_tab, graph_store):
         ])
 
         # ── GRAPH INFO PANEL ──
-        graph_id   = (graph_store or {}).get("graph_id", _state.get("graph_id", "simple"))
+        graph_id   = _graph_id_cur
         graph_info = get_graph_info(graph_id)
         gc         = graph_info["color"]
-        is_multi   = graph_id == "multi"
-
-        vote_rows = []
-        if is_multi and _state.get("last_votes"):
-            vote_map = {v.get("agent", ""): v for v in _state["last_votes"]}
-            agent_cfg = [
-                ("technician",    "TECH",  BLUE,    lambda v: f"{v.get('action','?')} {v.get('symbol','')} RSI={v.get('key_indicators',{}).get('rsi','?')}"),
-                ("analyst",       "ANLST", "#06b6d4",lambda v: f"{v.get('action','?')} {v.get('symbol','')} sent={v.get('sentiment_score',0):+.2f}"),
-                ("risk_manager",  "RISK",  RED,     lambda v: f"score={v.get('risk_score','?')}/10 {v.get('sizing_recommendation','?')}"),
-                ("macro_watcher", "MACRO", YELLOW,  lambda v: f"{v.get('market_regime','?')} {v.get('macro_bias','?')}"),
-            ]
-            for agent_key, badge, ac, fmt in agent_cfg:
-                v = vote_map.get(agent_key, {})
-                conf_w = int(float(v.get("confidence", 0.5)) * 40)
-                vote_rows.append(html.Div([
-                    html.Span(badge, style={
-                        "fontSize": "8px", "fontWeight": "700", "padding": "1px 5px",
-                        "borderRadius": "2px", "background": f"{ac}22", "color": ac,
-                        "marginRight": "7px", "flexShrink": "0", "width": "40px",
-                        "textAlign": "center",
-                    }),
-                    html.Span(fmt(v) if v else "—", style={
-                        "fontSize": "9px", "color": TEXT_DIM, "flex": "1",
-                        "overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap",
-                    }),
-                    html.Div(
-                        html.Div(style={"width": f"{conf_w}px", "height": "100%",
-                                        "background": ac, "borderRadius": "1px"}),
-                        style={"width": "40px", "height": "3px", "background": f"{ac}22",
-                               "borderRadius": "1px", "overflow": "hidden", "flexShrink": "0"},
-                    ),
-                ], style={"display": "flex", "alignItems": "center", "marginBottom": "4px"}))
-
-        arb = _state.get("last_arb", {})
-        consensus_badge = html.Div()
-        if is_multi and arb:
-            consensus     = arb.get("consensus_level", "")
-            cons_col      = GREEN if consensus == "strong" else (YELLOW if consensus == "moderate" else RED)
-            dissenting    = arb.get("dissenting_agents", [])
-            consensus_badge = html.Div([
-                html.Span(f"consensus: {consensus}", style={"fontSize": "9px", "color": cons_col}),
-                html.Span(f"  dissent: {', '.join(dissenting) or '—'}", style={"fontSize": "9px", "color": TEXT_DIM}),
-            ], style={"marginTop": "6px"})
 
         sec_graph = html.Div([
             _section_label("ACTIVE GRAPH"),
@@ -1133,10 +1601,7 @@ def _refresh(_, store, active_tab, graph_store):
                 "background": BG_CARD, "border": f"1px solid {gc}33",
                 "borderLeft": f"2px solid {gc}",
                 "borderRadius": "3px", "padding": "8px 10px",
-                "marginBottom": "8px" if vote_rows else "0",
             }),
-            *(vote_rows or []),
-            consensus_badge,
         ])
 
         # ── METRICS ──
@@ -1186,11 +1651,105 @@ def _refresh(_, store, active_tab, graph_store):
         })
     ]
 
+    # ── AGENT CARDS (multi-agent mode) ───────────────────────────────────────
+    votes   = _state.get("last_votes", [])
+    arb     = _state.get("last_arb", {})
+    is_sim  = get_simulation_mode()
+    vote_map = {v.get("agent", ""): v for v in votes}
+
+    _PLACEHOLDER_HDR = [html.Span("—", style={"fontSize": "9px", "color": TEXT_DIM})]
+    _WAITING = [html.Div("⟳ Waiting for first multi-agent cycle...", style={
+        "color": TEXT_DIM, "fontSize": "10px", "fontStyle": "italic", "padding": "4px 0",
+    })]
+
+    if is_multi and votes:
+        tv = vote_map.get("technician", {})
+        av = vote_map.get("analyst", {})
+        rv = vote_map.get("risk_manager", {})
+        mv = vote_map.get("macro_watcher", {})
+
+        hdr_tech = _card_hdr_standard(
+            "🔧", "TECH", BLUE,
+            tv.get("action", "?"), tv.get("symbol", ""),
+            float(tv.get("confidence", 0.5)), is_sim,
+        )
+        hdr_anlst = _card_hdr_standard(
+            "📊", "ANLST", GREEN,
+            av.get("action", "?"), av.get("symbol", ""),
+            float(av.get("confidence", 0.5)), is_sim,
+        )
+        sizing = rv.get("sizing_recommendation", "?")
+        risk_s = rv.get("risk_score", "?")
+        hdr_risk = [
+            html.Span("⚠️ RISK", style={
+                "fontSize": "9px", "fontWeight": "700", "color": ORANGE,
+                "marginRight": "10px", "flexShrink": "0",
+            }),
+            html.Span(str(sizing), style={"fontSize": "9px", "color": TEXT_MAIN, "flex": "1"}),
+            html.Span(f"RISK {risk_s}/10", style={"fontSize": "9px", "color": ORANGE, "flexShrink": "0"}),
+            *([_sim_chip()] if is_sim else []),
+        ]
+        regime    = mv.get("market_regime", "?")
+        macro_bias = mv.get("macro_bias", "?")
+        hdr_macro = [
+            html.Span("🌍 MACRO", style={
+                "fontSize": "9px", "fontWeight": "700", "color": PURPLE,
+                "marginRight": "10px", "flexShrink": "0",
+            }),
+            html.Span(str(regime), style={"fontSize": "9px", "color": TEXT_MAIN, "flex": "1"}),
+            html.Span(str(macro_bias), style={"fontSize": "9px", "color": PURPLE, "flexShrink": "0"}),
+            *([_sim_chip()] if is_sim else []),
+        ]
+
+        body_tech  = _tech_body_children(tv)   if tv else _WAITING
+        body_anlst = _analyst_body_children(av) if av else _WAITING
+        body_risk  = _risk_body_children(rv)    if rv else _WAITING
+        body_macro = _macro_body_children(mv)   if mv else _WAITING
+        card_arb   = _build_arb_card(arb)
+
+    elif is_multi:
+        hdr_tech  = _PLACEHOLDER_HDR
+        hdr_anlst = _PLACEHOLDER_HDR
+        hdr_risk  = _PLACEHOLDER_HDR
+        hdr_macro = _PLACEHOLDER_HDR
+        body_tech = body_anlst = body_risk = body_macro = _WAITING
+        card_arb  = _build_arb_card({})
+
+    else:
+        hdr_tech  = _PLACEHOLDER_HDR
+        hdr_anlst = _PLACEHOLDER_HDR
+        hdr_risk  = _PLACEHOLDER_HDR
+        hdr_macro = _PLACEHOLDER_HDR
+        body_tech = body_anlst = body_risk = body_macro = []
+        card_arb  = html.Div()
+
+    cards_style = {"padding": "0 14px 12px"} if is_multi else {"display": "none"}
+
     return (
         page_style, topbar_style, dot_cls, str(cyc) if cyc else "—", pause_cls,
         sec_portfolio, sec_emotion, sec_graph, sec_stats, sec_positions,
         chart_vals, fig, log_items,
+        hdr_tech, hdr_anlst, hdr_risk, hdr_macro,
+        body_tech, body_anlst, body_risk, body_macro,
+        card_arb, cards_style,
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CALLBACKS — REASONING CARD TOGGLE (pattern-matching)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.callback(
+    Output({"type": "reasoning-collapse", "index": MATCH}, "is_open"),
+    Output({"type": "reasoning-toggle",   "index": MATCH}, "children"),
+    Input({"type": "reasoning-toggle",    "index": MATCH}, "n_clicks"),
+    State({"type": "reasoning-collapse",  "index": MATCH}, "is_open"),
+    prevent_initial_call=True,
+)
+def _toggle_reasoning(n_clicks, is_open):
+    new_open = not is_open
+    label = "▲ Collapse" if new_open else "▼ Reasoning"
+    return new_open, label
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
