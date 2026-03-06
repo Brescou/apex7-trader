@@ -382,6 +382,36 @@ def _sparkline(p: Portfolio) -> go.Figure:
     return fig
 
 
+def _load_agent_memory() -> list[dict]:
+    try:
+        con = sqlite3.connect(DB_PATH)
+        rows = con.execute(
+            "SELECT id,timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source "
+            "FROM agent_memory ORDER BY timestamp DESC LIMIT 1000"
+        ).fetchall()
+        con.close()
+        cols = ("id","timestamp","agent_name","symbol","vote","confidence","was_correct","lesson","source")
+        return [dict(zip(cols, r)) for r in rows]
+    except Exception:
+        return []
+
+
+def _load_postmortem() -> list[dict]:
+    try:
+        con = sqlite3.connect(DB_PATH)
+        rows = con.execute(
+            "SELECT id,timestamp,symbol,buy_price,sell_price,pnl_pct,holding_hours,"
+            "agents_correct,summary,source "
+            "FROM postmortem ORDER BY timestamp DESC LIMIT 100"
+        ).fetchall()
+        con.close()
+        cols = ("id","timestamp","symbol","buy_price","sell_price","pnl_pct",
+                "holding_hours","agents_correct","summary","source")
+        return [dict(zip(cols, r)) for r in rows]
+    except Exception:
+        return []
+
+
 def _load_trades_db() -> list[dict]:
     try:
         con = sqlite3.connect(DB_PATH)
@@ -877,6 +907,7 @@ def _tab_live() -> html.Div:
                 html.Div(id="card-arb"),
             ], id="sec-agent-cards", style={"padding": "0 14px 12px"}),
 
+            html.Div(id="live-track-records", style={"padding": "0 14px 8px"}),
             html.Div(id="sec-stats",     style={"padding": "0 14px 12px"}),
             html.Div(id="sec-positions", style={"padding": "0 14px 12px"}),
         ], style={
@@ -1006,6 +1037,48 @@ def _tab_backtest() -> html.Div:
     ], style={
         "display": "flex", "flexDirection": "column",
         "height": "calc(100vh - 96px)",
+    })
+
+
+def _tab_heatmap() -> html.Div:
+    return html.Div([
+        html.Div([
+            html.Button("⟳ REFRESH", id="btn-heatmap-refresh", n_clicks=0, style={
+                "background": "transparent", "border": f"1px solid {BORDER}",
+                "color": TEXT_DIM, "fontFamily": FONT, "fontSize": "10px",
+                "letterSpacing": "0.12em", "padding": "4px 12px",
+                "cursor": "pointer", "borderRadius": "3px",
+            }),
+            html.Span(id="heatmap-updated", style={
+                "fontSize": "9px", "color": TEXT_DIM, "marginLeft": "12px",
+                "letterSpacing": "0.08em",
+            }),
+        ], style={"padding": "12px 16px", "borderBottom": f"1px solid {BORDER}"}),
+        html.Div(id="heatmap-content", style={
+            "flex": "1", "overflowY": "auto", "padding": "16px",
+        }),
+    ], style={
+        "display": "flex", "flexDirection": "column",
+        "height": "calc(100vh - 96px)", "overflow": "hidden",
+    })
+
+
+def _tab_agents() -> html.Div:
+    return html.Div([
+        html.Div([
+            html.Button("⟳ REFRESH", id="btn-agents-refresh", n_clicks=0, style={
+                "background": "transparent", "border": f"1px solid {BORDER}",
+                "color": TEXT_DIM, "fontFamily": FONT, "fontSize": "10px",
+                "letterSpacing": "0.12em", "padding": "4px 12px",
+                "cursor": "pointer", "borderRadius": "3px",
+            }),
+        ], style={"padding": "12px 16px", "borderBottom": f"1px solid {BORDER}"}),
+        html.Div(id="agents-content", style={
+            "flex": "1", "overflowY": "auto", "padding": "16px",
+        }),
+    ], style={
+        "display": "flex", "flexDirection": "column",
+        "height": "calc(100vh - 96px)", "overflow": "hidden",
     })
 
 
@@ -1152,6 +1225,7 @@ app.layout = html.Div(
         dcc.Store(id="agent-cards-state", data={"tech": False, "analyst": False, "risk": False, "macro": False}),
         dcc.Interval(id="tick",           interval=2000,  n_intervals=0),
         dcc.Interval(id="analytics-tick", interval=30000, n_intervals=0),
+        dcc.Interval(id="agents-tick",    interval=60000, n_intervals=0),
 
         # ── TOP BAR (48px) ───────────────────────────────────────────────────
         html.Div(id="top-bar", children=[
@@ -1286,6 +1360,36 @@ app.layout = html.Div(
                         "background": BG_CARD, "cursor": "pointer",
                     },
                 ),
+                dcc.Tab(
+                    label="HEATMAP", value="heatmap",
+                    style={
+                        "color": TEXT_DIM, "fontSize": "11px", "letterSpacing": "0.15em",
+                        "fontFamily": FONT, "fontWeight": "700", "padding": "0 16px",
+                        "border": "none", "borderBottom": f"2px solid transparent",
+                        "background": BG_CARD, "cursor": "pointer",
+                    },
+                    selected_style={
+                        "color": GREEN, "fontSize": "11px", "letterSpacing": "0.15em",
+                        "fontFamily": FONT, "fontWeight": "700", "padding": "0 16px",
+                        "border": "none", "borderBottom": f"2px solid {GREEN}",
+                        "background": BG_CARD, "cursor": "pointer",
+                    },
+                ),
+                dcc.Tab(
+                    label="AGENTS", value="agents",
+                    style={
+                        "color": TEXT_DIM, "fontSize": "11px", "letterSpacing": "0.15em",
+                        "fontFamily": FONT, "fontWeight": "700", "padding": "0 16px",
+                        "border": "none", "borderBottom": f"2px solid transparent",
+                        "background": BG_CARD, "cursor": "pointer",
+                    },
+                    selected_style={
+                        "color": GREEN, "fontSize": "11px", "letterSpacing": "0.15em",
+                        "fontFamily": FONT, "fontWeight": "700", "padding": "0 16px",
+                        "border": "none", "borderBottom": f"2px solid {GREEN}",
+                        "background": BG_CARD, "cursor": "pointer",
+                    },
+                ),
             ],
             style={"height": "38px", "flexShrink": "0"},
             colors={"border": BORDER, "primary": GREEN, "background": BG_CARD},
@@ -1310,6 +1414,8 @@ def _render_tab(tab: str):
     if tab == "analytics":   return _tab_analytics()
     if tab == "backtest":    return _tab_backtest()
     if tab == "leaderboard": return _tab_leaderboard()
+    if tab == "heatmap":     return _tab_heatmap()
+    if tab == "agents":      return _tab_agents()
     return _tab_live()
 
 
@@ -1433,6 +1539,8 @@ def _switch_graph(graph_id: str) -> dict:
         Output("card-arb",          "children"),
         # Agent cards panel visibility
         Output("sec-agent-cards",   "style"),
+        # Agent track records (LIVE tab, multi mode only)
+        Output("live-track-records", "children"),
     ],
     [Input("tick", "n_intervals"), Input("ctrl-store", "data")],
     [State("main-tabs", "value"), State("graph-store", "data")],
@@ -1725,13 +1833,55 @@ def _refresh(_, store, active_tab, graph_store):
 
     cards_style = {"padding": "0 14px 12px"} if is_multi else {"display": "none"}
 
+    # ── LIVE TRACK RECORDS (multi mode only) ─────────────────────────────────
+    if is_multi:
+        _TRACK_AGENTS = [
+            ("technician",   "TECH",  BLUE),
+            ("analyst",      "ANLST", GREEN),
+            ("risk_manager", "RISK",  ORANGE),
+            ("macro_watcher","MACRO", PURPLE),
+        ]
+        mem = _load_agent_memory()
+        badge_items = []
+        for agent_key, agent_label, agent_color in _TRACK_AGENTS:
+            rows = [r for r in mem if r.get("agent_name") == agent_key][-20:]
+            if rows:
+                correct = sum(1 for r in rows if r.get("was_correct") in (1, True, "1"))
+                wr = correct / len(rows) * 100
+            else:
+                wr = 0.0
+            wr_col = GREEN if wr >= 60 else (ORANGE if wr >= 40 else RED)
+            badge_items.append(html.Span([
+                html.Span(agent_label, style={
+                    "fontSize": "9px", "fontWeight": "700", "color": agent_color,
+                    "marginRight": "3px",
+                }),
+                html.Span(f"{wr:.0f}%", style={"fontSize": "9px", "color": wr_col}),
+            ], style={
+                "background": f"{agent_color}11",
+                "border": f"1px solid {agent_color}33",
+                "borderRadius": "2px", "padding": "2px 6px",
+                "marginRight": "5px", "display": "inline-flex", "alignItems": "center",
+            }))
+        live_track = html.Div([
+            html.Div("TRACK RECORDS", style={
+                "fontSize": "9px", "fontWeight": "700", "letterSpacing": "0.18em",
+                "color": TEXT_DIM, "textTransform": "uppercase",
+                "borderBottom": f"1px solid {BORDER}",
+                "paddingBottom": "6px", "marginBottom": "8px",
+            }),
+            html.Div(badge_items, style={"display": "flex", "flexWrap": "wrap", "gap": "2px"}),
+        ])
+    else:
+        live_track = html.Div()
+
     return (
         page_style, topbar_style, dot_cls, str(cyc) if cyc else "—", pause_cls,
         sec_portfolio, sec_emotion, sec_graph, sec_stats, sec_positions,
         chart_vals, fig, log_items,
         hdr_tech, hdr_anlst, hdr_risk, hdr_macro,
         body_tech, body_anlst, body_risk, body_macro,
-        card_arb, cards_style,
+        card_arb, cards_style, live_track,
     )
 
 
@@ -2173,6 +2323,415 @@ def _lb_run(n_clicks, scenario):
         html.Div(table_rows, style={"marginBottom": "16px"}),
         dcc.Graph(figure=fig, config={"displayModeBar": False}),
     ])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CALLBACKS — HEATMAP TAB
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.callback(
+    Output("heatmap-content", "children"),
+    Output("heatmap-updated", "children"),
+    Input("btn-heatmap-refresh", "n_clicks"),
+    prevent_initial_call=False,
+)
+def _heatmap_refresh(_):
+    import datetime as _dt
+    from collections import defaultdict
+
+    _plotly_theme = dict(
+        paper_bgcolor=BG_DEEP, plot_bgcolor=BG_CARD,
+        font=dict(family=FONT, color=TEXT_MAIN, size=10),
+        margin=dict(l=50, r=20, t=40, b=50),
+    )
+    _colorscale = [[0.0, RED], [0.5, BORDER], [1.0, GREEN]]
+
+    now_str = _dt.datetime.now().strftime("%H:%M:%S")
+
+    try:
+        con = sqlite3.connect(DB_PATH)
+        rows = con.execute(
+            "SELECT timestamp, symbol, action, price, amount_usd FROM trades "
+            "WHERE action IN ('BUY','SELL') ORDER BY timestamp ASC"
+        ).fetchall()
+        con.close()
+    except Exception:
+        rows = []
+
+    if not rows:
+        empty = html.Div("No trade data yet. Run the agent first.", style={
+            "color": TEXT_DIM, "fontSize": "12px", "fontStyle": "italic", "padding": "20px",
+        })
+        return empty, f"Updated {now_str}"
+
+    # ── Build buy lookup: most recent BUY price per symbol ───────────────────
+    # For each SELL, find latest BUY before it for that symbol
+    # Process in chronological order
+    buys_by_sym: dict[str, list[tuple]] = defaultdict(list)  # sym -> [(ts, price)]
+    sell_rows = []
+    for ts, sym, action, price, amount_usd in rows:
+        if action == "BUY":
+            buys_by_sym[sym].append((ts, float(price) if price else 0.0))
+        elif action == "SELL":
+            sell_rows.append((ts, sym, float(price) if price else 0.0, float(amount_usd) if amount_usd else 0.0))
+
+    # ── Heatmap 1: Quand trader — hour x weekday win rate ────────────────────
+    WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    HOURS    = list(range(9, 17))   # 9..16
+
+    slot_wins:  dict[tuple, int] = defaultdict(int)
+    slot_total: dict[tuple, int] = defaultdict(int)
+
+    for ts, sym, sell_price, _ in sell_rows:
+        try:
+            dt  = _dt.datetime.fromisoformat(str(ts)[:19])
+            dow = dt.weekday()  # 0=Mon..4=Fri
+            hr  = dt.hour
+            if dow > 4 or hr < 9 or hr > 16:
+                continue
+            # Find most recent BUY for this sym before this sell
+            buy_entries = [(t, p) for t, p in buys_by_sym[sym] if t < ts]
+            if buy_entries:
+                buy_price = buy_entries[-1][1]
+                pnl = (sell_price - buy_price) / buy_price if buy_price > 0 else 0.0
+            else:
+                pnl = 0.0
+            key = (dow, hr)
+            slot_total[key] += 1
+            if pnl > 0:
+                slot_wins[key] += 1
+        except Exception:
+            pass
+
+    # Build 5x8 matrix
+    z1 = []
+    text1 = []
+    for dow in range(5):
+        row_z, row_t = [], []
+        for hr in HOURS:
+            key = (dow, hr)
+            total = slot_total.get(key, 0)
+            wins  = slot_wins.get(key, 0)
+            wr    = (wins / total * 100) if total > 0 else 0.0
+            row_z.append(wr)
+            row_t.append(f"{wins}/{total} trades<br>{wr:.0f}% win rate")
+        z1.append(row_z)
+        text1.append(row_t)
+
+    fig1 = go.Figure(go.Heatmap(
+        z=z1,
+        x=[f"{h}h" for h in HOURS],
+        y=WEEKDAYS,
+        colorscale=_colorscale,
+        zmin=0, zmax=100,
+        text=text1,
+        hovertemplate="%{y} %{x}<br>%{text}<extra></extra>",
+        colorbar=dict(
+            title="Win %", titlefont=dict(family=FONT, size=9, color=TEXT_DIM),
+            tickfont=dict(family=FONT, size=8, color=TEXT_DIM),
+            thickness=8, len=0.8,
+        ),
+    ))
+    fig1.update_layout(
+        title=dict(text="Quand trader — Win Rate % par slot horaire",
+                   font=dict(family=FONT, size=11, color=TEXT_MAIN)),
+        height=280, **_plotly_theme,
+    )
+
+    # ── Heatmap 2: Quoi trader — symbol x action avg P&L ────────────────────
+    SYMBOLS = list({sym for _, sym, _, _ in sell_rows} | set(buys_by_sym.keys()))
+    from config import WATCHLIST as _WL
+    # Keep WATCHLIST order, append any extras
+    SYMBOLS = [s for s in _WL if s in SYMBOLS] + [s for s in SYMBOLS if s not in _WL]
+    if not SYMBOLS:
+        SYMBOLS = _WL
+
+    ACTIONS = ["BUY", "SELL"]
+    pnl_sums:   dict[tuple, float] = defaultdict(float)
+    pnl_counts: dict[tuple, int]   = defaultdict(int)
+    trade_counts: dict[tuple, int] = defaultdict(int)
+
+    # SELL pnl
+    for ts, sym, sell_price, _ in sell_rows:
+        buy_entries = [(t, p) for t, p in buys_by_sym[sym] if t < ts]
+        if buy_entries:
+            buy_price = buy_entries[-1][1]
+            pnl_pct = (sell_price - buy_price) / buy_price * 100 if buy_price > 0 else 0.0
+        else:
+            pnl_pct = 0.0
+        pnl_sums[(sym, "SELL")]   += pnl_pct
+        pnl_counts[(sym, "SELL")] += 1
+        trade_counts[(sym, "SELL")] += 1
+
+    # BUY: count only (no P&L known at entry)
+    for sym, entries in buys_by_sym.items():
+        trade_counts[(sym, "BUY")] = len(entries)
+
+    z2 = []
+    text2 = []
+    for sym in SYMBOLS:
+        row_z, row_t = [], []
+        for act in ACTIONS:
+            key = (sym, act)
+            n   = trade_counts.get(key, 0)
+            if act == "SELL" and pnl_counts.get(key, 0) > 0:
+                avg = pnl_sums[key] / pnl_counts[key]
+                row_z.append(avg)
+                row_t.append(f"{sym} {act}: {avg:+.1f}% avg ({n} trades)")
+            else:
+                row_z.append(0.0)
+                row_t.append(f"{sym} {act}: {n} trades (entry — P&L at close)")
+        z2.append(row_z)
+        text2.append(row_t)
+
+    fig2 = go.Figure(go.Heatmap(
+        z=z2,
+        x=ACTIONS,
+        y=SYMBOLS,
+        colorscale=_colorscale,
+        zmin=-20, zmax=20,
+        text=text2,
+        hovertemplate="%{text}<extra></extra>",
+        colorbar=dict(
+            title="Avg P&L %", titlefont=dict(family=FONT, size=9, color=TEXT_DIM),
+            tickfont=dict(family=FONT, size=8, color=TEXT_DIM),
+            thickness=8, len=0.8,
+        ),
+    ))
+    fig2.update_layout(
+        title=dict(text="Quoi trader — Avg P&L % par symbole/action",
+                   font=dict(family=FONT, size=11, color=TEXT_MAIN)),
+        height=280, **_plotly_theme,
+    )
+
+    charts_row = html.Div([
+        dcc.Graph(figure=fig1, config={"displayModeBar": False}),
+        dcc.Graph(figure=fig2, config={"displayModeBar": False}),
+    ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "12px"})
+
+    total_sells = len(sell_rows)
+    wins_total  = sum(slot_wins.values())
+    overall_wr  = (wins_total / total_sells * 100) if total_sells > 0 else 0.0
+
+    summary = html.Div([
+        html.Span(f"Total SELL trades: {total_sells}", style={
+            "fontSize": "10px", "color": TEXT_DIM, "marginRight": "20px",
+        }),
+        html.Span(f"Overall win rate: {overall_wr:.1f}%", style={
+            "fontSize": "10px",
+            "color": GREEN if overall_wr >= 50 else RED,
+            "fontWeight": "700",
+        }),
+    ], style={"marginTop": "12px"})
+
+    return html.Div([charts_row, summary]), f"Updated {now_str}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CALLBACKS — AGENTS TAB
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.callback(
+    Output("agents-content", "children"),
+    [Input("agents-tick",       "n_intervals"),
+     Input("btn-agents-refresh","n_clicks")],
+    prevent_initial_call=False,
+)
+def _agents_refresh(_, __):
+    import datetime as _dt
+    import json as _json
+
+    mem  = _load_agent_memory()
+    post = _load_postmortem()
+
+    _AGENT_DEFS = [
+        {"key": "technician",    "label": "Technician", "badge": "TECH",  "color": BLUE},
+        {"key": "analyst",       "label": "Analyst",    "badge": "ANLST", "color": GREEN},
+        {"key": "risk_manager",  "label": "Risk Mgr",   "badge": "RISK",  "color": ORANGE},
+        {"key": "macro_watcher", "label": "Macro",      "badge": "MACRO", "color": PURPLE},
+    ]
+
+    # ── Section 1: Agent performance table ───────────────────────────────────
+    def _win_rate_bar(wr: float, color: str) -> html.Div:
+        bar_color = GREEN if wr >= 60 else (ORANGE if wr >= 40 else RED)
+        return html.Div([
+            html.Div([
+                html.Div(style={
+                    "width": f"{wr:.0f}%", "height": "100%",
+                    "background": bar_color, "borderRadius": "1px",
+                    "transition": "width .4s ease",
+                }),
+            ], style={
+                "width": "80px", "height": "4px", "background": f"{bar_color}22",
+                "borderRadius": "1px", "overflow": "hidden", "flexShrink": "0",
+            }),
+            html.Span(f"{wr:.0f}%", style={
+                "fontSize": "10px", "color": bar_color,
+                "fontWeight": "700", "marginLeft": "6px", "flexShrink": "0",
+            }),
+        ], style={"display": "flex", "alignItems": "center"})
+
+    # Table header
+    hdr_cols = ["AGENT", "VOTES", "CORRECT", "WIN RATE", "AVG CONF", "TREND 7J"]
+    hdr_widths = ["120px", "60px", "70px", "160px", "80px", "1fr"]
+    table_hdr = html.Div([
+        html.Span(c, style={
+            "fontSize": "9px", "color": TEXT_DIM, "letterSpacing": "0.12em",
+            "width": w, "flexShrink": "0" if w != "1fr" else "1",
+        })
+        for c, w in zip(hdr_cols, hdr_widths)
+    ], style={
+        "display": "flex", "alignItems": "center", "gap": "8px",
+        "padding": "6px 12px", "marginBottom": "4px",
+        "borderBottom": f"1px solid {BORDER}",
+    })
+
+    table_rows = []
+    for ag in _AGENT_DEFS:
+        key   = ag["key"]
+        col   = ag["color"]
+        rows  = [r for r in mem if r.get("agent_name") == key]
+        total = len(rows)
+        correct = sum(1 for r in rows if r.get("was_correct") in (1, True, "1"))
+        wr    = (correct / total * 100) if total > 0 else 0.0
+        confs = [float(r["confidence"]) for r in rows if r.get("confidence") is not None]
+        avg_c = (sum(confs) / len(confs)) if confs else 0.0
+
+        # Trend 7j: daily win rates, last 7 days
+        today = _dt.date.today()
+        day_wins:  dict[int, int] = {}
+        day_total: dict[int, int] = {}
+        for r in rows:
+            try:
+                d = _dt.date.fromisoformat(str(r["timestamp"])[:10])
+                delta = (today - d).days
+                if 0 <= delta < 7:
+                    day_total[delta] = day_total.get(delta, 0) + 1
+                    if r.get("was_correct") in (1, True, "1"):
+                        day_wins[delta] = day_wins.get(delta, 0) + 1
+            except Exception:
+                pass
+        trend_y = [
+            (day_wins.get(d, 0) / day_total[d] * 100) if d in day_total else 0.0
+            for d in range(6, -1, -1)  # oldest→newest
+        ]
+        spark_col = GREEN if (trend_y[-1] >= 60 if any(v > 0 for v in trend_y) else True) else ORANGE
+        spark_fig = go.Figure(go.Scatter(
+            x=list(range(7)), y=trend_y, mode="lines",
+            line=dict(color=spark_col, width=1.5),
+            fill="tozeroy", fillcolor=f"{spark_col}18",
+        ))
+        spark_fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=0, r=0, t=0, b=0),
+            height=36, showlegend=False,
+            xaxis=dict(visible=False), yaxis=dict(visible=False, range=[0, 105]),
+        )
+
+        agent_chip = html.Span([
+            html.Span(ag["badge"], style={
+                "fontSize": "9px", "fontWeight": "700", "color": col,
+                "marginRight": "5px",
+            }),
+            html.Span(ag["label"], style={"fontSize": "10px", "color": TEXT_MAIN}),
+        ], style={
+            "background": f"{col}0f", "border": f"1px solid {col}33",
+            "borderRadius": "3px", "padding": "3px 7px",
+            "display": "inline-flex", "alignItems": "center",
+        })
+
+        table_rows.append(html.Div([
+            html.Div(agent_chip, style={"width": "120px", "flexShrink": "0"}),
+            html.Span(str(total),   style={"fontSize": "11px", "color": TEXT_DIM, "width": "60px", "flexShrink": "0"}),
+            html.Span(str(correct), style={"fontSize": "11px", "color": TEXT_DIM, "width": "70px", "flexShrink": "0"}),
+            html.Div(_win_rate_bar(wr, col), style={"width": "160px", "flexShrink": "0"}),
+            html.Span(f"{avg_c:.0%}", style={
+                "fontSize": "11px", "color": TEXT_MAIN, "width": "80px", "flexShrink": "0",
+            }),
+            dcc.Graph(figure=spark_fig, config={"displayModeBar": False},
+                      style={"flex": "1", "minWidth": "80px", "height": "36px"}),
+        ], style={
+            "display": "flex", "alignItems": "center", "gap": "8px",
+            "padding": "8px 12px",
+            "background": BG_CARD, "border": f"1px solid {BORDER}",
+            "borderRadius": "3px", "marginBottom": "4px",
+        }))
+
+    agents_section = html.Div([
+        html.Div("PERFORMANCE PAR AGENT", style={
+            "fontSize": "9px", "fontWeight": "700", "letterSpacing": "0.18em",
+            "color": TEXT_DIM, "textTransform": "uppercase",
+            "borderBottom": f"1px solid {BORDER}",
+            "paddingBottom": "6px", "marginBottom": "10px",
+        }),
+        table_hdr,
+        html.Div(table_rows if table_rows else [html.Div(
+            "No agent memory data yet. Run in multi-agent mode.",
+            style={"color": TEXT_DIM, "fontSize": "11px", "fontStyle": "italic", "padding": "12px"},
+        )]),
+    ], style={"marginBottom": "24px"})
+
+    # ── Section 2: Post-mortems récents ──────────────────────────────────────
+    pm_rows = []
+    for pm in post[:5]:
+        pnl    = float(pm.get("pnl_pct") or 0.0)
+        pnl_c  = GREEN if pnl >= 0 else RED
+        sym    = pm.get("symbol") or "—"
+        hrs    = pm.get("holding_hours")
+        hrs_s  = f"{float(hrs):.1f}h" if hrs is not None else "—"
+        summary_txt = (pm.get("summary") or "")[:120]
+        win_badge = html.Span(
+            "WIN" if pnl >= 0 else "LOSS",
+            style={
+                "fontSize": "9px", "fontWeight": "700",
+                "padding": "2px 6px", "borderRadius": "2px",
+                "background": f"{pnl_c}22", "color": pnl_c,
+                "flexShrink": "0",
+            },
+        )
+        sym_chip = html.Span(sym, style={
+            "fontSize": "9px", "fontWeight": "700", "color": BLUE,
+            "background": f"{BLUE}11", "border": f"1px solid {BLUE}33",
+            "borderRadius": "2px", "padding": "2px 6px", "flexShrink": "0",
+        })
+        pm_rows.append(html.Div([
+            sym_chip,
+            html.Span(f"{pnl:+.1f}%", style={
+                "fontSize": "11px", "color": pnl_c, "fontWeight": "700",
+                "width": "55px", "flexShrink": "0",
+            }),
+            html.Span(hrs_s, style={
+                "fontSize": "10px", "color": TEXT_DIM,
+                "width": "40px", "flexShrink": "0",
+            }),
+            html.Span(summary_txt, style={
+                "fontSize": "10px", "color": TEXT_DIM,
+                "flex": "1", "overflow": "hidden",
+                "textOverflow": "ellipsis", "whiteSpace": "nowrap",
+            }),
+            win_badge,
+        ], style={
+            "display": "flex", "alignItems": "center", "gap": "10px",
+            "padding": "7px 12px",
+            "background": BG_CARD, "border": f"1px solid {BORDER}",
+            "borderLeft": f"2px solid {pnl_c}",
+            "borderRadius": "0 3px 3px 0", "marginBottom": "4px",
+        }))
+
+    postmortem_section = html.Div([
+        html.Div("POST-MORTEMS RECENTS", style={
+            "fontSize": "9px", "fontWeight": "700", "letterSpacing": "0.18em",
+            "color": TEXT_DIM, "textTransform": "uppercase",
+            "borderBottom": f"1px solid {BORDER}",
+            "paddingBottom": "6px", "marginBottom": "10px",
+        }),
+        html.Div(pm_rows if pm_rows else [html.Div(
+            "No post-mortem data yet.",
+            style={"color": TEXT_DIM, "fontSize": "11px", "fontStyle": "italic", "padding": "12px"},
+        )]),
+    ])
+
+    return html.Div([agents_section, postmortem_section])
 
 
 if __name__ == "__main__":
