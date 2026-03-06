@@ -158,15 +158,17 @@ Key Dash patterns used:
 
 ```
 apex7-trader/
-├── agent.py          # LangGraph graph definition, all nodes, simulation engine
-├── app.py            # Dash app — layout, callbacks, UI helpers
-├── config.py         # All configuration constants, loaded from .env
-├── data.py           # Portfolio class — thread-safe state, buy/sell/log
-├── main.py           # Entrypoint: app.run()
-├── langgraph.json    # LangGraph Studio config
-├── pyproject.toml    # Dependencies (uv)
-├── .env              # API keys (not committed)
-└── trades.db         # SQLite — auto-created on first run (not committed)
+├── agent.py           # Simple graph: all nodes, simulation engine, _llm helper
+├── agent_multi.py     # Multi-agent graph: 4 specialists + arbitration
+├── app.py             # Dash app — layout, callbacks, UI helpers
+├── config.py          # All configuration constants, loaded from .env
+├── data.py            # Portfolio class + LiveFeed — thread-safe state, buy/sell/log
+├── graph_registry.py  # Maps graph IDs ("simple"/"multi") to builder functions
+├── main.py            # Entrypoint: app.run()
+├── langgraph.json     # LangGraph Studio config — exposes both graphs
+├── pyproject.toml     # Dependencies (uv)
+├── .env               # API keys (not committed)
+└── trades.db          # SQLite — auto-created on first run (not committed)
 ```
 
 ---
@@ -212,6 +214,7 @@ DEATH_THRESHOLD = 50        # portfolio floor ($) — agent dies below this
 MAX_POSITIONS   = 3         # maximum simultaneous open positions
 MAX_ALLOC_PCT   = 40        # max % of portfolio per trade
 AGENT_INTERVAL  = 30        # seconds between live cycles
+STOP_LOSS_PCT   = 0.05      # stop-loss threshold (5%) — defined in config, not yet a graph node
 ```
 
 ---
