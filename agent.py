@@ -62,6 +62,7 @@ from config import (
     SIMULATION_MODE,
     SIM_DRIFT,
     SIM_VOLATILITY,
+    STOP_LOSS_PCT,
     WATCHLIST,
     X_BEARER_TOKEN,
 )
@@ -823,6 +824,20 @@ def make_execute_node(portfolio: Portfolio):
 
         result: dict = {"success": False, "error": "no-op"}
 
+        # Stop-loss check on all open positions before executing the agent decision
+        for sl_sym, sl_pos in list(portfolio.positions.items()):
+            sl_price = prices.get(sl_sym, 0.0)
+            sl_avg = sl_pos.get("avg_price", sl_pos.get("avg_cost", 0))
+            if sl_avg > 0 and sl_price > 0:
+                sl_pct = (sl_price - sl_avg) / sl_avg
+                if sl_pct < -STOP_LOSS_PCT:
+                    sl_slip = 1 + random.uniform(-0.001, 0.001)
+                    portfolio.sell(sl_sym, 100, sl_price * sl_slip)
+                    logs.append(_entry(
+                        f"STOP-LOSS triggered: {sl_sym} @ ${sl_price:.2f} (loss: {sl_pct:.1%})",
+                        "warning",
+                    ))
+
         if action == "BUY" and symbol in prices:
             slip  = 1 + random.uniform(-0.001, 0.001)
             price = prices[symbol] * slip
@@ -833,6 +848,7 @@ def make_execute_node(portfolio: Portfolio):
                     f"BUY {symbol} {result['shares']:.5f} sh @ ${price:.2f} "
                     f"= ${result['amount']:.2f}  slip={slip-1:+.3%}"
                 ))
+                portfolio.save_state(DB_PATH.parent / ".apex7_state.json")
 
         elif action == "SELL" and symbol:
             slip  = 1 + random.uniform(-0.001, 0.001)
@@ -843,6 +859,7 @@ def make_execute_node(portfolio: Portfolio):
                     f"SELL {symbol} {sell_pct:.0f}% @ ${price:.2f} "
                     f"= ${result['amount']:.2f}  slip={slip-1:+.3%}"
                 ))
+                portfolio.save_state(DB_PATH.parent / ".apex7_state.json")
 
         elif action == "HOLD":
             logs.append(_entry(f"HOLD — {decision.get('reasoning','')[:100]}"))

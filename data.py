@@ -1,5 +1,7 @@
+import json
 import threading
 from datetime import datetime
+from pathlib import Path
 
 import yfinance as yf
 
@@ -18,6 +20,7 @@ class Portfolio:
         self.agent_log: list[dict] = []
         self.is_dead = False
         self.last_prices: dict[str, float] = {}
+        self.peak_value: float = float(INITIAL_BALANCE)
 
     def fetch_prices(self, symbols: list[str] | None = None) -> dict[str, float]:
         symbols = symbols or WATCHLIST
@@ -54,7 +57,7 @@ class Portfolio:
             if amount_usd < 1:
                 return {"success": False, "error": "Insufficient cash"}
             if symbol in self.positions:
-                return
+                return {"success": False, "error": "position already open"}
             shares = amount_usd / price
             self.cash -= amount_usd
             self.positions[symbol] = {"shares": shares, "avg_price": price}
@@ -106,9 +109,10 @@ class Portfolio:
 
     def record_value(self, prices: dict[str, float]):
         with self._lock:
-            self.value_history.append(
-                {"time": datetime.now().isoformat(), "value": self.total_value(prices)}
-            )
+            val = self.total_value(prices)
+            self.value_history.append({"time": datetime.now().isoformat(), "value": val})
+            if val > self.peak_value:
+                self.peak_value = val
 
     def check_death(self, prices: dict[str, float]) -> bool:
         val = self.total_value(prices)
@@ -121,6 +125,31 @@ class Portfolio:
         with self._lock:
             self.agent_log.append(entry)
         print(f"[APEX-7/{level.upper()}] {message}")
+
+    def save_state(self, path: Path) -> None:
+        with self._lock:
+            state = {
+                "cash": self.cash,
+                "positions": dict(self.positions),
+                "trade_history": list(self.trade_history),
+                "value_history": list(self.value_history),
+                "peak_value": self.peak_value,
+            }
+        path.write_text(json.dumps(state))
+
+    def load_state(self, path: Path) -> None:
+        if not path.exists():
+            return
+        try:
+            state = json.loads(path.read_text())
+        except Exception:
+            return
+        with self._lock:
+            self.cash = float(state.get("cash", self.cash))
+            self.positions = state.get("positions", self.positions)
+            self.trade_history = state.get("trade_history", self.trade_history)
+            self.value_history = state.get("value_history", self.value_history)
+            self.peak_value = float(state.get("peak_value", self.peak_value))
 
 
 class LiveFeed:

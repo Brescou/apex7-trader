@@ -13,9 +13,11 @@ from dash.dash_table import DataTable
 
 from agent import get_simulation_mode, set_simulation_mode
 from agent_multi import run_daily_postmortem
+from backtest import BacktestEngine
 from config import AGENT_GRAPH, AGENT_INTERVAL, DEATH_THRESHOLD, INITIAL_BALANCE, POSTMORTEM_HOUR, SIMULATION_MODE
 from data import Portfolio
 from graph_registry import get_graph, get_graph_info
+from leaderboard import Leaderboard
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DESIGN TOKENS
@@ -38,6 +40,13 @@ FONT     = "'JetBrains Mono', 'Fira Code', Consolas, monospace"
 
 DB_PATH  = Path(__file__).parent / "trades.db"
 
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """Convert a 6-digit hex design token to an rgba() string for Plotly."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # AGENT CONTROLLER
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -47,6 +56,7 @@ _state: dict = {
     "graph_id":  AGENT_GRAPH,
     "last_votes": [],   # last agent_votes from multi-agent cycle
     "last_arb":   {},   # last arbitration result
+    "thinking":   False,
 }
 
 
@@ -95,7 +105,9 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
                     "macro_vote":       None,
                     "arbitration":      None,
                 })
+            _state["thinking"] = True
             result = graph.invoke(initial)
+            _state["thinking"] = False
             for entry in result.get("log", []):
                 p.log(entry["message"], entry.get("level", "info"))
             # Store multi-agent votes for dashboard
@@ -181,12 +193,7 @@ def _emotion(total: float) -> str:
 
 
 def _thinking(p: Portfolio) -> bool:
-    for e in reversed(p.agent_log[-5:]):
-        if "Calling Anthropic" in e["message"]:
-            return True
-        if "DONE" in e["message"] or e["message"].startswith(("BUY ", "SELL ", "HOLD ")):
-            return False
-    return False
+    return _state.get("thinking", False)
 
 
 def _cycle(p: Portfolio) -> int:
@@ -220,10 +227,6 @@ def _mini_stat(label: str, value: str, color: str = TEXT_MAIN) -> html.Div:
         "background": BG_CARD, "border": f"1px solid {BORDER}",
         "borderRadius": "3px", "padding": "8px 10px",
     })
-
-
-def _classify(msg: str, level: str) -> tuple[str, str]:
-    return _classify_v2(msg, level)
 
 
 def _classify_v2(msg: str, level: str) -> tuple[str, str]:
@@ -776,7 +779,7 @@ def _tab_live() -> html.Div:
                         "borderLeft": f"2px solid {BLUE}",
                         "borderRadius": "3px", "padding": "7px 9px",
                     }),
-                    dcc.Collapse(
+                    html.Div(
                         html.Div(id="card-tech-body", style={
                             "background": BG_CARD,
                             "border": f"1px solid {BLUE}18",
@@ -786,7 +789,7 @@ def _tab_live() -> html.Div:
                             "padding": "8px 10px",
                         }),
                         id={"type": "reasoning-collapse", "index": "tech"},
-                        is_open=False,
+                        style={"display": "none"},
                     ),
                 ], style={"marginBottom": "5px"}),
                 # ANALYST
@@ -814,7 +817,7 @@ def _tab_live() -> html.Div:
                         "borderLeft": f"2px solid {GREEN}",
                         "borderRadius": "3px", "padding": "7px 9px",
                     }),
-                    dcc.Collapse(
+                    html.Div(
                         html.Div(id="card-analyst-body", style={
                             "background": BG_CARD,
                             "border": f"1px solid {GREEN}18",
@@ -824,7 +827,7 @@ def _tab_live() -> html.Div:
                             "padding": "8px 10px",
                         }),
                         id={"type": "reasoning-collapse", "index": "analyst"},
-                        is_open=False,
+                        style={"display": "none"},
                     ),
                 ], style={"marginBottom": "5px"}),
                 # RISK MANAGER
@@ -852,7 +855,7 @@ def _tab_live() -> html.Div:
                         "borderLeft": f"2px solid {ORANGE}",
                         "borderRadius": "3px", "padding": "7px 9px",
                     }),
-                    dcc.Collapse(
+                    html.Div(
                         html.Div(id="card-risk-body", style={
                             "background": BG_CARD,
                             "border": f"1px solid {ORANGE}18",
@@ -862,7 +865,7 @@ def _tab_live() -> html.Div:
                             "padding": "8px 10px",
                         }),
                         id={"type": "reasoning-collapse", "index": "risk"},
-                        is_open=False,
+                        style={"display": "none"},
                     ),
                 ], style={"marginBottom": "5px"}),
                 # MACRO WATCHER
@@ -890,7 +893,7 @@ def _tab_live() -> html.Div:
                         "borderLeft": f"2px solid {PURPLE}",
                         "borderRadius": "3px", "padding": "7px 9px",
                     }),
-                    dcc.Collapse(
+                    html.Div(
                         html.Div(id="card-macro-body", style={
                             "background": BG_CARD,
                             "border": f"1px solid {PURPLE}18",
@@ -900,7 +903,7 @@ def _tab_live() -> html.Div:
                             "padding": "8px 10px",
                         }),
                         id={"type": "reasoning-collapse", "index": "macro"},
-                        is_open=False,
+                        style={"display": "none"},
                     ),
                 ], style={"marginBottom": "5px"}),
                 # ARBITRATION — always visible
@@ -1553,8 +1556,7 @@ def _refresh(_, store, active_tab, graph_store):
     pnl_pct = (pnl / INITIAL_BALANCE) * 100
     dead    = p.is_dead
     paused  = store.get("paused", False)
-    vh      = p.value_history
-    peak    = max((v["value"] for v in vh), default=INITIAL_BALANCE)
+    peak    = p.peak_value
     dd      = ((peak - total) / peak * 100) if peak > 0 else 0.0
     invested= max(total - p.cash, 0.0)
     cyc     = _cycle(p)
@@ -1841,12 +1843,24 @@ def _refresh(_, store, active_tab, graph_store):
             ("risk_manager", "RISK",  ORANGE),
             ("macro_watcher","MACRO", PURPLE),
         ]
-        mem = _load_agent_memory()
+        try:
+            _con = sqlite3.connect(DB_PATH)
+            _tr_rows = _con.execute(
+                "SELECT agent_name, was_correct FROM agent_memory "
+                "WHERE agent_name IN ('technician','analyst','risk_manager','macro_watcher') "
+                "ORDER BY timestamp DESC LIMIT 80"
+            ).fetchall()
+            _con.close()
+        except Exception:
+            _tr_rows = []
+        _tr_by_agent: dict = {}
+        for _an, _wc in _tr_rows:
+            _tr_by_agent.setdefault(_an, []).append(_wc)
         badge_items = []
         for agent_key, agent_label, agent_color in _TRACK_AGENTS:
-            rows = [r for r in mem if r.get("agent_name") == agent_key][-20:]
+            rows = _tr_by_agent.get(agent_key, [])[:20]
             if rows:
-                correct = sum(1 for r in rows if r.get("was_correct") in (1, True, "1"))
+                correct = sum(1 for wc in rows if wc in (1, True))
                 wr = correct / len(rows) * 100
             else:
                 wr = 0.0
@@ -1890,16 +1904,17 @@ def _refresh(_, store, active_tab, graph_store):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.callback(
-    Output({"type": "reasoning-collapse", "index": MATCH}, "is_open"),
+    Output({"type": "reasoning-collapse", "index": MATCH}, "style"),
     Output({"type": "reasoning-toggle",   "index": MATCH}, "children"),
     Input({"type": "reasoning-toggle",    "index": MATCH}, "n_clicks"),
-    State({"type": "reasoning-collapse",  "index": MATCH}, "is_open"),
+    State({"type": "reasoning-collapse",  "index": MATCH}, "style"),
     prevent_initial_call=True,
 )
-def _toggle_reasoning(n_clicks, is_open):
+def _toggle_reasoning(n_clicks, current_style):
+    is_open = (current_style or {}).get("display") == "block"
     new_open = not is_open
     label = "▲ Collapse" if new_open else "▼ Reasoning"
-    return new_open, label
+    return {"display": "block" if new_open else "none"}, label
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1926,16 +1941,24 @@ def _analytics_refresh(_, __):
     sells = [t for t in trades if t["action"] == "SELL"]
     total = len(trades)
 
-    # Win rate: sells where portfolio_value_after increased relative to buy price
-    wins = 0
+    # Win rate: for each SELL, find the most recent prior BUY of the same symbol
+    # P&L = (sell_price - buy_price) / buy_price; win = P&L > 0
+    pnl_vals: list[float] = []
     for s in sells:
-        # rough: if amount_usd > 0 treat as win heuristic
-        if s.get("portfolio_value_after", 0) > INITIAL_BALANCE:
-            wins += 1
-    win_rate = (wins / len(sells) * 100) if sells else 0.0
-
-    pnl_vals  = [t.get("amount_usd", 0) for t in sells]
-    avg_pnl   = statistics.mean(pnl_vals) if pnl_vals else 0.0
+        sym = s.get("symbol")
+        sell_price = s.get("price", 0.0)
+        sell_ts = s.get("timestamp", "")
+        prior_buys = [
+            b for b in buys
+            if b.get("symbol") == sym and b.get("timestamp", "") <= sell_ts
+        ]
+        if prior_buys and sell_price > 0:
+            buy_price = prior_buys[-1].get("price", sell_price)
+            if buy_price > 0:
+                pnl_vals.append((sell_price - buy_price) / buy_price)
+    wins = sum(1 for p in pnl_vals if p > 0)
+    win_rate = (wins / len(pnl_vals) * 100) if pnl_vals else 0.0
+    avg_pnl = statistics.mean(pnl_vals) * 100 if pnl_vals else 0.0  # as %
     best_t    = max(pnl_vals) if pnl_vals else 0.0
     worst_t   = min(pnl_vals) if pnl_vals else 0.0
     confs     = [t.get("confidence", 0) for t in trades if t.get("confidence")]
@@ -1949,10 +1972,10 @@ def _analytics_refresh(_, __):
     ratio   = f"{sim_n}/{live_n}" if (sim_n + live_n) > 0 else "—"
 
     kpi_items = [
-        ("WIN RATE",       f"{win_rate:.1f}%",      GREEN if win_rate > 50 else RED),
-        ("AVG P&L",        f"${avg_pnl:.2f}",        GREEN if avg_pnl >= 0 else RED),
-        ("BEST TRADE",     f"${best_t:.2f}",          GREEN),
-        ("WORST TRADE",    f"${worst_t:.2f}",          RED),
+        ("WIN RATE",       f"{win_rate:.1f}%",           GREEN if win_rate > 50 else RED),
+        ("AVG P&L",        f"{avg_pnl:+.2f}%",           GREEN if avg_pnl >= 0 else RED),
+        ("BEST TRADE",     f"{best_t * 100:+.2f}%",      GREEN),
+        ("WORST TRADE",    f"{worst_t * 100:+.2f}%",     RED),
         ("TOTAL TRADES",   str(total),                 BLUE),
         ("AVG CONFIDENCE", f"{avg_conf:.0%}",          PURPLE),
         ("FAV TICKER",     fav,                         YELLOW),
@@ -2015,7 +2038,7 @@ def _analytics_refresh(_, __):
         mode="lines",
         line=dict(color=PURPLE, width=1.5),
         fill="tozeroy",
-        fillcolor=f"{PURPLE}18",
+        fillcolor=_rgba(PURPLE, 0.09),
     ))
     fig3.update_layout(title="Confidence Over Time", height=250, **_plotly_theme)
 
@@ -2114,23 +2137,8 @@ def _backtest_run(n_clicks, scenario, config):
     if not n_clicks:
         return html.Div()
 
-    # Try importing BacktestEngine, show placeholder if not available
-    try:
-        from backtest import BacktestEngine  # type: ignore
-        engine = BacktestEngine(scenario, config)
-        result = engine.run()
-    except ImportError:
-        # Placeholder results for demo
-        result = {
-            "return_pct":    12.5,
-            "sharpe":        1.42,
-            "win_rate":      58.0,
-            "max_drawdown":  8.3,
-            "total_trades":  47,
-            "survived":      True,
-            "portfolio_history": [1000, 1020, 1050, 980, 1100, 1085, 1125],
-            "trade_log": [],
-        }
+    engine = BacktestEngine(scenario, config or {})
+    result = engine.run()
 
     survived_badge = html.Span("✓ SURVIVED", style={"color": GREEN, "fontWeight": "700"}) \
         if result.get("survived") else \
@@ -2141,7 +2149,7 @@ def _backtest_run(n_clicks, scenario, config):
         ("SHARPE",       f"{result.get('sharpe', 0):.2f}",          BLUE),
         ("WIN RATE",     f"{result.get('win_rate', 0):.1f}%",       GREEN),
         ("MAX DRAWDOWN", f"{result.get('max_drawdown', 0):.1f}%",   RED),
-        ("TRADES",       str(result.get("total_trades", 0)),         TEXT_MAIN),
+        ("TRADES",       str(result.get("trades_count", 0)),         TEXT_MAIN),
         ("STATUS",       survived_badge,                              GREEN),
     ]
 
@@ -2161,7 +2169,7 @@ def _backtest_run(n_clicks, scenario, config):
     fig.add_trace(go.Scatter(
         x=xs, y=hist, mode="lines", name="APEX-7",
         line=dict(color=GREEN, width=1.5),
-        fill="tozeroy", fillcolor=f"{GREEN}0a",
+        fill="tozeroy", fillcolor=_rgba(GREEN, 0.04),
     ))
     # Buy-and-hold reference (flat)
     spy_end = hist[-1] * 1.05 if hist else INITIAL_BALANCE * 1.05
@@ -2226,21 +2234,8 @@ def _lb_run(n_clicks, scenario):
     if not n_clicks:
         return html.Div()
 
-    try:
-        from leaderboard import Leaderboard  # type: ignore
-        lb = Leaderboard()
-        rows = lb.run_all(scenario)
-    except ImportError:
-        # Placeholder data
-        import random as _r
-        rows = [
-            {"agent_id": f"APEX-{i}", "final_value": _r.uniform(600, 1800),
-             "return_pct": _r.uniform(-40, 80), "sharpe": _r.uniform(-0.5, 2.5),
-             "win_rate": _r.uniform(30, 75), "max_drawdown": _r.uniform(5, 40),
-             "trades": _r.randint(10, 100), "survived": _r.random() > 0.3}
-            for i in range(1, 7)
-        ]
-        rows.sort(key=lambda r: r["return_pct"], reverse=True)
+    lb = Leaderboard()
+    rows = lb.run_all(scenario)
 
     agent_colors = [GREEN, BLUE, PURPLE, ORANGE, YELLOW, "#ec4899", "#14b8a6", RED]
 
@@ -2289,15 +2284,6 @@ def _lb_run(n_clicks, scenario):
     names    = [r["agent_id"] for r in rows]
     returns  = [r["return_pct"] for r in rows]
     bar_cols = [agent_colors[i % len(agent_colors)] for i in range(len(rows))]
-    annotations = []
-    for i, (n, ret) in enumerate(zip(names, returns)):
-        annotations.append(dict(
-            x=i, y=ret + (2 if ret >= 0 else -4),
-            text="YOLO" if ret > 0 else "💀 DEAD",
-            showarrow=False,
-            font=dict(size=8, color=GREEN if ret >= 0 else RED, family=FONT),
-        ))
-
     fig = go.Figure(go.Bar(
         x=names, y=returns,
         marker_color=bar_cols,
@@ -2314,7 +2300,6 @@ def _lb_run(n_clicks, scenario):
         font=dict(family=FONT, color=TEXT_MAIN, size=10),
         margin=dict(l=40, r=20, t=30, b=60),
         height=280, showlegend=False,
-        annotations=annotations,
         title=f"Agent Returns — {scenario}",
     )
 
@@ -2541,8 +2526,23 @@ def _agents_refresh(_, __):
     import datetime as _dt
     import json as _json
 
-    mem  = _load_agent_memory()
-    post = _load_postmortem()
+    try:
+        _con = sqlite3.connect(DB_PATH)
+        _mem_rows = _con.execute(
+            "SELECT id,timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source "
+            "FROM agent_memory ORDER BY timestamp DESC LIMIT 1000"
+        ).fetchall()
+        _post_rows = _con.execute(
+            "SELECT id,timestamp,symbol,buy_price,sell_price,pnl_pct,holding_hours,"
+            "agents_correct,summary,source FROM postmortem ORDER BY timestamp DESC LIMIT 100"
+        ).fetchall()
+        _con.close()
+    except Exception:
+        _mem_rows, _post_rows = [], []
+    _mem_cols  = ("id","timestamp","agent_name","symbol","vote","confidence","was_correct","lesson","source")
+    _post_cols = ("id","timestamp","symbol","buy_price","sell_price","pnl_pct","holding_hours","agents_correct","summary","source")
+    mem  = [dict(zip(_mem_cols,  r)) for r in _mem_rows]
+    post = [dict(zip(_post_cols, r)) for r in _post_rows]
 
     _AGENT_DEFS = [
         {"key": "technician",    "label": "Technician", "badge": "TECH",  "color": BLUE},
@@ -2619,7 +2619,7 @@ def _agents_refresh(_, __):
         spark_fig = go.Figure(go.Scatter(
             x=list(range(7)), y=trend_y, mode="lines",
             line=dict(color=spark_col, width=1.5),
-            fill="tozeroy", fillcolor=f"{spark_col}18",
+            fill="tozeroy", fillcolor=_rgba(spark_col, 0.09),
         ))
         spark_fig.update_layout(
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
