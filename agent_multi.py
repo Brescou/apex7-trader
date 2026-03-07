@@ -4,7 +4,9 @@ import json
 import operator
 import random
 import sqlite3
+import time
 from datetime import datetime, date
+from pathlib import Path
 from typing import Annotated, List, Optional, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -86,6 +88,70 @@ WEIGHTS = {
     "risk_manager":  0.20,   # does NOT vote on direction
     "macro_watcher": 0.15,
 }
+
+_cached_weights: dict = {}
+_weights_computed_at: float = 0.0
+
+
+def _compute_dynamic_weights(db_path: Path) -> dict:
+    """Compute agent weights blended with historical accuracy from agent_memory.
+
+    Uses a 10-minute cache. Falls back to static WEIGHTS if an agent has
+    fewer than 5 scored votes. Blend: 70% static + 30% accuracy-based.
+    Always returns a dict normalised to sum=1.0.
+    """
+    global _cached_weights, _weights_computed_at
+
+    if _cached_weights and (time.time() - _weights_computed_at) < 600:
+        return _cached_weights
+
+    agents = list(WEIGHTS.keys())
+    accuracy: dict[str, float] = {}
+
+    try:
+        con = sqlite3.connect(db_path)
+        for agent in agents:
+            rows = con.execute(
+                "SELECT was_correct FROM agent_memory "
+                "WHERE agent_name=? AND was_correct IS NOT NULL "
+                "ORDER BY timestamp DESC LIMIT 50",
+                (agent,),
+            ).fetchall()
+            if len(rows) >= 5:
+                accuracy[agent] = sum(r[0] for r in rows) / len(rows)
+            else:
+                accuracy[agent] = None  # type: ignore[assignment]
+        con.close()
+    except Exception:
+        # DB not available — fall back to static weights entirely
+        _cached_weights = dict(WEIGHTS)
+        _weights_computed_at = time.time()
+        return _cached_weights
+
+    # Agents with enough data contribute their accuracy; others use static weight
+    valid_accuracies = {a: v for a, v in accuracy.items() if v is not None}
+    sum_accuracies = sum(valid_accuracies.values()) if valid_accuracies else 1.0
+    if sum_accuracies == 0.0:
+        sum_accuracies = 1.0
+
+    dynamic: dict[str, float] = {}
+    for agent in agents:
+        static_w = WEIGHTS[agent]
+        if accuracy[agent] is not None:
+            acc_norm = accuracy[agent] / sum_accuracies
+            dynamic[agent] = 0.7 * static_w + 0.3 * acc_norm
+        else:
+            dynamic[agent] = static_w
+
+    # Normalise to sum=1.0
+    total = sum(dynamic.values())
+    if total > 0:
+        dynamic = {a: v / total for a, v in dynamic.items()}
+
+    _cached_weights = dynamic
+    _weights_computed_at = time.time()
+    return _cached_weights
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SIMULATION HELPERS
@@ -744,17 +810,20 @@ def arbitrate_node(state: MultiAgentState) -> dict:
     risk_v   = vote_map.get("risk_manager", {})
     macro_v  = vote_map.get("macro_watcher", {})
 
+    dynamic_weights = _compute_dynamic_weights(DB_PATH)
+    logs.append(_entry(f"arbitrate: weights_used={dynamic_weights}"))
+
     # Composite action scores (risk_manager & macro_watcher don't vote on direction)
     action_scores: dict[str, float] = {"BUY": 0.0, "SELL": 0.0, "HOLD": 0.0}
     for v in [tech_v, ana_v]:
         agent  = v.get("agent", "")
-        weight = WEIGHTS.get(agent, 0.0)
+        weight = dynamic_weights.get(agent, 0.0)
         action = v.get("action", "HOLD")
         conf   = float(v.get("confidence", 0.5))
         action_scores[action] = action_scores.get(action, 0.0) + weight * conf
 
     # Apply HOLD weight for macro + risk as a baseline
-    hold_weight = WEIGHTS["risk_manager"] * 0.5 + WEIGHTS["macro_watcher"] * 0.5
+    hold_weight = dynamic_weights["risk_manager"] * 0.5 + dynamic_weights["macro_watcher"] * 0.5
     action_scores["HOLD"] += hold_weight * 0.5
 
     # Risk veto: risk_score > 8 heavily penalises BUY
