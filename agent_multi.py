@@ -1117,6 +1117,9 @@ def build_multi_graph(portfolio: Portfolio):
     return g.compile()
 
 
+# Alias for test compatibility
+build_graph = build_multi_graph
+
 # LangGraph Studio compatibility
 from data import Portfolio as _Portfolio
 agent_multi_graph = build_multi_graph(_Portfolio())
