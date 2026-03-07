@@ -42,7 +42,7 @@ The entire reasoning process is visible in real time on the terminal dashboard.
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        app.py (Dash)                        │
-│  Top bar · LIVE · ANALYTICS · BACKTEST · LEADERBOARD tabs   │
+│  LIVE · ANALYTICS · BACKTEST · LEADERBOARD · HEATMAP · AGENTS│
 │  dcc.Interval (2s) → callbacks → portfolio state display    │
 └──────────────────────────┬──────────────────────────────────┘
                            │ reads
@@ -83,7 +83,7 @@ The entire reasoning process is visible in real time on the terminal dashboard.
                            │ persists
 ┌──────────────────────────▼──────────────────────────────────┐
 │                      trades.db (SQLite)                      │
-│  tables: trades, patterns                                    │
+│  tables: trades, patterns, agent_memory, postmortem          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -159,7 +159,7 @@ Key Dash patterns used:
 ```
 apex7-trader/
 ├── agent.py           # Simple graph: all nodes, simulation engine, _llm helper
-├── agent_multi.py     # Multi-agent graph: 4 specialists + arbitration
+├── agent_multi.py     # Multi-agent graph: 4 specialists + arbitration + run_daily_postmortem
 ├── app.py             # Dash app — layout, callbacks, UI helpers
 ├── config.py          # All configuration constants, loaded from .env
 ├── data.py            # Portfolio class + LiveFeed — thread-safe state, buy/sell/log
@@ -203,6 +203,7 @@ X_BEARER_TOKEN=...
 SIMULATION_MODE=true        # true = no real money, no API calls for data
 SIM_VOLATILITY=0.02         # price volatility per step (default 2%)
 SIM_DRIFT=0.0001            # slight upward drift (default 0.01%)
+AGENT_GRAPH=multi           # "simple" (default) or "multi"
 ```
 
 **Watchlist, balance, and thresholds** are configured directly in `config.py`:
@@ -215,6 +216,7 @@ MAX_POSITIONS   = 3         # maximum simultaneous open positions
 MAX_ALLOC_PCT   = 40        # max % of portfolio per trade
 AGENT_INTERVAL  = 30        # seconds between live cycles
 STOP_LOSS_PCT   = 0.05      # stop-loss threshold (5%) — defined in config, not yet a graph node
+POSTMORTEM_HOUR = 22        # hour (0-23) at which daily postmortem runs
 ```
 
 ---
@@ -260,6 +262,7 @@ Two-column layout:
 - **Agent State** — current emotion (EUPHORIC / EXCITED / FOCUSED / CALM / NERVOUS / PANIC / DESPERATE) with quote, and a "SEARCHING..." badge when the LLM is active
 - **Metrics** — Cash / Invested / Peak / Drawdown grid
 - **Open Positions** — up to 3 cards with per-position P&L, price, and a mini bar
+- **Agent Track Records** — accuracy badges per agent (multi mode only)
 
 **Right column**
 - **Equity Curve** — Plotly sparkline with death floor and start reference lines
@@ -273,11 +276,20 @@ Two-column layout:
 | `HOLD` | Gray | No trade this cycle |
 | `AI` | Purple | LLM call / web search |
 | `INTEL` | Purple | Market analysis output |
+| `TECH` | Blue | Technician agent vote |
+| `ANLST` | Cyan | Analyst agent vote |
+| `RISK` | Red | Risk manager assessment |
+| `MACRO` | Yellow | Macro watcher regime |
+| `ARBIT` | Green | Arbitration decision |
 | `SIM` | Orange | Simulation engine event |
 | `ERR` | Orange | Error |
 | `DEATH` | Red | Portfolio killed |
 
 **Death state:** when portfolio ≤ $50, the page background shifts to near-black red, the status dot turns red, and the left column shows a termination screen.
+
+**Agent cards panel (multi mode only):**
+- TECH / ANLST / RISK / MACRO cards, each collapsible with vote details
+- ARBITRATION card always visible below
 
 ### ANALYTICS tab
 
@@ -302,6 +314,18 @@ Requires a `leaderboard.py` module with a `Leaderboard().run_all(scenario)` inte
 Falls back to random placeholder data if the module is absent.
 
 Output: ranked table (winner highlighted in green) + comparative returns bar chart with breakeven line.
+
+### HEATMAP tab
+
+Per-symbol performance matrix showing returns and trade frequency across the watchlist.
+Data sourced from `trades.db`.
+
+### AGENTS tab
+
+Per-agent comparison table loaded from `agent_memory` in `trades.db`:
+- Accuracy rate (correct votes / total votes)
+- Average confidence
+- Win rate per agent
 
 ---
 

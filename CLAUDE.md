@@ -31,7 +31,7 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `main.py` | Entrypoint — calls `app.run()` |
 | `app.py` | Dash layout, callbacks, and the `_agent_loop` background thread |
 | `agent.py` | Simple graph: LangGraph nodes, simulation engine, `start_agent()` |
-| `agent_multi.py` | Multi-agent graph: 4 specialized agents + arbitration node |
+| `agent_multi.py` | Multi-agent graph: 4 specialized agents + arbitration node + `run_daily_postmortem()` |
 | `data.py` | `Portfolio` — thread-safe state (cash, positions, value history, logs); `LiveFeed` — multi-symbol yfinance wrapper |
 | `config.py` | All constants, loaded from `.env` |
 | `graph_registry.py` | Maps graph IDs (`"simple"` / `"multi"`) to builder functions |
@@ -40,6 +40,8 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 ### Concurrency model
 
 The Dash callback thread and the agent loop thread share a single `Portfolio` object. All mutations on `Portfolio` are protected by `threading.RLock()`. The agent's `AgentState` is a per-cycle snapshot; `Portfolio` is the source of truth for the dashboard.
+
+A third daemon thread (`apex7-postmortem`) runs in `app.py` and calls `run_daily_postmortem()` once per day at `POSTMORTEM_HOUR`. It only reads `portfolio.trade_history` and writes to SQLite — no Portfolio mutations.
 
 ### Two graphs
 
@@ -92,7 +94,16 @@ g.add_edge("my_node", "risk_check")
 
 ### SQLite schema
 
-`trades.db` is auto-created at startup. Two tables: `trades` (one row per executed trade) and `patterns` (lessons extracted by Haiku). The `source` column distinguishes `'live'` from `'simulation'` trades. `HOLD` actions are not persisted.
+`trades.db` is auto-created at startup. Four tables:
+
+| Table | Description |
+|-------|-------------|
+| `trades` | One row per executed BUY/SELL trade (HOLD not persisted) |
+| `patterns` | Lessons extracted by Haiku after each trade |
+| `agent_memory` | One row per agent vote per cycle; `was_correct` updated by `arbitrate_node` |
+| `postmortem` | One row per closed trade (SELL); written by `run_daily_postmortem()` |
+
+The `source` column on `trades`, `agent_memory`, and `postmortem` is `'live'` or `'simulation'`.
 
 ### LiveFeed
 
@@ -111,7 +122,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 | `AGENT_GRAPH` | `simple` | `simple` or `multi` |
 | `X_BEARER_TOKEN` | — | Twitter/X sentiment (optional) |
 
-`WATCHLIST`, `INITIAL_BALANCE`, `DEATH_THRESHOLD`, `MAX_POSITIONS`, `MAX_ALLOC_PCT`, `AGENT_INTERVAL`, and `STOP_LOSS_PCT` are hardcoded in `config.py` and not overridable by env vars.
+`WATCHLIST`, `INITIAL_BALANCE`, `DEATH_THRESHOLD`, `MAX_POSITIONS`, `MAX_ALLOC_PCT`, `AGENT_INTERVAL`, `STOP_LOSS_PCT`, and `POSTMORTEM_HOUR` are hardcoded in `config.py` and not overridable by env vars.
 
 ## Known pitfalls
 
@@ -123,6 +134,9 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`LiveFeed` not wired** — `LiveFeed` class exists in `data.py` and `STOP_LOSS_PCT` in `config.py` but neither is used in any graph node yet.
 - **graph_registry description outdated** — `graph_registry.py` describes multi as "4 Specialists" — update if a 5th specialist is added.
 - **`start_agent()` in `agent.py` is unused from the dashboard** — `app.py` runs its own `_agent_loop` directly, not via `start_agent()`. The function exists for standalone use.
+- **Postmortem thread only in `app.py`** — `run_daily_postmortem()` is never called from `main.py` or `agent.py`. It only runs when the full Dash app is started, not from standalone `python agent.py`.
+- **`agent_memory` inserts in live path only for specialist nodes** — in simulation mode, `sim_technician`, `sim_analyst`, `sim_risk_manager`, `sim_macro_watcher` each insert into `agent_memory` with `source='simulation'`. In live mode, `technician_node`, `analyst_node`, `risk_manager_node`, `macro_watcher_node` each insert with `source='live'`. The simple graph does not write to `agent_memory` at all.
+- **Multi-symbol position limit** — `Portfolio.buy()` silently returns `None` (not a dict) if the symbol is already held. Callers in `execute_node` check `result["success"]` — ensure any new callers handle a `None` return gracefully.
 
 ## Code conventions
 

@@ -2,12 +2,15 @@
 
 ## [Unreleased]
 
-Changes detected in working tree (not yet committed):
+No uncommitted changes.
 
-- `config.py`: added `STOP_LOSS_PCT = 0.05` constant
-- `data.py`: added `LiveFeed` class for multi-symbol price fetching via yfinance (1m interval)
-- `agent_multi.py`: refactored — 4 specialized agents remain, multi-agent state and routing reviewed
-- `app.py`: agent card panel (TECH / ANLST / RISK / MACRO) visible in multi-agent mode with collapsible reasoning blocks
+## [2026-03-06] — Multi-symbol + postmortem + agent memory + heatmap + agent comparison
+
+- `data.py`: multi-symbol buy guard — `buy()` returns early if symbol already held; added `open_symbols()` and `closed_trades_since(ts)` methods
+- `config.py`: added `POSTMORTEM_HOUR = 22` (hardcoded — triggers daily postmortem batch)
+- `agent.py` + `agent_multi.py`: added `agent_memory` and `postmortem` tables to `_SCHEMA`; idempotent via `CREATE TABLE IF NOT EXISTS`
+- `agent_multi.py`: added `run_daily_postmortem(portfolio)` — per-symbol postmortem on all SELL trades since midnight; writes P&L, holding duration, agents correct, Haiku-generated summary to `postmortem` table
+- `app.py`: HEATMAP tab (5th) — per-symbol return heatmap + trade frequency matrix; AGENTS tab (6th) — per-agent accuracy, confidence, win-rate comparison; Agent Track Records badges in LIVE tab (multi mode only); background `apex7-postmortem` thread fires `run_daily_postmortem` at `POSTMORTEM_HOUR`
 
 ## [2026-03-06] — Multi-agent graph with 4 specialized agents + arbitration
 
@@ -16,6 +19,7 @@ Changes detected in working tree (not yet committed):
 - Added `langgraph.json`: exposes both compiled graphs (`apex7_simple`, `apex7_multi`) to LangGraph Studio
 - `app.py`: graph selector dropdown, agent cards panel (per-agent vote header + collapsible body + arbitration card), pause/step/reset controls
 - `agent.py`: `_sim_mode` dict, `set_simulation_mode` / `get_simulation_mode`, `sim_research` function, `.env` hot-write on mode toggle
+- `config.py`: added `STOP_LOSS_PCT = 0.05`; `data.py`: added `LiveFeed` class (both defined, not yet wired into graph nodes)
 
 ## [2026-03-06] — .env.example
 

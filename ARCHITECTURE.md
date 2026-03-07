@@ -140,23 +140,67 @@ CREATE TABLE patterns (
     timestamp TEXT,
     pattern   TEXT
 );
+
+CREATE TABLE agent_memory (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp    TEXT,
+    agent_name   TEXT,
+    symbol       TEXT,
+    vote         TEXT,
+    confidence   REAL,
+    was_correct  INTEGER,
+    lesson       TEXT,
+    source       TEXT DEFAULT 'simulation'
+);
+
+CREATE TABLE postmortem (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp       TEXT,
+    symbol          TEXT,
+    buy_price       REAL,
+    sell_price      REAL,
+    pnl_pct         REAL,
+    holding_hours   REAL,
+    agents_correct  TEXT,
+    summary         TEXT,
+    source          TEXT DEFAULT 'simulation'
+);
 ```
 
 `source` values: `'live'` or `'simulation'`.
 `HOLD` actions are not persisted to `trades` (save_memory_node skips HOLDs).
+`agent_memory.was_correct` is set by `arbitrate_node` after the final decision is known (NULL until then).
+`postmortem` rows are written once per SELL trade by `run_daily_postmortem()` at `POSTMORTEM_HOUR`.
+
+## Daily Postmortem
+
+`run_daily_postmortem(portfolio, db_path)` in `agent_multi.py`:
+- Triggered by a dedicated background thread (`apex7-postmortem`, daemon) started in `app.py`
+- Runs at `POSTMORTEM_HOUR` (default 22:00) once per calendar day
+- Scans `portfolio.trade_history` for SELL trades since midnight
+- For each SELL, finds the matching BUY, computes P&L % and holding duration in hours
+- Queries `agent_memory` for agents that voted SELL correctly on that symbol
+- Generates a 2-sentence summary via Haiku (simulation: rule-based string)
+- Inserts one row into `postmortem` per trade
 
 ## Dash Dashboard
 
 | Tab | Content | Refresh |
 |-----|---------|---------|
-| LIVE | Portfolio value, agent state, equity curve, activity log, agent cards (multi mode) | 2s interval |
+| LIVE | Portfolio value, agent state, equity curve, activity log, agent cards (multi mode), Track Records badges | 2s interval |
 | ANALYTICS | KPI row, 4 charts, full trade table | 30s + manual |
 | BACKTEST | Scenario/config selector, portfolio vs SPY chart, trade log | on button click |
 | LEADERBOARD | Scenario selector, ranked agent comparison table | on button click |
+| HEATMAP | Per-symbol return heatmap + trade frequency matrix | on button click |
+| AGENTS | Per-agent accuracy, confidence, win-rate comparison table | on button click |
 
 Agent cards panel (LIVE tab, multi-agent mode only):
 - TECH (blue), ANLST (green), RISK (orange), MACRO (purple) — each collapsible
 - ARBITRATION card always visible below agent cards
+
+Agent Track Records badges (LIVE tab, multi-agent mode only):
+- One badge per agent showing accuracy rate (correct votes / total votes from `agent_memory`)
+- Only visible when `AGENT_GRAPH=multi`
 
 Controls (top bar): PAUSE / STEP / RESET buttons, SIM/LIVE radio, graph selector dropdown.
 
@@ -169,12 +213,25 @@ Thread-safe portfolio state. All mutations protected by `threading.RLock()`.
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `cash` | float | Available cash |
-| `positions` | dict | `{symbol: {shares, avg_price}}` |
+| `positions` | dict | `{symbol: {shares, avg_price}}` — max 1 position per symbol |
 | `trade_history` | list | All executed trades (in-memory) |
 | `value_history` | list | `[{time, value}]` snapshots |
 | `agent_log` | list | `[{time, message, level}]` |
 | `is_dead` | bool | True when total value < DEATH_THRESHOLD |
 | `last_prices` | dict | Last fetched prices cache |
+
+Key methods:
+
+| Method | Description |
+|--------|-------------|
+| `buy(symbol, amount_usd, price)` | Opens position; returns early (no-op) if symbol already held |
+| `sell(symbol, sell_pct, price)` | Closes or reduces position |
+| `open_symbols()` | Returns list of currently held symbols |
+| `closed_trades_since(ts)` | Returns SELL trades from `trade_history` with `time >= ts` |
+| `fetch_prices(symbols)` | Fetches live prices via `yf.Tickers` fast_info |
+| `total_value(prices)` | Cash + sum of position values |
+| `record_value(prices)` | Appends snapshot to `value_history` |
+| `check_death(prices)` | Sets `is_dead = True` if total value < DEATH_THRESHOLD |
 
 ### `LiveFeed` (`data.py`)
 
@@ -185,10 +242,13 @@ feed = LiveFeed(["AAPL", "MSFT"])
 prices = feed.fetch()  # -> {"AAPL": 185.0, "MSFT": 415.0}
 ```
 
+Currently defined but not wired into the agent graph.
+
 ## Concurrency Model
 
 - Dash callback thread: reads `_state["portfolio"]` — no mutations
 - Agent loop thread (`apex7-agent`, daemon): mutates Portfolio via `buy()`, `sell()`, `record_value()`
+- Postmortem thread (`apex7-postmortem`, daemon): calls `run_daily_postmortem()` once per day — reads `portfolio.trade_history`, writes to SQLite
 - All Portfolio mutations use `with self._lock` (RLock)
 - `_ctrl` dict (pause/step) and `_state` dict are mutated by both threads — not lock-protected (acceptable: only booleans and references)
 - Graph switch and reset: agent thread is killed (portfolio.is_dead = True), new Portfolio + thread created
@@ -204,6 +264,7 @@ prices = feed.fetch()  # -> {"AAPL": 185.0, "MSFT": 415.0}
 | `AGENT_GRAPH` | env | `simple` | `simple` or `multi` |
 | `X_BEARER_TOKEN` | env | — | Twitter/X sentiment (optional) |
 | `STOP_LOSS_PCT` | hardcoded | `0.05` | Stop-loss threshold (5%) — defined, not yet enforced by a graph node |
+| `POSTMORTEM_HOUR` | hardcoded | `22` | Hour (0–23) at which daily postmortem runs |
 | `WATCHLIST` | hardcoded | 5 tickers | AAPL, MSFT, GOOG, AMZN, TSLA |
 | `INITIAL_BALANCE` | hardcoded | `1000` | Starting cash |
 | `DEATH_THRESHOLD` | hardcoded | `50.0` | Portfolio floor |
