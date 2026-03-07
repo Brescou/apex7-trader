@@ -980,7 +980,9 @@ def _route_risk(state: AgentState) -> str:
 # GRAPH
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def build_graph(portfolio: Portfolio):
+def build_graph(portfolio: Portfolio | None = None):
+    if portfolio is None:
+        portfolio = Portfolio()
     g = StateGraph(AgentState)
 
     g.add_node("load_memory", load_memory_node)

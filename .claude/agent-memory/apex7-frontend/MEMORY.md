@@ -55,6 +55,15 @@ card_arb, cards_style, live_track
 - Tab layout functions (_tab_live, _tab_analytics, etc.) return html.Div with shell IDs filled by callbacks
 - Heatmap win heuristic: pair SELL to most recent BUY for same symbol before that sell timestamp
 
+## Backtest + Leaderboard
+- `backtest.py`: `BacktestEngine(scenario, config)` — GBM+RSI, no agent.py state, no LLM
+  - Scenarios: "Bull Market", "Bear Market", "High Volatility", "Flat Market"
+  - `config` dict accepts `max_alloc_pct` to vary position sizing
+  - Returns: return_pct, sharpe, max_drawdown, survived, portfolio_history, trades_count, win_rate, trade_log
+  - Win_rate: pairs each SELL to most recent BUY for same symbol via `portfolio.trade_history` (key: "time")
+  - DO NOT modify `_sim_mode` in agent.py from BacktestEngine — race condition with live agent thread
+- `leaderboard.py`: `Leaderboard().run_all(scenario)` — 4 configs (CONSERVATIVE=15%, BALANCED=25%, AGGRESSIVE=40%, APEX-7=MAX_ALLOC_PCT), run(80) each
+
 ## Validation
 - `uv run python -c "import app"` — fast syntax/import check
 - `uv run python main.py` — full run at http://localhost:8050
