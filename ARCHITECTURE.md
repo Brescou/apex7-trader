@@ -71,6 +71,8 @@ Note: in the multi-agent graph, `research` edges directly to `risk_check` (no lo
 
 ## Vote Weights
 
+Static base weights:
+
 | Agent | Weight | Votes on direction |
 |-------|--------|--------------------|
 | technician | 0.30 | yes |
@@ -80,6 +82,11 @@ Note: in the multi-agent graph, `research` edges directly to `risk_check` (no lo
 
 Risk veto: `risk_score > 8` → BUY penalized ×0.15.
 Macro filter: `regime == "risk-off"` → BUY dampened ×0.5.
+
+**Dynamic weights** (`_compute_dynamic_weights` in `agent_multi.py`):
+- Blends static weights (70%) with accuracy-based weights (30%) derived from the last 50 scored `agent_memory` votes per agent
+- Result is cached for 10 minutes; recomputed lazily on the next `arbitrate_node` call after expiry
+- Falls back to static weights if `agent_memory` has insufficient data
 
 ## StateGraph — Nodes & Edges
 
@@ -219,19 +226,56 @@ Thread-safe portfolio state. All mutations protected by `threading.RLock()`.
 | `agent_log` | list | `[{time, message, level}]` |
 | `is_dead` | bool | True when total value < DEATH_THRESHOLD |
 | `last_prices` | dict | Last fetched prices cache |
+| `peak_value` | float | All-time peak portfolio value (updated in `record_value`) |
 
 Key methods:
 
 | Method | Description |
 |--------|-------------|
-| `buy(symbol, amount_usd, price)` | Opens position; returns early (no-op) if symbol already held |
+| `buy(symbol, amount_usd, price)` | Opens position; returns `{"success": False, "error": "position already open"}` if symbol already held |
 | `sell(symbol, sell_pct, price)` | Closes or reduces position |
 | `open_symbols()` | Returns list of currently held symbols |
 | `closed_trades_since(ts)` | Returns SELL trades from `trade_history` with `time >= ts` |
 | `fetch_prices(symbols)` | Fetches live prices via `yf.Tickers` fast_info |
 | `total_value(prices)` | Cash + sum of position values |
-| `record_value(prices)` | Appends snapshot to `value_history` |
+| `record_value(prices)` | Appends snapshot to `value_history`; updates `peak_value` |
 | `check_death(prices)` | Sets `is_dead = True` if total value < DEATH_THRESHOLD |
+| `save_state(path)` | Serializes cash/positions/history/peak_value to JSON |
+| `load_state(path)` | Restores state from JSON (no-op if file absent) |
+
+### `BacktestEngine` (`backtest.py`)
+
+Self-contained simulation engine — no LLM calls, no network, no shared state with `agent.py`.
+
+```python
+engine = BacktestEngine(scenario="Bull Market", config={"max_alloc_pct": 25})
+result = engine.run(n_cycles=100)
+# result keys: return_pct, sharpe, max_drawdown, win_rate, survived,
+#              portfolio_history, trades_count, trade_log
+```
+
+4 built-in scenarios:
+
+| Scenario | Drift | Volatility |
+|----------|-------|------------|
+| Bull Market | +0.0005 | 0.020 |
+| Bear Market | −0.0003 | 0.025 |
+| High Volatility | 0.0 | 0.050 |
+| Flat Market | 0.0 | 0.005 |
+
+Price model: GBM step `price *= (1 + drift + vol * N(0,1))`.
+Decision rule: RSI < 35 → BUY, RSI > 65 → SELL.
+
+### `Leaderboard` (`leaderboard.py`)
+
+Runs `BacktestEngine` for 4 allocation strategies over 80 cycles and ranks by return_pct:
+
+| Agent ID | max_alloc_pct |
+|----------|--------------|
+| CONSERVATIVE | 15% |
+| BALANCED | 25% |
+| AGGRESSIVE | 40% |
+| APEX-7 | `MAX_ALLOC_PCT` (config) |
 
 ### `LiveFeed` (`data.py`)
 
@@ -263,7 +307,7 @@ Currently defined but not wired into the agent graph.
 | `SIM_DRIFT` | env | `0.0001` | Price drift per step |
 | `AGENT_GRAPH` | env | `simple` | `simple` or `multi` |
 | `X_BEARER_TOKEN` | env | — | Twitter/X sentiment (optional) |
-| `STOP_LOSS_PCT` | hardcoded | `0.05` | Stop-loss threshold (5%) — defined, not yet enforced by a graph node |
+| `STOP_LOSS_PCT` | hardcoded | `0.05` | Stop-loss threshold (5%) — enforced as a pre-check loop in `execute_node` before the agent decision |
 | `POSTMORTEM_HOUR` | hardcoded | `22` | Hour (0–23) at which daily postmortem runs |
 | `WATCHLIST` | hardcoded | 5 tickers | AAPL, MSFT, GOOG, AMZN, TSLA |
 | `INITIAL_BALANCE` | hardcoded | `1000` | Starting cash |

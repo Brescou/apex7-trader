@@ -161,6 +161,8 @@ apex7-trader/
 ├── agent.py           # Simple graph: all nodes, simulation engine, _llm helper
 ├── agent_multi.py     # Multi-agent graph: 4 specialists + arbitration + run_daily_postmortem
 ├── app.py             # Dash app — layout, callbacks, UI helpers
+├── backtest.py        # BacktestEngine — GBM+RSI backtesting, 4 market scenarios
+├── leaderboard.py     # Leaderboard — ranks 4 agent configs via BacktestEngine
 ├── config.py          # All configuration constants, loaded from .env
 ├── data.py            # Portfolio class + LiveFeed — thread-safe state, buy/sell/log
 ├── graph_registry.py  # Maps graph IDs ("simple"/"multi") to builder functions
@@ -168,6 +170,7 @@ apex7-trader/
 ├── langgraph.json     # LangGraph Studio config — exposes both graphs
 ├── pyproject.toml     # Dependencies (uv)
 ├── .env               # API keys (not committed)
+├── .apex7_state.json  # Portfolio snapshot — written on every trade (not committed)
 └── trades.db          # SQLite — auto-created on first run (not committed)
 ```
 
@@ -215,7 +218,7 @@ DEATH_THRESHOLD = 50        # portfolio floor ($) — agent dies below this
 MAX_POSITIONS   = 3         # maximum simultaneous open positions
 MAX_ALLOC_PCT   = 40        # max % of portfolio per trade
 AGENT_INTERVAL  = 30        # seconds between live cycles
-STOP_LOSS_PCT   = 0.05      # stop-loss threshold (5%) — defined in config, not yet a graph node
+STOP_LOSS_PCT   = 0.05      # stop-loss threshold (5%) — enforced in execute_node before agent decision
 POSTMORTEM_HOUR = 22        # hour (0-23) at which daily postmortem runs
 ```
 
@@ -301,17 +304,17 @@ Loads from `trades.db` on render (auto-refreshes every 30s or on manual refresh)
 
 ### BACKTEST tab
 
-Select a scenario + agent config, click **RUN BACKTEST**.
-Requires a `backtest.py` module with a `BacktestEngine(scenario, config).run()` interface.
-Falls back to placeholder data if the module is absent.
+Select a scenario (Bull Market / Bear Market / High Volatility / Flat Market) + max allocation %, click **RUN BACKTEST**.
 
-Output: KPI row + portfolio vs SPY buy-and-hold chart with DEATH FLOOR annotation + trade log.
+Runs `BacktestEngine(scenario, config).run(100)` — a fully autonomous GBM+RSI simulation with no LLM or network calls.
+
+Output: KPI row (return, Sharpe, drawdown, win rate, survival) + portfolio equity curve with DEATH FLOOR annotation + trade log.
 
 ### LEADERBOARD tab
 
 Select a scenario, click **RUN ALL AGENTS**.
-Requires a `leaderboard.py` module with a `Leaderboard().run_all(scenario)` interface.
-Falls back to random placeholder data if the module is absent.
+
+Runs `Leaderboard().run_all(scenario)` — benchmarks 4 allocation strategies (CONSERVATIVE 15%, BALANCED 25%, AGGRESSIVE 40%, APEX-7 default) through 80 cycles each.
 
 Output: ranked table (winner highlighted in green) + comparative returns bar chart with breakeven line.
 
@@ -369,30 +372,6 @@ WATCHLIST = ["AAPL", "MSFT", "GOOG", "AMZN", "TSLA", "NVDA"]
 ```
 
 Simulation mode will auto-seed prices for it. Live mode will fetch via yfinance.
-
-### Implement the Backtest engine
-
-Create `backtest.py` at the project root:
-
-```python
-class BacktestEngine:
-    def __init__(self, scenario: str, config: str):
-        self.scenario = scenario
-        self.config   = config
-
-    def run(self) -> dict:
-        # Run simulation cycles, return:
-        return {
-            "return_pct":        float,
-            "sharpe":            float,
-            "win_rate":          float,
-            "max_drawdown":      float,
-            "total_trades":      int,
-            "survived":          bool,
-            "portfolio_history": list[float],  # value at each step
-            "trade_log":         list[dict],   # [{message, level}]
-        }
-```
 
 ### Change the agent personality
 

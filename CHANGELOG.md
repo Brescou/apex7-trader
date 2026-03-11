@@ -4,6 +4,16 @@
 
 No uncommitted changes.
 
+## [2026-03-07] — Stop-loss enforcement + portfolio persistence + dynamic agent weights + real backtest/leaderboard engines
+
+- `agent.py` / `execute_node`: stop-loss pre-check loop runs before agent decision — all open positions checked against `STOP_LOSS_PCT` (5%); triggers immediate SELL with slippage if threshold breached
+- `data.py`: `buy()` now returns `{"success": False, "error": "position already open"}` on duplicate (was bare `return None`); added `peak_value` attribute maintained in `record_value()`; added `save_state(path)` / `load_state(path)` for JSON persistence to `.apex7_state.json`
+- `agent.py`: `save_state` called after each successful BUY or SELL; `_state["thinking"]` set `True`/`False` around `graph.invoke()` so the SEARCHING badge activates correctly
+- `agent_multi.py`: added `_compute_dynamic_weights(db_path)` — 70/30 blend of static weights + accuracy-based weights from last 50 scored `agent_memory` votes per agent; result cached for 10 minutes; `arbitrate_node` uses dynamic weights instead of static `WEIGHTS`
+- `backtest.py` (new): `BacktestEngine` — fully autonomous GBM+RSI simulation (4 scenarios: Bull/Bear/High Vol/Flat); computes return_pct, Sharpe, max drawdown, win rate, trade count, portfolio history; no imports from `agent.py`
+- `leaderboard.py` (new): `Leaderboard.run_all(scenario)` — runs `BacktestEngine` for CONSERVATIVE (15%), BALANCED (25%), AGGRESSIVE (40%), APEX-7 (config default); ranks by return_pct
+- `app.py`: BACKTEST and LEADERBOARD tabs now call real `BacktestEngine` / `Leaderboard` instead of hardcoded placeholders; analytics win_rate fixed to pair BUY/SELL for actual P&L; `_rgba(hex, alpha)` helper added for Plotly `fillcolor` values; `dcc.Collapse` replaced with `html.Div(style={"display":"none"})` toggle; `peak_value` read from `Portfolio` attribute (O(1)) instead of `max(value_history)` scan
+
 ## [2026-03-06] — Multi-symbol + postmortem + agent memory + heatmap + agent comparison
 
 - `data.py`: multi-symbol buy guard — `buy()` returns early if symbol already held; added `open_symbols()` and `closed_trades_since(ts)` methods
