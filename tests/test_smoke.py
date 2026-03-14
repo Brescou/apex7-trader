@@ -33,17 +33,16 @@ def _run(name: str, fn) -> bool:
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_imports():
-    import config          # noqa: F401
-    import data            # noqa: F401
-    import backtest        # noqa: F401
-    import agent           # noqa: F401
-    import agent_multi     # noqa: F401
-    import graph_registry  # noqa: F401
+    import config  # noqa: F401
+    from core.data import Portfolio, LiveFeed  # noqa: F401
+    from core.backtest import run_backtest  # noqa: F401
+    from core.registry import get_graph  # noqa: F401
 
 
 def test_portfolio_basic():
-    from data import Portfolio
+    from core.data import Portfolio
 
     p = Portfolio()
     assert p.cash == 1000.0, f"Expected 1000.0 cash, got {p.cash}"
@@ -66,7 +65,7 @@ def test_portfolio_basic():
 
 
 def test_portfolio_multi_symbol():
-    from data import Portfolio
+    from core.data import Portfolio
 
     p = Portfolio()
     # First buy succeeds
@@ -85,26 +84,45 @@ def test_portfolio_multi_symbol():
 
 
 def test_simple_graph_build():
-    import agent
-    from data import Portfolio
+    from agent import build_graph as build_simple_graph
+    from core.data import Portfolio
 
-    g = agent.build_graph(Portfolio())
+    g = build_simple_graph(Portfolio())
     nodes = list(g.nodes)
-    expected = ["load_memory", "fetch_data", "analyze", "research",
-                "risk_check", "execute", "save_memory", "skip"]
+    expected = [
+        "load_memory",
+        "fetch_data",
+        "analyze",
+        "research",
+        "risk_check",
+        "execute",
+        "save_memory",
+        "skip",
+    ]
     for node in expected:
         assert node in nodes, f"Missing node '{node}' in simple graph. Got: {nodes}"
 
 
 def test_multi_graph_build():
-    import agent_multi
-    from data import Portfolio
+    from agent_multi import build_multi_graph
+    from core.data import Portfolio
 
-    g = agent_multi.build_graph(Portfolio())
+    g = build_multi_graph(Portfolio())
     nodes = list(g.nodes)
-    expected = ["load_memory", "fetch_data", "supervisor", "technician",
-                "analyst", "risk_manager", "macro_watcher", "arbitrate",
-                "risk_check", "execute", "save_memory", "skip"]
+    expected = [
+        "load_memory",
+        "fetch_data",
+        "supervisor",
+        "technician",
+        "analyst",
+        "risk_manager",
+        "macro_watcher",
+        "arbitrate",
+        "risk_check",
+        "execute",
+        "save_memory",
+        "skip",
+    ]
     for node in expected:
         assert node in nodes, f"Missing node '{node}' in multi graph. Got: {nodes}"
 
@@ -114,34 +132,33 @@ def test_multi_graph_build():
 
 
 def test_simulation_cycle():
-    import agent
-    from agent import _sim_mode
-    from data import Portfolio
+    from agent import build_graph as build_simple_graph, _sim_mode
+    from core.data import Portfolio
 
     # Force simulation mode on
     _sim_mode["enabled"] = True
 
     p = Portfolio()
-    g = agent.build_graph(p)
+    g = build_simple_graph(p)
 
     initial = {
-        "balance":             p.cash,
-        "positions":           dict(p.positions),
-        "portfolio_history":   [],
-        "prices":              {},
-        "news":                "",
-        "sentiment":           {},
-        "past_trades":         [],
-        "known_patterns":      [],
-        "round":               1,
-        "confidence":          0.0,
+        "balance": p.cash,
+        "positions": dict(p.positions),
+        "portfolio_history": [],
+        "prices": {},
+        "news": "",
+        "sentiment": {},
+        "past_trades": [],
+        "known_patterns": [],
+        "round": 1,
+        "confidence": 0.0,
         "research_iterations": 0,
-        "decision":            None,
-        "emotion":             "CALM",
-        "thoughts":            "",
-        "log":                 [],
-        "alive":               True,
-        "skip_research":       False,
+        "decision": None,
+        "emotion": "CALM",
+        "thoughts": "",
+        "log": [],
+        "alive": True,
+        "skip_research": False,
     }
 
     result = g.invoke(initial)
@@ -152,13 +169,19 @@ def test_simulation_cycle():
 
 
 def test_backtest_run():
-    from backtest import run_backtest
+    from core.backtest import run_backtest
 
     result = run_backtest("AAPL", period="1mo")
     required_keys = [
-        "symbol", "final_value", "total_return_pct", "win_rate",
-        "max_drawdown_pct", "sharpe_ratio", "n_trades",
-        "benchmark_return_pct", "equity_curve",
+        "symbol",
+        "final_value",
+        "total_return_pct",
+        "win_rate",
+        "max_drawdown_pct",
+        "sharpe_ratio",
+        "n_trades",
+        "benchmark_return_pct",
+        "equity_curve",
     ]
     for k in required_keys:
         assert k in result, f"run_backtest result missing key: '{k}'"
@@ -188,8 +211,10 @@ def test_sqlite_schema():
 
 def test_app_import():
     import app  # noqa: F401
-    assert hasattr(app, "server") or hasattr(app, "app"), \
-        "app module imported but missing 'server' or 'app' attribute"
+
+    assert hasattr(app, "server") or hasattr(
+        app, "app"
+    ), "app module imported but missing 'server' or 'app' attribute"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -200,15 +225,15 @@ if __name__ == "__main__":
     print("=" * 60)
 
     tests = [
-        ("test_imports",              test_imports),
-        ("test_portfolio_basic",      test_portfolio_basic),
+        ("test_imports", test_imports),
+        ("test_portfolio_basic", test_portfolio_basic),
         ("test_portfolio_multi_symbol", test_portfolio_multi_symbol),
-        ("test_simple_graph_build",   test_simple_graph_build),
-        ("test_multi_graph_build",    test_multi_graph_build),
-        ("test_simulation_cycle",     test_simulation_cycle),
-        ("test_backtest_run",         test_backtest_run),
-        ("test_sqlite_schema",        test_sqlite_schema),
-        ("test_app_import",           test_app_import),
+        ("test_simple_graph_build", test_simple_graph_build),
+        ("test_multi_graph_build", test_multi_graph_build),
+        ("test_simulation_cycle", test_simulation_cycle),
+        ("test_backtest_run", test_backtest_run),
+        ("test_sqlite_schema", test_sqlite_schema),
+        ("test_app_import", test_app_import),
     ]
 
     for name, fn in tests:
@@ -220,7 +245,7 @@ if __name__ == "__main__":
     failed = sum(1 for _, ok, _ in _results if not ok)
     print(f"  Results: {passed}/{len(_results)} passed")
     if failed:
-        print(f"  FAILED tests:")
+        print("  FAILED tests:")
         for name, ok, err in _results:
             if not ok:
                 print(f"    - {name}: {err}")

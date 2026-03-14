@@ -42,40 +42,41 @@ from config import (
     MAX_POSITIONS,
     WATCHLIST,
 )
-from data import Portfolio
+from core.data import Portfolio
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STATE
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class MultiAgentState(TypedDict):
     # ── Core portfolio (mirrors AgentState) ──────────────────────────────────
-    balance:             float
-    positions:           dict
-    portfolio_history:   Annotated[List[float], operator.add]
-    prices:              dict
-    news:                str
-    sentiment:           dict
-    past_trades:         List[dict]
-    known_patterns:      List[str]
-    round:               int
-    confidence:          float
+    balance: float
+    positions: dict
+    portfolio_history: Annotated[List[float], operator.add]
+    prices: dict
+    news: str
+    sentiment: dict
+    past_trades: List[dict]
+    known_patterns: List[str]
+    round: int
+    confidence: float
     research_iterations: int
-    decision:            Optional[dict]
-    emotion:             str
-    thoughts:            str
-    log:                 Annotated[List[dict], operator.add]
-    alive:               bool
-    skip_research:       bool
+    decision: Optional[dict]
+    emotion: str
+    thoughts: str
+    log: Annotated[List[dict], operator.add]
+    alive: bool
+    skip_research: bool
     # ── Multi-agent specific ──────────────────────────────────────────────────
-    supervisor_brief:    str
-    agent_role:          str
-    agent_votes:         Annotated[List[dict], operator.add]
-    tech_vote:           Optional[dict]
-    analyst_vote:        Optional[dict]
-    risk_vote:           Optional[dict]
-    macro_vote:          Optional[dict]
-    arbitration:         Optional[dict]
+    supervisor_brief: str
+    agent_role: str
+    agent_votes: Annotated[List[dict], operator.add]
+    tech_vote: Optional[dict]
+    analyst_vote: Optional[dict]
+    risk_vote: Optional[dict]
+    macro_vote: Optional[dict]
+    arbitration: Optional[dict]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -83,9 +84,9 @@ class MultiAgentState(TypedDict):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 WEIGHTS = {
-    "technician":    0.30,
-    "analyst":       0.35,
-    "risk_manager":  0.20,   # does NOT vote on direction
+    "technician": 0.30,
+    "analyst": 0.35,
+    "risk_manager": 0.20,  # does NOT vote on direction
     "macro_watcher": 0.15,
 }
 
@@ -157,43 +158,47 @@ def _compute_dynamic_weights(db_path: Path) -> dict:
 # SIMULATION HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def sim_technician(state: MultiAgentState) -> dict:
     prices = state["prices"]
-    pos    = state["positions"]
-    logs   = [_entry("[SIM][TECH] RSI-based technical analysis")]
+    pos = state["positions"]
+    logs = [_entry("[SIM][TECH] RSI-based technical analysis")]
 
     rsi_map = {
         sym: _sim_rsi(_sim_price_history.get(sym, [prices.get(sym, 100.0)]))
-        for sym in WATCHLIST if sym in prices
+        for sym in WATCHLIST
+        if sym in prices
     }
 
-    oversold   = {s: r for s, r in rsi_map.items() if r < 35}
+    oversold = {s: r for s, r in rsi_map.items() if r < 35}
     overbought = {s: r for s, r in rsi_map.items() if r > 65 and s in pos}
 
     if overbought:
-        sym    = min(overbought, key=overbought.get)
+        sym = min(overbought, key=overbought.get)
         action, conf, alloc = "SELL", 0.74, 0
-        rsi_v  = rsi_map[sym]
+        rsi_v = rsi_map[sym]
         reason = f"RSI={rsi_v:.1f} overbought — technical reversal signal"
         macd, bb, trend = "bearish", "upper", "down"
     elif oversold and len(pos) < MAX_POSITIONS:
-        sym    = min(oversold, key=oversold.get)
+        sym = min(oversold, key=oversold.get)
         action, conf, alloc = "BUY", 0.79, random.randint(15, MAX_ALLOC_PCT)
-        rsi_v  = rsi_map[sym]
+        rsi_v = rsi_map[sym]
         reason = f"RSI={rsi_v:.1f} oversold — technical bounce setup"
         macd, bb, trend = "bullish", "lower", "up"
     else:
-        sym    = WATCHLIST[0] if WATCHLIST else ""
+        sym = WATCHLIST[0] if WATCHLIST else ""
         action, conf, alloc = "HOLD", 0.58, 0
-        rsi_v  = rsi_map.get(sym, 50.0)
+        rsi_v = rsi_map.get(sym, 50.0)
         reason = f"RSI={rsi_v:.1f} — neutral zone, no setup"
         macd, bb, trend = "neutral", "mid", "sideways"
 
     vote = {
         "agent": "technician",
         "agent_name": "Technician",
-        "action": action, "symbol": sym,
-        "confidence": conf, "allocation_pct": alloc,
+        "action": action,
+        "symbol": sym,
+        "confidence": conf,
+        "allocation_pct": alloc,
         "reasoning": reason,
         "signals": [
             f"RSI({rsi_v:.1f}): {'oversold' if rsi_v < 35 else 'overbought' if rsi_v > 65 else 'neutral'}",
@@ -209,7 +214,7 @@ def sim_technician(state: MultiAgentState) -> dict:
         _con.execute(
             "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
             "VALUES (?,?,?,?,?,NULL,NULL,?)",
-            (_ts(), "technician", sym, action, float(conf), "simulation")
+            (_ts(), "technician", sym, action, float(conf), "simulation"),
         )
         _con.commit()
         _con.close()
@@ -219,47 +224,51 @@ def sim_technician(state: MultiAgentState) -> dict:
 
 
 def sim_analyst(state: MultiAgentState) -> dict:
-    prices    = state["prices"]
-    pos       = state["positions"]
+    prices = state["prices"]
+    pos = state["positions"]
     sentiment = state.get("sentiment", {})
-    logs      = [_entry("[SIM][ANLST] sentiment-based fundamental analysis")]
+    logs = [_entry("[SIM][ANLST] sentiment-based fundamental analysis")]
 
     avg_sent = sum(sentiment.values()) / max(len(sentiment), 1)
 
     if avg_sent > 0.15 and len(pos) < MAX_POSITIONS:
         candidates = [s for s in WATCHLIST if s not in pos and s in prices]
-        sym    = random.choice(candidates) if candidates else (WATCHLIST[0] if WATCHLIST else "")
+        sym = random.choice(candidates) if candidates else (WATCHLIST[0] if WATCHLIST else "")
         action = "BUY"
-        conf   = min(0.65 + abs(avg_sent) * 0.2, 0.85)
-        alloc  = random.randint(10, 30)
+        conf = min(0.65 + abs(avg_sent) * 0.2, 0.85)
+        alloc = random.randint(10, 30)
         reason = f"Positive sentiment ({avg_sent:+.2f}) — bullish catalyst detected"
         catalysts = ["[SIM] momentum surge", "[SIM] positive earnings sentiment"]
     elif avg_sent < -0.15 and pos:
-        sym    = min(pos.keys(), key=lambda s: sentiment.get(s, 0))
+        sym = min(pos.keys(), key=lambda s: sentiment.get(s, 0))
         action = "SELL"
-        conf   = min(0.65 + abs(avg_sent) * 0.2, 0.85)
-        alloc  = 0
+        conf = min(0.65 + abs(avg_sent) * 0.2, 0.85)
+        alloc = 0
         reason = f"Negative sentiment ({avg_sent:+.2f}) — bearish pressure building"
         catalysts = ["[SIM] negative news flow", "[SIM] sentiment deterioration"]
     else:
-        sym    = WATCHLIST[0] if WATCHLIST else ""
+        sym = WATCHLIST[0] if WATCHLIST else ""
         action = "HOLD"
-        conf   = 0.55
-        alloc  = 0
+        conf = 0.55
+        alloc = 0
         reason = f"Mixed sentiment ({avg_sent:+.2f}) — no clear fundamental catalyst"
         catalysts = []
 
     vote = {
         "agent": "analyst",
         "agent_name": "Analyst",
-        "action": action, "symbol": sym,
-        "confidence": conf, "allocation_pct": alloc,
+        "action": action,
+        "symbol": sym,
+        "confidence": conf,
+        "allocation_pct": alloc,
         "reasoning": reason,
         "signals": [
             f"Aggregate sentiment: {avg_sent:+.2f}",
             f"Market bias: {'bullish' if avg_sent > 0.15 else 'bearish' if avg_sent < -0.15 else 'neutral'}",
-        ] + catalysts,
-        "catalysts": catalysts, "sentiment_score": round(avg_sent, 2),
+        ]
+        + catalysts,
+        "catalysts": catalysts,
+        "sentiment_score": round(avg_sent, 2),
     }
     logs.append(_entry(f"[SIM][ANLST] {action} {sym} conf={conf:.0%} sent={avg_sent:+.2f}"))
     try:
@@ -267,7 +276,7 @@ def sim_analyst(state: MultiAgentState) -> dict:
         _con.execute(
             "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
             "VALUES (?,?,?,?,?,NULL,NULL,?)",
-            (_ts(), "analyst", sym, action, float(conf), "simulation")
+            (_ts(), "analyst", sym, action, float(conf), "simulation"),
         )
         _con.commit()
         _con.close()
@@ -277,15 +286,15 @@ def sim_analyst(state: MultiAgentState) -> dict:
 
 
 def sim_risk_manager(state: MultiAgentState) -> dict:
-    prices  = state["prices"]
-    pos     = state["positions"]
+    prices = state["prices"]
+    pos = state["positions"]
     balance = state["balance"]
-    pv      = _portfolio_value(state)
-    logs    = [_entry("[SIM][RISK] calculating risk metrics")]
+    pv = _portfolio_value(state)
+    logs = [_entry("[SIM][RISK] calculating risk metrics")]
 
-    exposure      = (pv - balance) / pv if pv > 0 else 0.0
-    danger_ratio  = pv / INITIAL_BALANCE
-    var_1d        = pv * 0.02
+    exposure = (pv - balance) / pv if pv > 0 else 0.0
+    danger_ratio = pv / INITIAL_BALANCE
+    var_1d = pv * 0.02
 
     if danger_ratio < 0.7:
         risk_score, sizing, max_alloc = 9, "SKIP", 0
@@ -297,7 +306,11 @@ def sim_risk_manager(state: MultiAgentState) -> dict:
         risk_score, sizing, max_alloc = 6, "HALF", MAX_ALLOC_PCT // 2
         warnings = ["High exposure — limit new positions"]
     else:
-        risk_score, sizing, max_alloc = max(2, round((1 - danger_ratio) * 10)), "FULL", MAX_ALLOC_PCT
+        risk_score, sizing, max_alloc = (
+            max(2, round((1 - danger_ratio) * 10)),
+            "FULL",
+            MAX_ALLOC_PCT,
+        )
         warnings = []
 
     reason = f"Risk {risk_score}/10 — {sizing} sizing. Exposure {exposure:.0%}. VaR(95%,1d) ~${var_1d:.0f}."
@@ -317,10 +330,14 @@ def sim_risk_manager(state: MultiAgentState) -> dict:
             f"Exposure: {exposure:.0%}",
             f"VaR 95% 1d: ${var_1d:.0f}",
             f"Sizing: {sizing}",
-        ] + warnings,
+        ]
+        + warnings,
         "warnings": warnings,
         # risk_manager votes HOLD (doesn't pick direction)
-        "action": "HOLD", "symbol": "", "confidence": 0.5, "allocation_pct": max_alloc,
+        "action": "HOLD",
+        "symbol": "",
+        "confidence": 0.5,
+        "allocation_pct": max_alloc,
     }
     logs.append(_entry(f"[SIM][RISK] score={risk_score}/10 sizing={sizing} VaR=${var_1d:.0f}"))
     try:
@@ -328,7 +345,7 @@ def sim_risk_manager(state: MultiAgentState) -> dict:
         _con.execute(
             "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
             "VALUES (?,?,?,?,?,NULL,NULL,?)",
-            (_ts(), "risk_manager", "", "HOLD", 0.5, "simulation")
+            (_ts(), "risk_manager", "", "HOLD", 0.5, "simulation"),
         )
         _con.commit()
         _con.close()
@@ -339,8 +356,8 @@ def sim_risk_manager(state: MultiAgentState) -> dict:
 
 def sim_macro_watcher(state: MultiAgentState) -> dict:
     sentiment = state.get("sentiment", {})
-    pv        = _portfolio_value(state)
-    logs      = [_entry("[SIM][MACRO] market regime analysis")]
+    pv = _portfolio_value(state)
+    logs = [_entry("[SIM][MACRO] market regime analysis")]
 
     avg_sent = sum(sentiment.values()) / max(len(sentiment), 1)
 
@@ -365,8 +382,10 @@ def sim_macro_watcher(state: MultiAgentState) -> dict:
     vote = {
         "agent": "macro_watcher",
         "agent_name": "Macro Watcher",
-        "market_regime": regime, "macro_bias": bias,
-        "recommended_exposure": exposure, "sector_rotation": rotation,
+        "market_regime": regime,
+        "macro_bias": bias,
+        "recommended_exposure": exposure,
+        "sector_rotation": rotation,
         "reasoning": reason,
         "signals": [
             f"Market regime: {regime}",
@@ -378,7 +397,10 @@ def sim_macro_watcher(state: MultiAgentState) -> dict:
         ],
         "macro_score": round(macro_score, 2),
         # macro_watcher also doesn't vote on specific direction
-        "action": "HOLD", "symbol": "", "confidence": 0.5, "allocation_pct": 0,
+        "action": "HOLD",
+        "symbol": "",
+        "confidence": 0.5,
+        "allocation_pct": 0,
     }
     logs.append(_entry(f"[SIM][MACRO] {regime} {bias} exposure={exposure}%"))
     try:
@@ -386,7 +408,7 @@ def sim_macro_watcher(state: MultiAgentState) -> dict:
         _con.execute(
             "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
             "VALUES (?,?,?,?,?,NULL,NULL,?)",
-            (_ts(), "macro_watcher", "", "HOLD", 0.5, "simulation")
+            (_ts(), "macro_watcher", "", "HOLD", 0.5, "simulation"),
         )
         _con.commit()
         _con.close()
@@ -399,13 +421,18 @@ def sim_macro_watcher(state: MultiAgentState) -> dict:
 # SUPERVISOR NODE
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def supervisor_node(state: MultiAgentState) -> dict:
     logs = [_entry("supervisor: preparing context brief for team")]
 
     if _sim_mode["enabled"]:
-        pv     = _portfolio_value(state)
-        mode   = "PANIC" if pv < INITIAL_BALANCE * 0.7 else ("GREED" if pv > INITIAL_BALANCE * 1.5 else "NORMAL")
-        brief  = (
+        pv = _portfolio_value(state)
+        mode = (
+            "PANIC"
+            if pv < INITIAL_BALANCE * 0.7
+            else ("GREED" if pv > INITIAL_BALANCE * 1.5 else "NORMAL")
+        )
+        brief = (
             f"[SIM] 1. Portfolio ${pv:.0f} ({pv/INITIAL_BALANCE:.0%}). Mode: {mode}. "
             f"2. {len(state['positions'])} open positions / {MAX_POSITIONS} max. "
             f"3. Market data available for {len(state['prices'])} symbols."
@@ -413,8 +440,12 @@ def supervisor_node(state: MultiAgentState) -> dict:
         logs.append(_entry(f"[SIM] supervisor: brief ready — {mode} mode"))
         return {"supervisor_brief": brief, "log": logs}
 
-    pv    = _portfolio_value(state)
-    mode  = "PANIC" if pv < INITIAL_BALANCE * 0.5 else ("GREED" if pv > INITIAL_BALANCE * 1.5 else "NORMAL")
+    pv = _portfolio_value(state)
+    mode = (
+        "PANIC"
+        if pv < INITIAL_BALANCE * 0.5
+        else ("GREED" if pv > INITIAL_BALANCE * 1.5 else "NORMAL")
+    )
 
     prompt = (
         f"CYCLE #{state['round']} | MODE: {mode}\n"
@@ -434,9 +465,9 @@ def _route_to_agents(state: MultiAgentState) -> list:
     """Fan-out via Send to 4 parallel agents."""
     base = dict(state)
     return [
-        Send("technician",    {**base, "agent_role": "technician"}),
-        Send("analyst",       {**base, "agent_role": "analyst"}),
-        Send("risk_manager",  {**base, "agent_role": "risk_manager"}),
+        Send("technician", {**base, "agent_role": "technician"}),
+        Send("analyst", {**base, "agent_role": "analyst"}),
+        Send("risk_manager", {**base, "agent_role": "risk_manager"}),
         Send("macro_watcher", {**base, "agent_role": "macro_watcher"}),
     ]
 
@@ -445,13 +476,14 @@ def _route_to_agents(state: MultiAgentState) -> list:
 # PARALLEL AGENT NODES
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def technician_node(state: MultiAgentState) -> dict:
     if _sim_mode["enabled"]:
         return sim_technician(state)
 
     prices = state["prices"]
-    pos    = state["positions"]
-    logs   = [_entry("technician: technical analysis")]
+    pos = state["positions"]
+    logs = [_entry("technician: technical analysis")]
 
     _con = sqlite3.connect(DB_PATH)
     _rows = _con.execute(
@@ -463,7 +495,8 @@ def technician_node(state: MultiAgentState) -> dict:
 
     rsi_map = {
         sym: _sim_rsi(_sim_price_history.get(sym, [prices.get(sym, 100.0)]))
-        for sym in WATCHLIST if sym in prices
+        for sym in WATCHLIST
+        if sym in prices
     }
     positions_display = {
         sym: {
@@ -498,33 +531,50 @@ def technician_node(state: MultiAgentState) -> dict:
         '"bb": "lower|mid|upper", "trend": "up|down|sideways"}\n}'
     )
 
-    text = _llm(haiku, HAIKU_ID, [{"role": "user", "content": user}],
-                system=system, max_tokens=512)
+    text = _llm(haiku, HAIKU_ID, [{"role": "user", "content": user}], system=system, max_tokens=512)
     vote = _parse_json_obj(text)
     if not vote:
-        vote = {"agent": "technician", "action": "HOLD", "symbol": "",
-                "confidence": 0.5, "allocation_pct": 0,
-                "reasoning": "Parse error — defaulting to HOLD",
-                "key_indicators": {"rsi": 50.0, "macd": "neutral", "bb": "mid", "trend": "sideways"}}
+        vote = {
+            "agent": "technician",
+            "action": "HOLD",
+            "symbol": "",
+            "confidence": 0.5,
+            "allocation_pct": 0,
+            "reasoning": "Parse error — defaulting to HOLD",
+            "key_indicators": {"rsi": 50.0, "macd": "neutral", "bb": "mid", "trend": "sideways"},
+        }
     vote["agent"] = "technician"
     vote["agent_name"] = "Technician"
     # Build signals from key_indicators if present, otherwise from rsi_map
     ki = vote.get("key_indicators", {})
     rsi_val = ki.get("rsi") or rsi_map.get(vote.get("symbol", ""), 50.0)
-    vote.setdefault("signals", [
-        f"RSI({rsi_val:.1f}): {'oversold' if rsi_val < 35 else 'overbought' if rsi_val > 65 else 'neutral'}",
-        f"MACD: {ki.get('macd', 'N/A')}",
-        f"Bollinger Band: {ki.get('bb', 'N/A')}",
-        f"Trend: {ki.get('trend', 'N/A')}",
-    ])
-    logs.append(_entry(f"technician: {vote.get('action')} {vote.get('symbol','')} conf={vote.get('confidence',0):.0%}"))
+    vote.setdefault(
+        "signals",
+        [
+            f"RSI({rsi_val:.1f}): {'oversold' if rsi_val < 35 else 'overbought' if rsi_val > 65 else 'neutral'}",
+            f"MACD: {ki.get('macd', 'N/A')}",
+            f"Bollinger Band: {ki.get('bb', 'N/A')}",
+            f"Trend: {ki.get('trend', 'N/A')}",
+        ],
+    )
+    logs.append(
+        _entry(
+            f"technician: {vote.get('action')} {vote.get('symbol','')} conf={vote.get('confidence',0):.0%}"
+        )
+    )
     try:
         _con = sqlite3.connect(DB_PATH)
         _con.execute(
             "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
             "VALUES (?,?,?,?,?,NULL,NULL,?)",
-            (_ts(), "technician", vote.get("symbol", ""), vote.get("action", "HOLD"),
-             float(vote.get("confidence", 0.5)), "live")
+            (
+                _ts(),
+                "technician",
+                vote.get("symbol", ""),
+                vote.get("action", "HOLD"),
+                float(vote.get("confidence", 0.5)),
+                "live",
+            ),
         )
         _con.commit()
         _con.close()
@@ -537,10 +587,10 @@ def analyst_node(state: MultiAgentState) -> dict:
     if _sim_mode["enabled"]:
         return sim_analyst(state)
 
-    prices    = state["prices"]
-    pos       = state["positions"]
+    prices = state["prices"]
+    pos = state["positions"]
     sentiment = state.get("sentiment", {})
-    logs      = [_entry("analyst: fundamental + sentiment analysis")]
+    logs = [_entry("analyst: fundamental + sentiment analysis")]
 
     _con = sqlite3.connect(DB_PATH)
     _rows = _con.execute(
@@ -574,30 +624,56 @@ def analyst_node(state: MultiAgentState) -> dict:
         '  "sentiment_score": 0.0\n}'
     )
 
-    text = _llm(sonnet, SONNET_ID, [{"role": "user", "content": user}],
-                system=system, max_tokens=512, web_search=True)
+    text = _llm(
+        sonnet,
+        SONNET_ID,
+        [{"role": "user", "content": user}],
+        system=system,
+        max_tokens=512,
+        web_search=True,
+    )
     vote = _parse_json_obj(text)
     if not vote:
-        vote = {"agent": "analyst", "action": "HOLD", "symbol": "",
-                "confidence": 0.5, "allocation_pct": 0,
-                "reasoning": "Parse error — defaulting to HOLD",
-                "catalysts": [], "sentiment_score": 0.0}
+        vote = {
+            "agent": "analyst",
+            "action": "HOLD",
+            "symbol": "",
+            "confidence": 0.5,
+            "allocation_pct": 0,
+            "reasoning": "Parse error — defaulting to HOLD",
+            "catalysts": [],
+            "sentiment_score": 0.0,
+        }
     vote["agent"] = "analyst"
     vote["agent_name"] = "Analyst"
     sent_score = vote.get("sentiment_score", 0.0)
     catalysts_list = vote.get("catalysts", [])
-    vote.setdefault("signals", [
-        f"Sentiment score: {sent_score:+.2f}",
-        f"Market bias: {'bullish' if sent_score > 0.15 else 'bearish' if sent_score < -0.15 else 'neutral'}",
-    ] + catalysts_list)
-    logs.append(_entry(f"analyst: {vote.get('action')} {vote.get('symbol','')} conf={vote.get('confidence',0):.0%}"))
+    vote.setdefault(
+        "signals",
+        [
+            f"Sentiment score: {sent_score:+.2f}",
+            f"Market bias: {'bullish' if sent_score > 0.15 else 'bearish' if sent_score < -0.15 else 'neutral'}",
+        ]
+        + catalysts_list,
+    )
+    logs.append(
+        _entry(
+            f"analyst: {vote.get('action')} {vote.get('symbol','')} conf={vote.get('confidence',0):.0%}"
+        )
+    )
     try:
         _con = sqlite3.connect(DB_PATH)
         _con.execute(
             "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
             "VALUES (?,?,?,?,?,NULL,NULL,?)",
-            (_ts(), "analyst", vote.get("symbol", ""), vote.get("action", "HOLD"),
-             float(vote.get("confidence", 0.5)), "live")
+            (
+                _ts(),
+                "analyst",
+                vote.get("symbol", ""),
+                vote.get("action", "HOLD"),
+                float(vote.get("confidence", 0.5)),
+                "live",
+            ),
         )
         _con.commit()
         _con.close()
@@ -610,11 +686,11 @@ def risk_manager_node(state: MultiAgentState) -> dict:
     if _sim_mode["enabled"]:
         return sim_risk_manager(state)
 
-    prices  = state["prices"]
-    pos     = state["positions"]
+    prices = state["prices"]
+    pos = state["positions"]
     balance = state["balance"]
-    pv      = _portfolio_value(state)
-    logs    = [_entry("risk_manager: risk metrics calculation")]
+    pv = _portfolio_value(state)
+    logs = [_entry("risk_manager: risk metrics calculation")]
 
     _con = sqlite3.connect(DB_PATH)
     _rows = _con.execute(
@@ -625,16 +701,16 @@ def risk_manager_node(state: MultiAgentState) -> dict:
     recent_lessons = [r[0] for r in _rows if r[0]]
 
     # Python-pure calculations
-    exposure     = (pv - balance) / pv if pv > 0 else 0.0
+    exposure = (pv - balance) / pv if pv > 0 else 0.0
     danger_ratio = pv / INITIAL_BALANCE
-    var_1d       = pv * 0.025  # simplified 95% VaR (2.5% daily volatility assumption)
+    var_1d = pv * 0.025  # simplified 95% VaR (2.5% daily volatility assumption)
 
     # Kelly-simplified max allocation
-    win_rate_est  = 0.55
-    avg_win_est   = 0.08
-    avg_loss_est  = 0.05
-    kelly_f       = (win_rate_est * avg_win_est - (1 - win_rate_est) * avg_loss_est) / avg_win_est
-    kelly_alloc   = max(0, min(kelly_f * 100, MAX_ALLOC_PCT))
+    win_rate_est = 0.55
+    avg_win_est = 0.08
+    avg_loss_est = 0.05
+    kelly_f = (win_rate_est * avg_win_est - (1 - win_rate_est) * avg_loss_est) / avg_win_est
+    kelly_alloc = max(0, min(kelly_f * 100, MAX_ALLOC_PCT))
 
     system = (
         "Tu es un risk manager strict. Ton seul job : évaluer le risque et recommander le sizing. "
@@ -663,17 +739,19 @@ def risk_manager_node(state: MultiAgentState) -> dict:
         '  "reasoning": "2 phrases",\n  "warnings": []\n}'
     )
 
-    text = _llm(haiku, HAIKU_ID, [{"role": "user", "content": user}],
-                system=system, max_tokens=400)
+    text = _llm(haiku, HAIKU_ID, [{"role": "user", "content": user}], system=system, max_tokens=400)
     vote = _parse_json_obj(text)
     if not vote:
-        vote = {"agent": "risk_manager", "risk_score": 5,
-                "max_safe_allocation_pct": float(kelly_alloc),
-                "var_1d": round(var_1d, 2),
-                "portfolio_exposure_after": round(exposure * 100, 1),
-                "sizing_recommendation": "HALF",
-                "reasoning": "Parse error — conservative defaults applied",
-                "warnings": ["Parse error"]}
+        vote = {
+            "agent": "risk_manager",
+            "risk_score": 5,
+            "max_safe_allocation_pct": float(kelly_alloc),
+            "var_1d": round(var_1d, 2),
+            "portfolio_exposure_after": round(exposure * 100, 1),
+            "sizing_recommendation": "HALF",
+            "reasoning": "Parse error — conservative defaults applied",
+            "warnings": ["Parse error"],
+        }
     vote["agent"] = "risk_manager"
     vote["agent_name"] = "Risk Manager"
     # risk_manager doesn't vote on direction
@@ -681,27 +759,39 @@ def risk_manager_node(state: MultiAgentState) -> dict:
     vote.setdefault("symbol", "")
     vote.setdefault("confidence", 0.5)
     vote.setdefault("allocation_pct", vote.get("max_safe_allocation_pct", MAX_ALLOC_PCT))
-    vote.setdefault("signals", [
-        f"Risk score: {vote.get('risk_score', 5)}/10",
-        f"Danger ratio: {danger_ratio:.2f} (death at {DEATH_THRESHOLD/INITIAL_BALANCE:.2f})",
-        f"Exposure: {exposure:.0%}",
-        f"VaR 95% 1d: ${var_1d:.2f}",
-        f"Kelly allocation: {kelly_alloc:.1f}%",
-        f"Sizing: {vote.get('sizing_recommendation', 'N/A')}",
-    ] + vote.get("warnings", []))
+    vote.setdefault(
+        "signals",
+        [
+            f"Risk score: {vote.get('risk_score', 5)}/10",
+            f"Danger ratio: {danger_ratio:.2f} (death at {DEATH_THRESHOLD/INITIAL_BALANCE:.2f})",
+            f"Exposure: {exposure:.0%}",
+            f"VaR 95% 1d: ${var_1d:.2f}",
+            f"Kelly allocation: {kelly_alloc:.1f}%",
+            f"Sizing: {vote.get('sizing_recommendation', 'N/A')}",
+        ]
+        + vote.get("warnings", []),
+    )
 
-    logs.append(_entry(
-        f"risk_manager: score={vote.get('risk_score',5)}/10 "
-        f"sizing={vote.get('sizing_recommendation','?')} "
-        f"VaR=${vote.get('var_1d',0):.0f}"
-    ))
+    logs.append(
+        _entry(
+            f"risk_manager: score={vote.get('risk_score',5)}/10 "
+            f"sizing={vote.get('sizing_recommendation','?')} "
+            f"VaR=${vote.get('var_1d',0):.0f}"
+        )
+    )
     try:
         _con = sqlite3.connect(DB_PATH)
         _con.execute(
             "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
             "VALUES (?,?,?,?,?,NULL,NULL,?)",
-            (_ts(), "risk_manager", vote.get("symbol", ""), vote.get("action", "HOLD"),
-             float(vote.get("confidence", 0.5)), "live")
+            (
+                _ts(),
+                "risk_manager",
+                vote.get("symbol", ""),
+                vote.get("action", "HOLD"),
+                float(vote.get("confidence", 0.5)),
+                "live",
+            ),
         )
         _con.commit()
         _con.close()
@@ -715,9 +805,9 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
         return sim_macro_watcher(state)
 
     sentiment = state.get("sentiment", {})
-    pv        = _portfolio_value(state)
-    pos       = state["positions"]
-    logs      = [_entry("macro_watcher: regime analysis")]
+    pv = _portfolio_value(state)
+    pos = state["positions"]
+    logs = [_entry("macro_watcher: regime analysis")]
 
     _con = sqlite3.connect(DB_PATH)
     _rows = _con.execute(
@@ -754,40 +844,55 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
         '  "macro_score": 0.0\n}'
     )
 
-    text = _llm(haiku, HAIKU_ID, [{"role": "user", "content": user}],
-                system=system, max_tokens=400)
+    text = _llm(haiku, HAIKU_ID, [{"role": "user", "content": user}], system=system, max_tokens=400)
     vote = _parse_json_obj(text)
     if not vote:
-        vote = {"agent": "macro_watcher", "market_regime": "transitional",
-                "macro_bias": "neutral", "recommended_exposure": 50,
-                "sector_rotation": "balanced", "reasoning": "Parse error — neutral stance",
-                "macro_score": 0.0}
+        vote = {
+            "agent": "macro_watcher",
+            "market_regime": "transitional",
+            "macro_bias": "neutral",
+            "recommended_exposure": 50,
+            "sector_rotation": "balanced",
+            "reasoning": "Parse error — neutral stance",
+            "macro_score": 0.0,
+        }
     vote["agent"] = "macro_watcher"
     vote["agent_name"] = "Macro Watcher"
     vote.setdefault("action", "HOLD")
     vote.setdefault("symbol", "")
     vote.setdefault("confidence", 0.5)
     vote.setdefault("allocation_pct", 0)
-    vote.setdefault("signals", [
-        f"Market regime: {vote.get('market_regime', 'N/A')}",
-        f"Macro bias: {vote.get('macro_bias', 'N/A')}",
-        f"Portfolio health: {pv/INITIAL_BALANCE:.0%} of initial capital",
-        f"Aggregate sentiment: {avg_sent:+.2f}",
-        f"Recommended exposure: {vote.get('recommended_exposure', 'N/A')}%",
-        f"Sector rotation: {vote.get('sector_rotation', 'N/A')}",
-    ])
+    vote.setdefault(
+        "signals",
+        [
+            f"Market regime: {vote.get('market_regime', 'N/A')}",
+            f"Macro bias: {vote.get('macro_bias', 'N/A')}",
+            f"Portfolio health: {pv/INITIAL_BALANCE:.0%} of initial capital",
+            f"Aggregate sentiment: {avg_sent:+.2f}",
+            f"Recommended exposure: {vote.get('recommended_exposure', 'N/A')}%",
+            f"Sector rotation: {vote.get('sector_rotation', 'N/A')}",
+        ],
+    )
 
-    logs.append(_entry(
-        f"macro_watcher: {vote.get('market_regime','?')} {vote.get('macro_bias','?')} "
-        f"score={vote.get('macro_score',0):+.2f}"
-    ))
+    logs.append(
+        _entry(
+            f"macro_watcher: {vote.get('market_regime','?')} {vote.get('macro_bias','?')} "
+            f"score={vote.get('macro_score',0):+.2f}"
+        )
+    )
     try:
         _con = sqlite3.connect(DB_PATH)
         _con.execute(
             "INSERT INTO agent_memory (timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
             "VALUES (?,?,?,?,?,NULL,NULL,?)",
-            (_ts(), "macro_watcher", vote.get("symbol", ""), vote.get("action", "HOLD"),
-             float(vote.get("confidence", 0.5)), "live")
+            (
+                _ts(),
+                "macro_watcher",
+                vote.get("symbol", ""),
+                vote.get("action", "HOLD"),
+                float(vote.get("confidence", 0.5)),
+                "live",
+            ),
         )
         _con.commit()
         _con.close()
@@ -800,15 +905,16 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
 # ARBITRATION NODE
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def arbitrate_node(state: MultiAgentState) -> dict:
     votes = state.get("agent_votes", [])
-    logs  = [_entry(f"arbitrate: {len(votes)} votes received — computing decision")]
+    logs = [_entry(f"arbitrate: {len(votes)} votes received — computing decision")]
 
     vote_map = {v.get("agent", ""): v for v in votes}
-    tech_v   = vote_map.get("technician", {})
-    ana_v    = vote_map.get("analyst", {})
-    risk_v   = vote_map.get("risk_manager", {})
-    macro_v  = vote_map.get("macro_watcher", {})
+    tech_v = vote_map.get("technician", {})
+    ana_v = vote_map.get("analyst", {})
+    risk_v = vote_map.get("risk_manager", {})
+    macro_v = vote_map.get("macro_watcher", {})
 
     dynamic_weights = _compute_dynamic_weights(DB_PATH)
     logs.append(_entry(f"arbitrate: weights_used={dynamic_weights}"))
@@ -816,10 +922,10 @@ def arbitrate_node(state: MultiAgentState) -> dict:
     # Composite action scores (risk_manager & macro_watcher don't vote on direction)
     action_scores: dict[str, float] = {"BUY": 0.0, "SELL": 0.0, "HOLD": 0.0}
     for v in [tech_v, ana_v]:
-        agent  = v.get("agent", "")
+        agent = v.get("agent", "")
         weight = dynamic_weights.get(agent, 0.0)
         action = v.get("action", "HOLD")
-        conf   = float(v.get("confidence", 0.5))
+        conf = float(v.get("confidence", 0.5))
         action_scores[action] = action_scores.get(action, 0.0) + weight * conf
 
     # Apply HOLD weight for macro + risk as a baseline
@@ -830,7 +936,9 @@ def arbitrate_node(state: MultiAgentState) -> dict:
     risk_score = float(risk_v.get("risk_score", 5))
     if risk_score > 8:
         action_scores["BUY"] *= 0.15
-        logs.append(_entry(f"arbitrate: RISK VETO — score={risk_score:.0f}/10 → BUY penalized", "warning"))
+        logs.append(
+            _entry(f"arbitrate: RISK VETO — score={risk_score:.0f}/10 → BUY penalized", "warning")
+        )
 
     # Macro filter: risk-off dampens BUY
     regime = macro_v.get("market_regime", "transitional")
@@ -838,9 +946,9 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         action_scores["BUY"] *= 0.5
         logs.append(_entry(f"arbitrate: MACRO FILTER — risk-off → BUY dampened", "warning"))
 
-    final_action     = max(action_scores, key=action_scores.get)
-    composite_conf   = action_scores[final_action]
-    max_alloc        = float(risk_v.get("max_safe_allocation_pct", MAX_ALLOC_PCT))
+    final_action = max(action_scores, key=action_scores.get)
+    composite_conf = action_scores[final_action]
+    max_alloc = float(risk_v.get("max_safe_allocation_pct", MAX_ALLOC_PCT))
 
     # Symbol: highest-confidence directional voter for the winning action
     symbol, best_c = "", 0.0
@@ -850,21 +958,25 @@ def arbitrate_node(state: MultiAgentState) -> dict:
             symbol = v.get("symbol", "")
 
     dissenting = [
-        v.get("agent", "") for v in [tech_v, ana_v]
+        v.get("agent", "")
+        for v in [tech_v, ana_v]
         if v.get("action") != final_action and v.get("agent")
     ]
-    consensus = "strong" if composite_conf > 0.6 else ("moderate" if composite_conf > 0.4 else "weak")
+    consensus = (
+        "strong" if composite_conf > 0.6 else ("moderate" if composite_conf > 0.4 else "weak")
+    )
 
-    votes_summary = json.dumps([
-        {k: vv for k, vv in v.items() if k not in ("key_indicators",)}
-        for v in votes
-    ], indent=2, default=str)
+    votes_summary = json.dumps(
+        [{k: vv for k, vv in v.items() if k not in ("key_indicators",)} for v in votes],
+        indent=2,
+        default=str,
+    )
 
     if _sim_mode["enabled"]:
-        emotion     = "FOCUSED" if composite_conf > 0.6 else "CALM"
-        thoughts    = f"[SIM] Composite: {final_action} {symbol}. Score={composite_conf:.2f}. Consensus={consensus}."
+        emotion = "FOCUSED" if composite_conf > 0.6 else "CALM"
+        thoughts = f"[SIM] Composite: {final_action} {symbol}. Score={composite_conf:.2f}. Consensus={consensus}."
         market_intel = macro_v.get("reasoning", "")
-        reasoning   = (
+        reasoning = (
             f"BUY={action_scores['BUY']:.2f} | SELL={action_scores['SELL']:.2f} | "
             f"HOLD={action_scores['HOLD']:.2f}. Risk {risk_score:.0f}/10. {regime}."
         )
@@ -893,30 +1005,40 @@ def arbitrate_node(state: MultiAgentState) -> dict:
             f'  "emotion": "CALM|FOCUSED|EXCITED|NERVOUS|PANIC",\n'
             f'  "market_intel": "insight clé"\n}}'
         )
-        text = _llm(sonnet, SONNET_ID, [{"role": "user", "content": user_arb}],
-                    system=system_arb, max_tokens=768)
+        text = _llm(
+            sonnet,
+            SONNET_ID,
+            [{"role": "user", "content": user_arb}],
+            system=system_arb,
+            max_tokens=768,
+        )
         arb = _parse_json_obj(text)
         if not arb:
             arb = {}
 
-        final_action  = arb.get("action",   final_action)
-        symbol        = arb.get("symbol",   symbol)
-        composite_conf= float(arb.get("confidence", composite_conf))
-        max_alloc     = float(arb.get("allocation_pct", max_alloc))
-        reasoning     = arb.get("reasoning",    "")
-        consensus     = arb.get("consensus_level", consensus)
-        emotion       = arb.get("emotion",      "CALM")
-        thoughts      = arb.get("thoughts",     "")
-        market_intel  = arb.get("market_intel", "")
-        dissenting    = arb.get("dissenting_agents", dissenting)
+        final_action = arb.get("action", final_action)
+        symbol = arb.get("symbol", symbol)
+        composite_conf = float(arb.get("confidence", composite_conf))
+        max_alloc = float(arb.get("allocation_pct", max_alloc))
+        reasoning = arb.get("reasoning", "")
+        consensus = arb.get("consensus_level", consensus)
+        emotion = arb.get("emotion", "CALM")
+        thoughts = arb.get("thoughts", "")
+        market_intel = arb.get("market_intel", "")
+        dissenting = arb.get("dissenting_agents", dissenting)
 
     arbitration = {
-        "action": final_action, "symbol": symbol,
+        "action": final_action,
+        "symbol": symbol,
         "allocation_pct": min(float(max_alloc), MAX_ALLOC_PCT),
         "confidence": composite_conf,
-        "reasoning": reasoning if not _sim_mode["enabled"] else (
-            f"BUY={action_scores['BUY']:.2f} SELL={action_scores['SELL']:.2f} "
-            f"HOLD={action_scores['HOLD']:.2f} | Risk {risk_score:.0f}/10 | {regime}"
+        "reasoning": (
+            reasoning
+            if not _sim_mode["enabled"]
+            else (
+                f"BUY={action_scores['BUY']:.2f} SELL={action_scores['SELL']:.2f} "
+                f"HOLD={action_scores['HOLD']:.2f} | Risk {risk_score:.0f}/10 | {regime}"
+            )
         ),
         "dissenting_agents": dissenting,
         "consensus_level": consensus,
@@ -928,15 +1050,15 @@ def arbitrate_node(state: MultiAgentState) -> dict:
     }
 
     decision = {
-        "action":         final_action,
-        "symbol":         symbol,
+        "action": final_action,
+        "symbol": symbol,
         "allocation_pct": min(float(max_alloc), MAX_ALLOC_PCT),
-        "sell_pct":       100,
-        "confidence":     composite_conf,
-        "reasoning":      arbitration["reasoning"],
-        "thoughts":       thoughts,
-        "emotion":        emotion,
-        "market_intel":   market_intel,
+        "sell_pct": 100,
+        "confidence": composite_conf,
+        "reasoning": arbitration["reasoning"],
+        "thoughts": thoughts,
+        "emotion": emotion,
+        "market_intel": market_intel,
     }
 
     skip_res = state.get("skip_research", False) or composite_conf >= 0.72
@@ -951,28 +1073,30 @@ def arbitrate_node(state: MultiAgentState) -> dict:
                 "UPDATE agent_memory SET was_correct=? WHERE id=("
                 "SELECT id FROM agent_memory WHERE agent_name=? AND was_correct IS NULL "
                 "ORDER BY timestamp DESC LIMIT 1)",
-                (_correct, _agent_name)
+                (_correct, _agent_name),
             )
         _con.commit()
         _con.close()
     except Exception as _e:
         logs.append(_entry(f"arbitrate: agent_memory update error: {_e}", "warning"))
 
-    logs.append(_entry(
-        f"arbitrate: {final_action} {symbol} conf={composite_conf:.0%} "
-        f"consensus={consensus} dissenting={dissenting}"
-    ))
+    logs.append(
+        _entry(
+            f"arbitrate: {final_action} {symbol} conf={composite_conf:.0%} "
+            f"consensus={consensus} dissenting={dissenting}"
+        )
+    )
     if thoughts:
         logs.append(_entry(f"thoughts: {thoughts[:120]}"))
 
     return {
-        "arbitration":   arbitration,
-        "decision":      decision,
-        "confidence":    composite_conf,
-        "emotion":       emotion,
-        "thoughts":      thoughts,
+        "arbitration": arbitration,
+        "decision": decision,
+        "confidence": composite_conf,
+        "emotion": emotion,
+        "thoughts": thoughts,
         "skip_research": skip_res,
-        "log":           logs,
+        "log": logs,
     }
 
 
@@ -980,10 +1104,11 @@ def arbitrate_node(state: MultiAgentState) -> dict:
 # DAILY POSTMORTEM
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def run_daily_postmortem(portfolio: Portfolio, db_path=DB_PATH) -> None:
     """Generate postmortem entries for all SELL trades since midnight."""
     midnight = datetime.combine(date.today(), datetime.min.time()).isoformat()
-    source   = "simulation" if _sim_mode["enabled"] else "live"
+    source = "simulation" if _sim_mode["enabled"] else "live"
 
     sells = portfolio.closed_trades_since(midnight)
     if not sells:
@@ -991,29 +1116,32 @@ def run_daily_postmortem(portfolio: Portfolio, db_path=DB_PATH) -> None:
 
     con = sqlite3.connect(db_path)
     for trade in sells:
-        symbol     = trade["symbol"]
+        symbol = trade["symbol"]
         sell_price = trade["price"]
-        sell_time  = datetime.fromisoformat(trade["time"])
+        sell_time = datetime.fromisoformat(trade["time"])
 
         # Find the most recent matching BUY in trade_history
         buy_trade = next(
-            (t for t in reversed(portfolio.trade_history)
-             if t["action"] == "BUY" and t["symbol"] == symbol),
-            None
+            (
+                t
+                for t in reversed(portfolio.trade_history)
+                if t["action"] == "BUY" and t["symbol"] == symbol
+            ),
+            None,
         )
         if not buy_trade:
             continue
 
-        buy_price     = buy_trade["price"]
-        buy_time      = datetime.fromisoformat(buy_trade["time"])
+        buy_price = buy_trade["price"]
+        buy_time = datetime.fromisoformat(buy_trade["time"])
         holding_hours = (sell_time - buy_time).total_seconds() / 3600
-        pnl_pct       = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0.0
+        pnl_pct = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0.0
 
         rows = con.execute(
             "SELECT agent_name FROM agent_memory "
             "WHERE symbol=? AND was_correct=1 AND vote='SELL' "
             "ORDER BY timestamp DESC LIMIT 4",
-            (symbol,)
+            (symbol,),
         ).fetchall()
         agents_correct = json.dumps([r[0] for r in rows])
 
@@ -1028,16 +1156,25 @@ def run_daily_postmortem(portfolio: Portfolio, db_path=DB_PATH) -> None:
                 "En 2 phrases maximum, quelle leçon retenir de ce trade ? "
                 "Sois factuel et critique."
             )
-            summary = _llm(haiku, HAIKU_ID,
-                           [{"role": "user", "content": prompt}],
-                           max_tokens=120).strip()
+            summary = _llm(
+                haiku, HAIKU_ID, [{"role": "user", "content": prompt}], max_tokens=120
+            ).strip()
 
         con.execute(
             "INSERT INTO postmortem "
             "(timestamp,symbol,buy_price,sell_price,pnl_pct,holding_hours,"
             "agents_correct,summary,source) VALUES (?,?,?,?,?,?,?,?,?)",
-            (_ts(), symbol, buy_price, sell_price, round(pnl_pct, 4),
-             round(holding_hours, 4), agents_correct, summary, source)
+            (
+                _ts(),
+                symbol,
+                buy_price,
+                sell_price,
+                round(pnl_pct, 4),
+                round(holding_hours, 4),
+                agents_correct,
+                summary,
+                source,
+            ),
         )
 
     con.commit()
@@ -1048,10 +1185,11 @@ def run_daily_postmortem(portfolio: Portfolio, db_path=DB_PATH) -> None:
 # ROUTING
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _route_arbitrate(state: MultiAgentState) -> str:
-    conf  = state.get("confidence", 0.0)
+    conf = state.get("confidence", 0.0)
     iters = state.get("research_iterations", 0)
-    skip  = state.get("skip_research", False)
+    skip = state.get("skip_research", False)
     if skip or conf >= 0.72 or iters >= 2:
         return "risk_check"
     return "research"
@@ -1061,58 +1199,62 @@ def _route_arbitrate(state: MultiAgentState) -> str:
 # GRAPH BUILDER
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def build_multi_graph(portfolio: Portfolio):
     g = StateGraph(MultiAgentState)
 
     # Reused nodes from agent.py
-    g.add_node("load_memory",  load_memory_node)
-    g.add_node("fetch_data",   make_fetch_data_node(portfolio))
-    g.add_node("execute",      make_execute_node(portfolio))
-    g.add_node("save_memory",  make_save_memory_node(portfolio))
-    g.add_node("risk_check",   risk_check_node)
-    g.add_node("skip",         skip_node)
-    g.add_node("research",     research_node)
+    g.add_node("load_memory", load_memory_node)
+    g.add_node("fetch_data", make_fetch_data_node(portfolio))
+    g.add_node("execute", make_execute_node(portfolio))
+    g.add_node("save_memory", make_save_memory_node(portfolio))
+    g.add_node("risk_check", risk_check_node)
+    g.add_node("skip", skip_node)
+    g.add_node("research", research_node)
 
     # Multi-agent specific nodes
-    g.add_node("supervisor",    supervisor_node)
-    g.add_node("technician",    technician_node)
-    g.add_node("analyst",       analyst_node)
-    g.add_node("risk_manager",  risk_manager_node)
+    g.add_node("supervisor", supervisor_node)
+    g.add_node("technician", technician_node)
+    g.add_node("analyst", analyst_node)
+    g.add_node("risk_manager", risk_manager_node)
     g.add_node("macro_watcher", macro_watcher_node)
-    g.add_node("arbitrate",     arbitrate_node)
+    g.add_node("arbitrate", arbitrate_node)
 
     # Edges: linear start
-    g.add_edge(START,        "load_memory")
-    g.add_edge("load_memory","fetch_data")
+    g.add_edge(START, "load_memory")
+    g.add_edge("load_memory", "fetch_data")
     g.add_edge("fetch_data", "supervisor")
 
     # Fan-out from supervisor to 4 parallel agents
     g.add_conditional_edges(
-        "supervisor", _route_to_agents,
+        "supervisor",
+        _route_to_agents,
         ["technician", "analyst", "risk_manager", "macro_watcher"],
     )
 
     # Fan-in: all 4 parallel agents → arbitrate
-    g.add_edge("technician",    "arbitrate")
-    g.add_edge("analyst",       "arbitrate")
-    g.add_edge("risk_manager",  "arbitrate")
+    g.add_edge("technician", "arbitrate")
+    g.add_edge("analyst", "arbitrate")
+    g.add_edge("risk_manager", "arbitrate")
     g.add_edge("macro_watcher", "arbitrate")
 
     # Arbitrate routing: confident → risk_check, uncertain → research → risk_check
     g.add_conditional_edges(
-        "arbitrate", _route_arbitrate,
+        "arbitrate",
+        _route_arbitrate,
         {"risk_check": "risk_check", "research": "research"},
     )
     g.add_edge("research", "risk_check")
 
     # Risk check → execute or skip
     g.add_conditional_edges(
-        "risk_check", _route_risk,
+        "risk_check",
+        _route_risk,
         {"execute": "execute", "skip": "skip"},
     )
-    g.add_edge("execute",     "save_memory")
+    g.add_edge("execute", "save_memory")
     g.add_edge("save_memory", END)
-    g.add_edge("skip",        END)
+    g.add_edge("skip", END)
 
     return g.compile()
 
@@ -1121,5 +1263,6 @@ def build_multi_graph(portfolio: Portfolio):
 build_graph = build_multi_graph
 
 # LangGraph Studio compatibility
-from data import Portfolio as _Portfolio
+from core.data import Portfolio as _Portfolio
+
 agent_multi_graph = build_multi_graph(_Portfolio())

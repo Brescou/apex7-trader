@@ -3,6 +3,7 @@ market_data.py — Standalone market data module for APEX-7 dashboard.
 No imports from agent.py or agent_multi.py.
 Thread-safe in-memory cache for macro (60s) and watchlist prices (10s).
 """
+
 import threading
 import time
 from datetime import datetime
@@ -19,8 +20,18 @@ _macro_lock = threading.Lock()
 _watchlist_cache: dict = {"data": None, "ts": 0.0, "key": ""}
 _watchlist_lock = threading.Lock()
 
+_sparkline_cache: dict = {}  # symbol → {"data": [...], "ts": float}
+_sparkline_lock = threading.Lock()
+
+_comparison_cache: dict = {}  # "sym1,sym2|period" → {"data": {...}, "ts": float}
+_comparison_lock = threading.Lock()
+
+_SPARKLINE_CACHE_SEC = 300
+_COMPARISON_CACHE_SEC = 300
+
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+
 
 def _format_age(ts: int) -> str:
     """Format a Unix timestamp as 'Xm ago', 'Xh ago', or 'Xd ago'."""
@@ -37,8 +48,31 @@ def _format_age(ts: int) -> str:
         return "?"
 
 
-_POSITIVE_WORDS = {"beat", "surge", "gain", "rise", "up", "record", "strong", "rally", "soar", "top"}
-_NEGATIVE_WORDS = {"miss", "drop", "fall", "loss", "down", "weak", "cut", "warning", "crash", "decline", "sell"}
+_POSITIVE_WORDS = {
+    "beat",
+    "surge",
+    "gain",
+    "rise",
+    "up",
+    "record",
+    "strong",
+    "rally",
+    "soar",
+    "top",
+}
+_NEGATIVE_WORDS = {
+    "miss",
+    "drop",
+    "fall",
+    "loss",
+    "down",
+    "weak",
+    "cut",
+    "warning",
+    "crash",
+    "decline",
+    "sell",
+}
 
 
 def _classify_sentiment(title: str) -> str:
@@ -57,8 +91,6 @@ def _calc_rsi(closes: list, period: int = 14) -> float | None:
     if len(closes) < period + 1:
         return None
     deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-    gains = [d for d in deltas if d > 0]
-    losses = [-d for d in deltas if d < 0]
     # Use only the last `period` deltas
     recent = deltas[-period:]
     avg_gain = sum(d for d in recent if d > 0) / period
@@ -80,6 +112,7 @@ def _format_volume(vol: float) -> str:
 
 
 # ─── Public API ──────────────────────────────────────────────────────────────
+
 
 def fetch_macro() -> dict:
     """
@@ -144,9 +177,14 @@ def fetch_watchlist_prices(symbols: list[str]) -> dict:
                 hist = yf.Ticker(sym).history(period="1y", interval="1d")
                 if hist.empty or len(hist) < 2:
                     result[sym] = {
-                        "price": None, "change_pct": 0.0, "change_abs": 0.0,
-                        "volume": 0, "high_52w": None, "low_52w": None,
-                        "rsi_14": None, "above_ma20": False,
+                        "price": None,
+                        "change_pct": 0.0,
+                        "change_abs": 0.0,
+                        "volume": 0,
+                        "high_52w": None,
+                        "low_52w": None,
+                        "rsi_14": None,
+                        "above_ma20": False,
                     }
                     continue
                 closes = hist["Close"].tolist()
@@ -159,7 +197,11 @@ def fetch_watchlist_prices(symbols: list[str]) -> dict:
                 high_52w = round(max(closes), 2)
                 low_52w = round(min(closes), 2)
                 rsi_14 = _calc_rsi(closes, 14)
-                above_ma20 = price > (sum(closes[-20:]) / min(20, len(closes))) if len(closes) >= 1 else False
+                above_ma20 = (
+                    price > (sum(closes[-20:]) / min(20, len(closes)))
+                    if len(closes) >= 1
+                    else False
+                )
                 result[sym] = {
                     "price": price,
                     "change_pct": change_pct,
@@ -172,9 +214,14 @@ def fetch_watchlist_prices(symbols: list[str]) -> dict:
                 }
             except Exception:
                 result[sym] = {
-                    "price": None, "change_pct": 0.0, "change_abs": 0.0,
-                    "volume": 0, "high_52w": None, "low_52w": None,
-                    "rsi_14": 50.0, "above_ma20": False,
+                    "price": None,
+                    "change_pct": 0.0,
+                    "change_abs": 0.0,
+                    "volume": 0,
+                    "high_52w": None,
+                    "low_52w": None,
+                    "rsi_14": 50.0,
+                    "above_ma20": False,
                 }
 
         _watchlist_cache["data"] = result
@@ -197,12 +244,13 @@ def fetch_news(symbol: str, max_items: int = NEWS_MAX_ITEMS) -> list[dict]:
             # yfinance news item structure varies — handle both old and new formats
             content = item.get("content", {})
             if isinstance(content, dict):
-                source = content.get("provider", {}).get("displayName", item.get("publisher", "Unknown"))
+                source = content.get("provider", {}).get(
+                    "displayName", item.get("publisher", "Unknown")
+                )
                 url = content.get("canonicalUrl", {}).get("url", item.get("link", ""))
                 pub_time = content.get("pubDate", "")
                 if pub_time:
                     try:
-                        from datetime import timezone
                         dt = datetime.fromisoformat(pub_time.replace("Z", "+00:00"))
                         ts = int(dt.timestamp())
                     except Exception:
@@ -214,16 +262,82 @@ def fetch_news(symbol: str, max_items: int = NEWS_MAX_ITEMS) -> list[dict]:
                 url = item.get("link", "")
                 ts = item.get("providerPublishTime", 0)
 
-            items.append({
-                "title": title,
-                "source": source,
-                "age": _format_age(ts),
-                "url": url,
-                "sentiment": _classify_sentiment(title),
-            })
+            items.append(
+                {
+                    "title": title,
+                    "source": source,
+                    "age": _format_age(ts),
+                    "url": url,
+                    "sentiment": _classify_sentiment(title),
+                }
+            )
         return items
     except Exception:
         return []
+
+
+def fetch_sparkline(symbol: str) -> list[dict]:
+    """
+    Fetch 1-day hourly OHLC data for sparkline rendering.
+    Returns: [{"time": "14:00", "price": 182.5, "open": 181.0}, ...]
+    Cached 5 minutes per symbol. Returns empty list on failure.
+    """
+    with _sparkline_lock:
+        now = time.time()
+        cached = _sparkline_cache.get(symbol)
+        if cached is not None and (now - cached["ts"]) < _SPARKLINE_CACHE_SEC:
+            return cached["data"]
+
+        try:
+            hist = yf.Ticker(symbol).history(period="1d", interval="1h")
+            if hist.empty:
+                return []
+            result = []
+            for ts_idx, row in hist.iterrows():
+                result.append(
+                    {
+                        "time": ts_idx.strftime("%H:%M"),
+                        "price": round(float(row["Close"]), 2),
+                        "open": round(float(row["Open"]), 2),
+                    }
+                )
+            _sparkline_cache[symbol] = {"data": result, "ts": now}
+            return result
+        except Exception:
+            return []
+
+
+def fetch_comparison(symbols: list[str], period: str = "1mo") -> dict:
+    """
+    Fetch daily closes for multiple symbols and normalize each series to 100.0 at first point.
+    Returns: {"AAPL": [{"date": "2025-02-01", "value": 100.0}, ...], "MSFT": [...]}
+    Cached 5 minutes per (sorted symbols, period). Returns empty dict on failure.
+    """
+    cache_key = ",".join(sorted(symbols)) + "|" + period
+    with _comparison_lock:
+        now = time.time()
+        cached = _comparison_cache.get(cache_key)
+        if cached is not None and (now - cached["ts"]) < _COMPARISON_CACHE_SEC:
+            return cached["data"]
+
+        try:
+            result: dict = {}
+            for sym in symbols:
+                hist = yf.Ticker(sym).history(period=period, interval="1d")
+                if hist.empty:
+                    continue
+                closes = hist["Close"].tolist()
+                dates = hist.index.strftime("%Y-%m-%d").tolist()
+                first = closes[0]
+                if first == 0:
+                    continue
+                result[sym] = [
+                    {"date": d, "value": round(c / first * 100.0, 4)} for d, c in zip(dates, closes)
+                ]
+            _comparison_cache[cache_key] = {"data": result, "ts": now}
+            return result
+        except Exception:
+            return {}
 
 
 def run_screener(symbols: list[str], filters: dict) -> list[dict]:

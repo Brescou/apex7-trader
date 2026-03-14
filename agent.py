@@ -48,6 +48,7 @@ from langgraph.graph import END, START, StateGraph
 
 try:
     import tweepy
+
     _HAS_TWEEPY = True
 except ImportError:
     _HAS_TWEEPY = False
@@ -66,15 +67,15 @@ from config import (
     WATCHLIST,
     X_BEARER_TOKEN,
 )
-from data import Portfolio
+from core.data import Portfolio
 
 # ── Models ───────────────────────────────────────────────────────────────────
 
 SONNET_ID = "claude-sonnet-4-5"
-HAIKU_ID  = "claude-haiku-4-5-20251001"
+HAIKU_ID = "claude-haiku-4-5-20251001"
 
 sonnet = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-haiku  = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+haiku = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 # Runtime simulation toggle (survives hot-switch from Dash UI)
 _sim_mode: dict = {"enabled": SIMULATION_MODE}
@@ -146,38 +147,40 @@ _init_db()
 
 # ── State ────────────────────────────────────────────────────────────────────
 
+
 class AgentState(TypedDict):
     # Portfolio
-    balance:           float
-    positions:         dict                          # {symbol: {shares, avg_price}}
+    balance: float
+    positions: dict  # {symbol: {shares, avg_price}}
     portfolio_history: Annotated[List[float], operator.add]
 
     # Market data
-    prices:    dict                                  # {symbol: float}
-    news:      str
-    sentiment: dict                                  # {symbol: float -1..1}
+    prices: dict  # {symbol: float}
+    news: str
+    sentiment: dict  # {symbol: float -1..1}
 
     # Memory
-    past_trades:    List[dict]
+    past_trades: List[dict]
     known_patterns: List[str]
 
     # Agent
-    round:               int
-    confidence:          float
+    round: int
+    confidence: float
     research_iterations: int
-    decision:            Optional[dict]
-    emotion:             str
-    thoughts:            str
+    decision: Optional[dict]
+    emotion: str
+    thoughts: str
 
     # Logs
     log: Annotated[List[dict], operator.add]
 
     # Control
-    alive:         bool
+    alive: bool
     skip_research: bool
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
 
 def _ts() -> str:
     return datetime.now().isoformat()
@@ -261,8 +264,7 @@ def _fetch_news_sync(symbols: list[str]) -> str:
         try:
             items = yf.Ticker(sym).news or []
             for item in items[:3]:
-                title = (item.get("title")
-                         or (item.get("content") or {}).get("title", ""))
+                title = item.get("title") or (item.get("content") or {}).get("title", "")
                 if title:
                     parts.append(f"[{sym}] {title}")
         except Exception:
@@ -295,9 +297,7 @@ def _fetch_sentiment_sync(symbols: list[str]) -> dict[str, float]:
     return {sym: round(random.uniform(-0.3, 0.3), 2) for sym in symbols}
 
 
-async def _gather_data(
-    portfolio: Portfolio, news_syms: list[str]
-) -> tuple[dict, str, dict]:
+async def _gather_data(portfolio: Portfolio, news_syms: list[str]) -> tuple[dict, str, dict]:
     loop = asyncio.get_event_loop()
     prices, news, sentiment = await asyncio.gather(
         loop.run_in_executor(None, _fetch_prices_sync, portfolio),
@@ -350,7 +350,7 @@ _SIM_NEWS_TEMPLATES = [
 ]
 
 _SIM_THOUGHTS = {
-    "BUY":  "RSI oversold, risk/reward favorable. Entering position with discipline.",
+    "BUY": "RSI oversold, risk/reward favorable. Entering position with discipline.",
     "SELL": "RSI overbought, locking in gains before reversal. Cash is a position.",
     "HOLD": "No clear edge. Preserving capital until setup aligns.",
 }
@@ -364,10 +364,10 @@ def _sim_rsi(prices_hist: list[float], period: int = 14) -> float:
     if len(prices_hist) < period + 1:
         return 50.0
     deltas = [prices_hist[i + 1] - prices_hist[i] for i in range(-period - 1, -1)]
-    gains  = [d for d in deltas if d > 0]
+    gains = [d for d in deltas if d > 0]
     losses = [-d for d in deltas if d < 0]
-    avg_g  = sum(gains)  / period if gains  else 0.0
-    avg_l  = sum(losses) / period if losses else 0.0
+    avg_g = sum(gains) / period if gains else 0.0
+    avg_l = sum(losses) / period if losses else 0.0
     if avg_l == 0:
         return 100.0
     return 100.0 - (100.0 / (1.0 + avg_g / avg_l))
@@ -376,13 +376,13 @@ def _sim_rsi(prices_hist: list[float], period: int = 14) -> float:
 def _sim_step_prices(current: dict[str, float]) -> dict[str, float]:
     """Random-walk one step for each symbol."""
     drift = _sim_mode.get("drift", SIM_DRIFT)
-    vol   = _sim_mode.get("volatility", SIM_VOLATILITY)
+    vol = _sim_mode.get("volatility", SIM_VOLATILITY)
     new_prices: dict[str, float] = {}
     for sym, price in current.items():
         change = random.gauss(drift, vol)
         new_prices[sym] = max(price * (1 + change), 0.01)
         _sim_price_history.setdefault(sym, [price]).append(new_prices[sym])
-        if len(_sim_price_history[sym]) > 100:        # keep last 100
+        if len(_sim_price_history[sym]) > 100:  # keep last 100
             _sim_price_history[sym] = _sim_price_history[sym][-100:]
     return new_prices
 
@@ -401,11 +401,9 @@ def sim_fetch_data(state: AgentState, portfolio: Portfolio) -> dict:
     if not all(s in current for s in WATCHLIST):
         current = _sim_seed_prices(WATCHLIST, current)
 
-    prices    = _sim_step_prices(current)
+    prices = _sim_step_prices(current)
     news_syms = list(state["positions"].keys())[:3] or WATCHLIST[:3]
-    news      = "\n".join(
-        random.choice(_SIM_NEWS_TEMPLATES).format(sym=s) for s in news_syms
-    )
+    news = "\n".join(random.choice(_SIM_NEWS_TEMPLATES).format(sym=s) for s in news_syms)
     sentiment = {s: round(random.uniform(-1, 1), 2) for s in WATCHLIST}
 
     # Update portfolio's cached prices so execute_node has values
@@ -417,11 +415,11 @@ def sim_fetch_data(state: AgentState, portfolio: Portfolio) -> dict:
     logs.append(_entry(f"[SIM] prices={prices} | flat={flat}"))
 
     return {
-        "prices":        prices,
-        "news":          news,
-        "sentiment":     sentiment,
+        "prices": prices,
+        "news": news,
+        "sentiment": sentiment,
         "skip_research": flat,
-        "log":           logs,
+        "log": logs,
     }
 
 
@@ -430,41 +428,41 @@ def sim_analyze(state: AgentState) -> dict:
     logs = [_entry(f"[SIM] analyze: round={state['round']}")]
 
     prices = state["prices"]
-    pv     = _portfolio_value(state)
+    pv = _portfolio_value(state)
 
     # Compute RSI per symbol and pick best candidate
     rsi_map: dict[str, float] = {
         sym: _sim_rsi(_sim_price_history.get(sym, [prices[sym]]))
-        for sym in WATCHLIST if sym in prices
+        for sym in WATCHLIST
+        if sym in prices
     }
     logs.append(_entry(f"[SIM] RSI: {rsi_map}"))
 
     # Choose action
-    oversold  = {s: r for s, r in rsi_map.items() if r < 30}
-    overbought = {s: r for s, r in rsi_map.items()
-                  if r > 70 and s in state["positions"]}
+    oversold = {s: r for s, r in rsi_map.items() if r < 30}
+    overbought = {s: r for s, r in rsi_map.items() if r > 70 and s in state["positions"]}
 
     if overbought:
-        sym    = min(overbought, key=overbought.get)  # most overbought held pos
+        sym = min(overbought, key=overbought.get)  # most overbought held pos
         action = "SELL"
-        conf   = 0.75
-        alloc  = 0
+        conf = 0.75
+        alloc = 0
         sell_p = 100
-        rsi_v  = rsi_map[sym]
+        rsi_v = rsi_map[sym]
     elif oversold and len(state["positions"]) < MAX_POSITIONS:
-        sym    = min(oversold, key=oversold.get)       # most oversold on watchlist
+        sym = min(oversold, key=oversold.get)  # most oversold on watchlist
         action = "BUY"
-        conf   = 0.80
-        alloc  = random.randint(15, MAX_ALLOC_PCT)
+        conf = 0.80
+        alloc = random.randint(15, MAX_ALLOC_PCT)
         sell_p = 0
-        rsi_v  = rsi_map[sym]
+        rsi_v = rsi_map[sym]
     else:
-        sym    = random.choice(WATCHLIST) if WATCHLIST else ""
+        sym = random.choice(WATCHLIST) if WATCHLIST else ""
         action = "HOLD"
-        conf   = 0.55
-        alloc  = 0
+        conf = 0.55
+        alloc = 0
         sell_p = 0
-        rsi_v  = rsi_map.get(sym, 50.0)
+        rsi_v = rsi_map.get(sym, 50.0)
 
     # Emotion from portfolio value
     if pv < INITIAL_BALANCE * 0.7:
@@ -477,35 +475,30 @@ def sim_analyze(state: AgentState) -> dict:
         emotion = random.choice(["CALM", "FOCUSED", "EXCITED"])
 
     thoughts = _SIM_THOUGHTS.get(action, "Analyzing market conditions.")
-    reasoning = (
-        f"RSI={rsi_v:.1f} → {action}. "
-        f"Portfolio ${pv:.2f} | {emotion}"
-    )
+    reasoning = f"RSI={rsi_v:.1f} → {action}. " f"Portfolio ${pv:.2f} | {emotion}"
 
     decision = {
-        "thoughts":      thoughts,
-        "emotion":       emotion,
-        "action":        action,
-        "symbol":        sym,
+        "thoughts": thoughts,
+        "emotion": emotion,
+        "action": action,
+        "symbol": sym,
         "allocation_pct": alloc,
-        "sell_pct":      sell_p,
-        "reasoning":     reasoning,
-        "confidence":    conf,
-        "market_intel":  f"Simulated RSI={rsi_v:.1f}",
+        "sell_pct": sell_p,
+        "reasoning": reasoning,
+        "confidence": conf,
+        "market_intel": f"Simulated RSI={rsi_v:.1f}",
     }
 
     skip = state["skip_research"] or (not state["positions"] and conf >= 0.60)
-    logs.append(_entry(
-        f"[SIM] {action} {sym} conf={conf:.0%} emotion={emotion} RSI={rsi_v:.1f}"
-    ))
+    logs.append(_entry(f"[SIM] {action} {sym} conf={conf:.0%} emotion={emotion} RSI={rsi_v:.1f}"))
 
     return {
-        "decision":      decision,
-        "confidence":    conf,
-        "emotion":       emotion,
-        "thoughts":      thoughts,
+        "decision": decision,
+        "confidence": conf,
+        "emotion": emotion,
+        "thoughts": thoughts,
         "skip_research": skip,
-        "log":           logs,
+        "log": logs,
     }
 
 
@@ -521,6 +514,7 @@ def sim_research(state: AgentState) -> dict:
 
 
 # ── .env writer (for Dash mode toggle) ───────────────────────────────────────
+
 
 def _write_env_var(key: str, value: str) -> None:
     env_path = Path(__file__).parent / ".env"
@@ -552,6 +546,7 @@ def get_simulation_mode() -> bool:
 # NODES
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def load_memory_node(state: AgentState) -> dict:
     logs = [_entry("load_memory: querying SQLite...")]
 
@@ -563,8 +558,19 @@ def load_memory_node(state: AgentState) -> dict:
     ).fetchall()
     con.close()
 
-    cols = ("timestamp", "symbol", "action", "price", "amount_usd", "shares",
-            "reasoning", "confidence", "emotion", "portfolio_value_after", "lesson")
+    cols = (
+        "timestamp",
+        "symbol",
+        "action",
+        "price",
+        "amount_usd",
+        "shares",
+        "reasoning",
+        "confidence",
+        "emotion",
+        "portfolio_value_after",
+        "lesson",
+    )
     past_trades = [dict(zip(cols, row)) for row in rows]
 
     if not past_trades:
@@ -581,7 +587,7 @@ def load_memory_node(state: AgentState) -> dict:
         "Analyse ces trades récents et identifie les patterns, erreurs répétées, ou succès :\n"
         f"{json.dumps(past_trades[:10], indent=2, default=str)}\n\n"
         "Retourne UNIQUEMENT un JSON array de strings, chaque string décrit un pattern "
-        "(max 15 mots). Exemple : [\"Achète AAPL trop tôt après correction\", ...]"
+        '(max 15 mots). Exemple : ["Achète AAPL trop tôt après correction", ...]'
     )
     text = _llm(haiku, HAIKU_ID, [{"role": "user", "content": prompt}], max_tokens=512)
 
@@ -606,9 +612,11 @@ def make_fetch_data_node(portfolio: Portfolio):
 
         pos = state["positions"]
         news_syms = (
-            sorted(pos, key=lambda s: pos[s]["shares"] * state["prices"].get(s, 0),
-                   reverse=True)[:3]
-            if pos else WATCHLIST[:3]
+            sorted(pos, key=lambda s: pos[s]["shares"] * state["prices"].get(s, 0), reverse=True)[
+                :3
+            ]
+            if pos
+            else WATCHLIST[:3]
         )
 
         try:
@@ -622,10 +630,12 @@ def make_fetch_data_node(portfolio: Portfolio):
         flat = _is_flat(prices)
         _prev_prices.update(prices)
 
-        logs.append(_entry(
-            f"fetch_data: {len(prices)} prices | news={len(news)}ch | "
-            f"sentiment={sentiment} | flat={flat}"
-        ))
+        logs.append(
+            _entry(
+                f"fetch_data: {len(prices)} prices | news={len(news)}ch | "
+                f"sentiment={sentiment} | flat={flat}"
+            )
+        )
         return {
             "prices": prices,
             "news": news,
@@ -633,6 +643,7 @@ def make_fetch_data_node(portfolio: Portfolio):
             "skip_research": flat,
             "log": logs,
         }
+
     return fetch_data_node
 
 
@@ -644,25 +655,33 @@ def analyze_node(state: AgentState) -> dict:
     logs = [_entry(f"analyze: round={state['round']} research_iter={it}")]
 
     pv = _portfolio_value(state)
-    mode = ("PANIC" if pv < INITIAL_BALANCE * 0.5
-            else "GREED" if pv > INITIAL_BALANCE * 1.5
-            else "NORMAL")
+    mode = (
+        "PANIC"
+        if pv < INITIAL_BALANCE * 0.5
+        else "GREED" if pv > INITIAL_BALANCE * 1.5 else "NORMAL"
+    )
 
     positions_display = {
         sym: {
-            "shares":   round(pos["shares"], 4),
+            "shares": round(pos["shares"], 4),
             "avg_price": round(pos.get("avg_price", pos.get("avg_cost", 0)), 2),
-            "now":       round(state["prices"].get(sym, 0), 2),
-            "pnl%":     round(
-                ((state["prices"].get(sym, 1) /
-                  max(pos.get("avg_price", pos.get("avg_cost", 1)), 0.01)) - 1) * 100, 2
+            "now": round(state["prices"].get(sym, 0), 2),
+            "pnl%": round(
+                (
+                    (
+                        state["prices"].get(sym, 1)
+                        / max(pos.get("avg_price", pos.get("avg_cost", 1)), 0.01)
+                    )
+                    - 1
+                )
+                * 100,
+                2,
             ),
         }
         for sym, pos in state["positions"].items()
     }
     patterns_txt = (
-        "\n".join(f"  • {p}" for p in state["known_patterns"])
-        or "  Aucun pattern enregistré"
+        "\n".join(f"  • {p}" for p in state["known_patterns"]) or "  Aucun pattern enregistré"
     )
 
     system = (
@@ -707,32 +726,39 @@ Retourne ce JSON (et RIEN d'autre) :
   "market_intel": "insight clé issu de la recherche"
 }}"""
 
-    text = _llm(sonnet, SONNET_ID,
-                [{"role": "user", "content": user}],
-                system=system, max_tokens=1024, web_search=True)
+    text = _llm(
+        sonnet,
+        SONNET_ID,
+        [{"role": "user", "content": user}],
+        system=system,
+        max_tokens=1024,
+        web_search=True,
+    )
 
-    decision  = _parse_json_obj(text)
+    decision = _parse_json_obj(text)
     confidence = float(decision.get("confidence", 0.5))
-    emotion    = decision.get("emotion", "CALM")
-    thoughts   = decision.get("thoughts", "")
+    emotion = decision.get("emotion", "CALM")
+    thoughts = decision.get("thoughts", "")
 
     # skip_research: no positions + conf ok, or flat market (already set in fetch_data)
     skip = state["skip_research"] or (not state["positions"] and confidence >= 0.60)
 
-    logs.append(_entry(
-        f"analyze: {decision.get('action')} {decision.get('symbol') or ''} "
-        f"conf={confidence:.0%} emotion={emotion} skip_research={skip}"
-    ))
+    logs.append(
+        _entry(
+            f"analyze: {decision.get('action')} {decision.get('symbol') or ''} "
+            f"conf={confidence:.0%} emotion={emotion} skip_research={skip}"
+        )
+    )
     if thoughts:
         logs.append(_entry(f"thoughts: {thoughts[:140]}"))
 
     return {
-        "decision":      decision,
-        "confidence":    confidence,
-        "emotion":       emotion,
-        "thoughts":      thoughts,
+        "decision": decision,
+        "confidence": confidence,
+        "emotion": emotion,
+        "thoughts": thoughts,
         "skip_research": skip,
-        "log":           logs,
+        "log": logs,
     }
 
 
@@ -740,11 +766,11 @@ def research_node(state: AgentState) -> dict:
     if _sim_mode["enabled"]:
         return sim_research(state)
 
-    decision  = state.get("decision") or {}
-    symbol    = decision.get("symbol") or ""
+    decision = state.get("decision") or {}
+    symbol = decision.get("symbol") or ""
     reasoning = decision.get("reasoning") or ""
-    it        = state["research_iterations"] + 1
-    logs      = [_entry(f"research #{it}: deep-dive on {symbol}")]
+    it = state["research_iterations"] + 1
+    logs = [_entry(f"research #{it}: deep-dive on {symbol}")]
 
     prompt = (
         f"Recherche approfondie sur : {symbol} — {reasoning}\n\n"
@@ -752,28 +778,28 @@ def research_node(state: AgentState) -> dict:
         "niveau technique clé (support/résistance), consensus analystes si dispo. "
         "Sois factuel et concis."
     )
-    text = _llm(sonnet, SONNET_ID,
-                [{"role": "user", "content": prompt}],
-                max_tokens=2048, web_search=True)
+    text = _llm(
+        sonnet, SONNET_ID, [{"role": "user", "content": prompt}], max_tokens=2048, web_search=True
+    )
 
     logs.append(_entry(f"research #{it}: {len(text)} chars gathered for {symbol}"))
     return {
-        "news":                state["news"] + f"\n\n─── RESEARCH #{it} [{symbol}] ───\n{text}",
+        "news": state["news"] + f"\n\n─── RESEARCH #{it} [{symbol}] ───\n{text}",
         "research_iterations": it,
-        "log":                 logs,
+        "log": logs,
     }
 
 
 def risk_check_node(state: AgentState) -> dict:
     decision = state.get("decision") or {}
-    action   = decision.get("action", "HOLD").upper()
-    symbol   = decision.get("symbol") or ""
-    alloc    = float(decision.get("allocation_pct", 10))
+    action = decision.get("action", "HOLD").upper()
+    symbol = decision.get("symbol") or ""
+    alloc = float(decision.get("allocation_pct", 10))
     sell_pct = float(decision.get("sell_pct", 100))
-    prices   = state["prices"]
-    pos      = state["positions"]
-    balance  = state["balance"]
-    pv       = _portfolio_value(state)
+    prices = state["prices"]
+    pos = state["positions"]
+    balance = state["balance"]
+    pv = _portfolio_value(state)
 
     failures: list[str] = []
 
@@ -801,10 +827,12 @@ def risk_check_node(state: AgentState) -> dict:
     passed = len(failures) == 0
     reason = " | ".join(failures)
 
-    logs = [_entry(
-        f"risk_check: {'✓ PASS' if passed else '✗ FAIL — ' + reason}",
-        level="info" if passed else "warning",
-    )]
+    logs = [
+        _entry(
+            f"risk_check: {'✓ PASS' if passed else '✗ FAIL — ' + reason}",
+            level="info" if passed else "warning",
+        )
+    ]
     return {
         "decision": {**decision, "_risk_passed": passed, "_risk_reason": reason},
         "log": logs,
@@ -814,13 +842,13 @@ def risk_check_node(state: AgentState) -> dict:
 def make_execute_node(portfolio: Portfolio):
     def execute_node(state: AgentState) -> dict:
         decision = state.get("decision") or {}
-        action   = decision.get("action", "HOLD").upper()
-        symbol   = decision.get("symbol") or ""
-        alloc    = float(decision.get("allocation_pct", 10))
+        action = decision.get("action", "HOLD").upper()
+        symbol = decision.get("symbol") or ""
+        alloc = float(decision.get("allocation_pct", 10))
         sell_pct = float(decision.get("sell_pct", 100))
-        prices   = state["prices"]
-        pv       = portfolio.total_value(prices)
-        logs     = [_entry(f"execute: {action} {symbol}")]
+        prices = state["prices"]
+        pv = portfolio.total_value(prices)
+        logs = [_entry(f"execute: {action} {symbol}")]
 
         result: dict = {"success": False, "error": "no-op"}
 
@@ -833,32 +861,38 @@ def make_execute_node(portfolio: Portfolio):
                 if sl_pct < -STOP_LOSS_PCT:
                     sl_slip = 1 + random.uniform(-0.001, 0.001)
                     portfolio.sell(sl_sym, 100, sl_price * sl_slip)
-                    logs.append(_entry(
-                        f"STOP-LOSS triggered: {sl_sym} @ ${sl_price:.2f} (loss: {sl_pct:.1%})",
-                        "warning",
-                    ))
+                    logs.append(
+                        _entry(
+                            f"STOP-LOSS triggered: {sl_sym} @ ${sl_price:.2f} (loss: {sl_pct:.1%})",
+                            "warning",
+                        )
+                    )
 
         if action == "BUY" and symbol in prices:
-            slip  = 1 + random.uniform(-0.001, 0.001)
+            slip = 1 + random.uniform(-0.001, 0.001)
             price = prices[symbol] * slip
             amount = pv * (min(alloc, MAX_ALLOC_PCT) / 100)
             result = portfolio.buy(symbol, amount, price)
             if result["success"]:
-                logs.append(_entry(
-                    f"BUY {symbol} {result['shares']:.5f} sh @ ${price:.2f} "
-                    f"= ${result['amount']:.2f}  slip={slip-1:+.3%}"
-                ))
+                logs.append(
+                    _entry(
+                        f"BUY {symbol} {result['shares']:.5f} sh @ ${price:.2f} "
+                        f"= ${result['amount']:.2f}  slip={slip-1:+.3%}"
+                    )
+                )
                 portfolio.save_state(DB_PATH.parent / ".apex7_state.json")
 
         elif action == "SELL" and symbol:
-            slip  = 1 + random.uniform(-0.001, 0.001)
+            slip = 1 + random.uniform(-0.001, 0.001)
             price = prices.get(symbol, 0) * slip
             result = portfolio.sell(symbol, sell_pct, price)
             if result["success"]:
-                logs.append(_entry(
-                    f"SELL {symbol} {sell_pct:.0f}% @ ${price:.2f} "
-                    f"= ${result['amount']:.2f}  slip={slip-1:+.3%}"
-                ))
+                logs.append(
+                    _entry(
+                        f"SELL {symbol} {sell_pct:.0f}% @ ${price:.2f} "
+                        f"= ${result['amount']:.2f}  slip={slip-1:+.3%}"
+                    )
+                )
                 portfolio.save_state(DB_PATH.parent / ".apex7_state.json")
 
         elif action == "HOLD":
@@ -873,20 +907,21 @@ def make_execute_node(portfolio: Portfolio):
         new_pv = portfolio.total_value(prices)
 
         return {
-            "balance":           portfolio.cash,
-            "positions":         dict(portfolio.positions),
+            "balance": portfolio.cash,
+            "positions": dict(portfolio.positions),
             "portfolio_history": [new_pv],
-            "alive":             not portfolio.is_dead,
-            "log":               logs,
+            "alive": not portfolio.is_dead,
+            "log": logs,
         }
+
     return execute_node
 
 
 def make_save_memory_node(portfolio: Portfolio):
     def save_memory_node(state: AgentState) -> dict:
         decision = state.get("decision") or {}
-        action   = decision.get("action", "HOLD").upper()
-        logs     = [_entry("save_memory: persisting...")]
+        action = decision.get("action", "HOLD").upper()
+        logs = [_entry("save_memory: persisting...")]
 
         if action == "HOLD":
             logs.append(_entry("save_memory: HOLD — skipped"))
@@ -894,12 +929,11 @@ def make_save_memory_node(portfolio: Portfolio):
 
         symbol = decision.get("symbol") or ""
         prices = state["prices"]
-        price  = prices.get(symbol, 0.0)
+        price = prices.get(symbol, 0.0)
         pv_after = portfolio.total_value(prices)
 
         last_trade = next(
-            (t for t in reversed(portfolio.trade_history) if t.get("symbol") == symbol),
-            {}
+            (t for t in reversed(portfolio.trade_history) if t.get("symbol") == symbol), {}
         )
         shares = last_trade.get("shares", 0.0)
         amount = last_trade.get("amount", 0.0)
@@ -916,9 +950,9 @@ def make_save_memory_node(portfolio: Portfolio):
                 f"Émotion: {state['emotion']} | "
                 f"Portfolio après: ${pv_after:.2f}"
             )
-            lesson = _llm(haiku, HAIKU_ID,
-                          [{"role": "user", "content": lesson_prompt}],
-                          max_tokens=80).strip()
+            lesson = _llm(
+                haiku, HAIKU_ID, [{"role": "user", "content": lesson_prompt}], max_tokens=80
+            ).strip()
 
         try:
             con = sqlite3.connect(DB_PATH)
@@ -928,7 +962,12 @@ def make_save_memory_node(portfolio: Portfolio):
                 "reasoning,confidence,emotion,portfolio_value_after,lesson,source) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    _ts(), symbol, action, price, amount, shares,
+                    _ts(),
+                    symbol,
+                    action,
+                    price,
+                    amount,
+                    shares,
                     decision.get("reasoning", ""),
                     float(decision.get("confidence", 0.0)),
                     state["emotion"],
@@ -951,12 +990,13 @@ def make_save_memory_node(portfolio: Portfolio):
             "known_patterns": state["known_patterns"] + [lesson],
             "log": logs,
         }
+
     return save_memory_node
 
 
 def skip_node(state: AgentState) -> dict:
     decision = state.get("decision") or {}
-    reason   = decision.get("_risk_reason") or "trade rejected by risk_check"
+    reason = decision.get("_risk_reason") or "trade rejected by risk_check"
     return {"log": [_entry(f"skip: {reason}", "warning")]}
 
 
@@ -964,10 +1004,13 @@ def skip_node(state: AgentState) -> dict:
 # ROUTING
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _route_analyze(state: AgentState) -> str:
-    if (state.get("skip_research")
-            or state["confidence"] >= 0.70
-            or state["research_iterations"] >= 2):
+    if (
+        state.get("skip_research")
+        or state["confidence"] >= 0.70
+        or state["research_iterations"] >= 2
+    ):
         return "risk_check"
     return "research"
 
@@ -980,37 +1023,40 @@ def _route_risk(state: AgentState) -> str:
 # GRAPH
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def build_graph(portfolio: Portfolio | None = None):
     if portfolio is None:
         portfolio = Portfolio()
     g = StateGraph(AgentState)
 
     g.add_node("load_memory", load_memory_node)
-    g.add_node("fetch_data",  make_fetch_data_node(portfolio))
-    g.add_node("analyze",     analyze_node)
-    g.add_node("research",    research_node)
-    g.add_node("risk_check",  risk_check_node)
-    g.add_node("execute",     make_execute_node(portfolio))
+    g.add_node("fetch_data", make_fetch_data_node(portfolio))
+    g.add_node("analyze", analyze_node)
+    g.add_node("research", research_node)
+    g.add_node("risk_check", risk_check_node)
+    g.add_node("execute", make_execute_node(portfolio))
     g.add_node("save_memory", make_save_memory_node(portfolio))
-    g.add_node("skip",        skip_node)
+    g.add_node("skip", skip_node)
 
-    g.add_edge(START,         "load_memory")
+    g.add_edge(START, "load_memory")
     g.add_edge("load_memory", "fetch_data")
-    g.add_edge("fetch_data",  "analyze")
+    g.add_edge("fetch_data", "analyze")
 
     g.add_conditional_edges(
-        "analyze", _route_analyze,
+        "analyze",
+        _route_analyze,
         {"risk_check": "risk_check", "research": "research"},
     )
-    g.add_edge("research", "analyze")   # loop: research feeds back into analyze
+    g.add_edge("research", "analyze")  # loop: research feeds back into analyze
 
     g.add_conditional_edges(
-        "risk_check", _route_risk,
+        "risk_check",
+        _route_risk,
         {"execute": "execute", "skip": "skip"},
     )
-    g.add_edge("execute",     "save_memory")
+    g.add_edge("execute", "save_memory")
     g.add_edge("save_memory", END)
-    g.add_edge("skip",        END)
+    g.add_edge("skip", END)
 
     return g.compile()
 
@@ -1020,14 +1066,14 @@ def build_graph(portfolio: Portfolio | None = None):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _agent_status: dict = {
-    "cycle":               0,
-    "emotion":             "CALM",
-    "thoughts":            "",
-    "confidence":          0.0,
-    "decision":            None,
+    "cycle": 0,
+    "emotion": "CALM",
+    "thoughts": "",
+    "confidence": 0.0,
+    "decision": None,
     "research_iterations": 0,
-    "alive":               True,
-    "last_update":         None,
+    "alive": True,
+    "last_update": None,
 }
 
 
@@ -1038,6 +1084,7 @@ def get_agent_status() -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 # THREAD ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def start_agent(portfolio: Portfolio) -> threading.Thread:
     """Unused from dashboard. For standalone use only. See app.py _agent_loop."""
@@ -1050,36 +1097,38 @@ def start_agent(portfolio: Portfolio) -> threading.Thread:
             portfolio.log(f"=== CYCLE {cycle} START ===")
             try:
                 initial: AgentState = {
-                    "balance":             portfolio.cash,
-                    "positions":           dict(portfolio.positions),
-                    "portfolio_history":   [],
-                    "prices":              dict(portfolio.last_prices),
-                    "news":                "",
-                    "sentiment":           {},
-                    "past_trades":         [],
-                    "known_patterns":      [],
-                    "round":               cycle,
-                    "confidence":          0.0,
+                    "balance": portfolio.cash,
+                    "positions": dict(portfolio.positions),
+                    "portfolio_history": [],
+                    "prices": dict(portfolio.last_prices),
+                    "news": "",
+                    "sentiment": {},
+                    "past_trades": [],
+                    "known_patterns": [],
+                    "round": cycle,
+                    "confidence": 0.0,
                     "research_iterations": 0,
-                    "decision":            None,
-                    "emotion":             "CALM",
-                    "thoughts":            "",
-                    "log":                 [],
-                    "alive":               True,
-                    "skip_research":       False,
+                    "decision": None,
+                    "emotion": "CALM",
+                    "thoughts": "",
+                    "log": [],
+                    "alive": True,
+                    "skip_research": False,
                 }
                 result = graph.invoke(initial)
 
-                _agent_status.update({
-                    "cycle":               cycle,
-                    "emotion":             result.get("emotion", "CALM"),
-                    "thoughts":            result.get("thoughts", ""),
-                    "confidence":          result.get("confidence", 0.0),
-                    "decision":            result.get("decision"),
-                    "research_iterations": result.get("research_iterations", 0),
-                    "alive":               result.get("alive", True),
-                    "last_update":         _ts(),
-                })
+                _agent_status.update(
+                    {
+                        "cycle": cycle,
+                        "emotion": result.get("emotion", "CALM"),
+                        "thoughts": result.get("thoughts", ""),
+                        "confidence": result.get("confidence", 0.0),
+                        "decision": result.get("decision"),
+                        "research_iterations": result.get("research_iterations", 0),
+                        "alive": result.get("alive", True),
+                        "last_update": _ts(),
+                    }
+                )
 
                 # Forward structured log to portfolio (for Dash)
                 for entry in result.get("log", []):
@@ -1123,23 +1172,23 @@ if __name__ == "__main__":
     graph = build_graph(p)
 
     state: AgentState = {
-        "balance":             p.cash,
-        "positions":           {},
-        "portfolio_history":   [],
-        "prices":              {},
-        "news":                "",
-        "sentiment":           {},
-        "past_trades":         [],
-        "known_patterns":      [],
-        "round":               1,
-        "confidence":          0.0,
+        "balance": p.cash,
+        "positions": {},
+        "portfolio_history": [],
+        "prices": {},
+        "news": "",
+        "sentiment": {},
+        "past_trades": [],
+        "known_patterns": [],
+        "round": 1,
+        "confidence": 0.0,
         "research_iterations": 0,
-        "decision":            None,
-        "emotion":             "CALM",
-        "thoughts":            "",
-        "log":                 [],
-        "alive":               True,
-        "skip_research":       False,
+        "decision": None,
+        "emotion": "CALM",
+        "thoughts": "",
+        "log": [],
+        "alive": True,
+        "skip_research": False,
     }
 
     print("Running one full cycle  (calls Anthropic + yfinance)...")
@@ -1183,6 +1232,6 @@ if __name__ == "__main__":
         print(f"    [{t}] [{lvl:8s}] {e['message'][:90]}")
 
 # LangGraph Studio compatibility — module-level compiled graph
-from data import Portfolio as _Portfolio
-agent_graph = build_graph(_Portfolio())
+from core.data import Portfolio as _Portfolio
 
+agent_graph = build_graph(_Portfolio())

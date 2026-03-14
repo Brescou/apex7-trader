@@ -18,3 +18,41 @@ dependencies = [
     "yahooquery>=2.4.1",
     "yfinance>=1.2.0",
 ]
+
+[dependency-groups]
+dev = [
+    "black>=24.10.0",
+    "ruff>=0.8.0",
+    "pre-commit>=4.0.0",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+# Legacy files excluded — reformatting would pollute git history
+exclude = '''
+/(
+    agent\.py
+  | agent_multi\.py
+  | data\.py
+  | backtest\.py
+  | app\.py
+  | graph_registry\.py
+  | leaderboard\.py
+  | config\.py
+  | main\.py
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Legacy files excluded — lint-clean incrementally
+exclude = [
+    "agent.py", "agent_multi.py", "data.py", "backtest.py",
+    "app.py", "graph_registry.py", "leaderboard.py", "config.py", "main.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]
