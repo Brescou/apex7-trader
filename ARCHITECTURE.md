@@ -196,7 +196,7 @@ CREATE TABLE postmortem (
 |-----|---------|---------|
 | LIVE | Portfolio value, agent state, equity curve, activity log, agent cards (multi mode), Track Records badges | 2s interval |
 | ANALYTICS | KPI row, 4 charts, full trade table | 30s + manual |
-| BACKTEST | Scenario/config selector, portfolio vs SPY chart, trade log | on button click |
+| BACKTEST | Symbol input, period dropdown, strategy selector (simple/multi), RUN BACKTEST button; KPI row (return, vs benchmark, win rate, max drawdown, Sharpe); equity curve with SPY benchmark overlay and BUY/SELL trade markers; trade log table with P&L per row | on button click |
 | LEADERBOARD | Scenario selector, ranked agent comparison table | on button click |
 | HEATMAP | Per-symbol return heatmap + trade frequency matrix | on button click |
 | AGENTS | Per-agent accuracy, confidence, win-rate comparison table | on button click |
@@ -259,9 +259,27 @@ Key methods:
 | `save_state(path)` | Serializes cash/positions/history/peak_value to JSON |
 | `load_state(path)` | Restores state from JSON (no-op if file absent) |
 
-### `BacktestEngine` (`backtest.py`)
+### `BacktestEngine` and functional API (`backtest.py`)
 
-Self-contained simulation engine — no LLM calls, no network, no shared state with `agent.py`.
+Self-contained engine — no LLM calls, deterministic rules only. Two interfaces:
+
+**Functional API (Sprint 4, primary):**
+
+```python
+from backtest import fetch_historical, compute_indicators, run_backtest, compare_strategies
+
+df = fetch_historical("AAPL", period="6mo", interval="1d")  # yfinance OHLCV DataFrame
+df = compute_indicators(df)   # adds RSI_14, MA_20, MA_50, MACD, BB_upper, BB_lower
+result = run_backtest("AAPL", strategy="simple", period="6mo", initial_cash=1000.0, stop_loss_pct=0.05)
+# result keys: symbol, period, strategy, trades, final_value, total_return_pct,
+#              win_rate, max_drawdown_pct, sharpe_ratio, n_trades,
+#              benchmark_return_pct, vs_benchmark, equity_curve
+both = compare_strategies("AAPL", period="6mo")  # runs both "simple" and "multi"
+```
+
+Strategies: `"simple"` (RSI<30 → BUY, RSI>70 → SELL), `"multi"` (same + simulated majority vote TECH+ANLST).
+
+**Class-based API (legacy, still present):**
 
 ```python
 engine = BacktestEngine(scenario="Bull Market", config={"max_alloc_pct": 25})
@@ -270,17 +288,7 @@ result = engine.run(n_cycles=100)
 #              portfolio_history, trades_count, trade_log
 ```
 
-4 built-in scenarios:
-
-| Scenario | Drift | Volatility |
-|----------|-------|------------|
-| Bull Market | +0.0005 | 0.020 |
-| Bear Market | −0.0003 | 0.025 |
-| High Volatility | 0.0 | 0.050 |
-| Flat Market | 0.0 | 0.005 |
-
-Price model: GBM step `price *= (1 + drift + vol * N(0,1))`.
-Decision rule: RSI < 35 → BUY, RSI > 65 → SELL.
+4 built-in GBM scenarios: Bull Market (+0.0005 drift / 0.020 vol), Bear Market (−0.0003 / 0.025), High Volatility (0.0 / 0.050), Flat Market (0.0 / 0.005).
 
 ### `Leaderboard` (`leaderboard.py`)
 
@@ -302,7 +310,7 @@ feed = LiveFeed(["AAPL", "MSFT"])
 prices = feed.fetch()  # -> {"AAPL": 185.0, "MSFT": 415.0}
 ```
 
-Currently defined but not wired into the agent graph.
+Wired into `Portfolio.fetch_prices()` when `USE_LIVEFEED=True`. If `LiveFeed.fetch()` raises or returns empty, `Portfolio.fetch_prices()` falls back to `yf.Tickers` fast_info silently. The `LiveFeed` instance is created lazily once per `Portfolio` instance.
 
 ## Concurrency Model
 

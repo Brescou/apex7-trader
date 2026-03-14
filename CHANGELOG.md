@@ -4,6 +4,19 @@
 
 No uncommitted changes.
 
+## [2026-03-14] — Sprint 4: Solidification
+
+### Changed
+- `data.py`: LiveFeed wired into Portfolio.fetch_prices() with fast_info fallback
+- `data.py`: Portfolio persistence — atomic JSON save/load (save_state/load_state)
+- `backtest.py`: real yfinance data engine (fetch_historical, compute_indicators, run_backtest, compare_strategies)
+- `app.py`: BACKTEST tab rewritten with symbol/period/strategy controls, equity curve, trade markers
+
+### Added
+- `tests/test_smoke.py`: 9 regression smoke tests
+- `config.py`: USE_LIVEFEED, PORTFOLIO_STATE_PATH, PORTFOLIO_SAVE_ENABLED
+- `.gitignore`: portfolio_state.json
+
 ## [2026-03-14] — Sprint 3: Bloomberg Terminal Tab
 
 ### Added

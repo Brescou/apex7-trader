@@ -161,7 +161,7 @@ apex7-trader/
 ├── agent.py           # Simple graph: all nodes, simulation engine, _llm helper
 ├── agent_multi.py     # Multi-agent graph: 4 specialists + arbitration + run_daily_postmortem
 ├── app.py             # Dash app — layout, callbacks, UI helpers
-├── backtest.py        # BacktestEngine — GBM+RSI backtesting, 4 market scenarios
+├── backtest.py        # BacktestEngine — real yfinance backtest (fetch_historical, compute_indicators, run_backtest, compare_strategies) + legacy GBM scenarios
 ├── leaderboard.py     # Leaderboard — ranks 4 agent configs via BacktestEngine
 ├── market_data.py     # Standalone market data module — fetch_macro, fetch_watchlist_prices, fetch_news, run_screener
 ├── config.py          # All configuration constants, loaded from .env
@@ -170,8 +170,10 @@ apex7-trader/
 ├── main.py            # Entrypoint: app.run()
 ├── langgraph.json     # LangGraph Studio config — exposes both graphs
 ├── pyproject.toml     # Dependencies (uv)
+├── tests/
+│   └── test_smoke.py  # 9 regression smoke tests — no pytest, assert+print, exit 0/1
 ├── .env               # API keys (not committed)
-├── .apex7_state.json  # Portfolio snapshot — written on every trade (not committed)
+├── portfolio_state.json  # Portfolio snapshot — written on every trade (not committed)
 └── trades.db          # SQLite — auto-created on first run (not committed)
 ```
 
@@ -230,6 +232,9 @@ POSTMORTEM_HOUR = 22        # hour (0-23) at which daily postmortem runs
 ```bash
 # Start the dashboard + agent
 uv run python main.py
+
+# Run regression smoke tests (9 tests, no pytest required)
+uv run python tests/test_smoke.py
 ```
 
 Open **http://localhost:8050** in your browser.
@@ -305,11 +310,11 @@ Loads from `trades.db` on render (auto-refreshes every 30s or on manual refresh)
 
 ### BACKTEST tab
 
-Select a scenario (Bull Market / Bear Market / High Volatility / Flat Market) + max allocation %, click **RUN BACKTEST**.
+Enter a symbol (e.g. `AAPL`), select a period (1mo / 3mo / 6mo / 1y) and a strategy (`simple` / `multi`), click **RUN BACKTEST**.
 
-Runs `BacktestEngine(scenario, config).run(100)` — a fully autonomous GBM+RSI simulation with no LLM or network calls.
+Runs `run_backtest()` from `backtest.py` against real yfinance data — no LLM calls, deterministic rules only.
 
-Output: KPI row (return, Sharpe, drawdown, win rate, survival) + portfolio equity curve with DEATH FLOOR annotation + trade log.
+Output: KPI row (total return, vs SPY benchmark, win rate, max drawdown, Sharpe ratio) + equity curve with SPY overlay and BUY/SELL trade markers + trade log table.
 
 ### LEADERBOARD tab
 

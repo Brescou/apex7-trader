@@ -16,9 +16,10 @@ uv run python agent.py
 
 # Launch LangGraph Studio (visual graph debugger)
 uv run langgraph dev
-```
 
-There is no test suite. The standalone `python agent.py` serves as an integration smoke test for one full cycle.
+# Run regression smoke tests (9 tests, no pytest)
+uv run python tests/test_smoke.py
+```
 
 ## Architecture
 
@@ -34,6 +35,8 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `agent_multi.py` | Multi-agent graph: 4 specialized agents + arbitration node + `run_daily_postmortem()` |
 | `data.py` | `Portfolio` — thread-safe state (cash, positions, value history, logs); `LiveFeed` — multi-symbol yfinance wrapper |
 | `config.py` | All constants, loaded from `.env` |
+| `backtest.py` | Real backtest engine — fetch_historical, compute_indicators, run_backtest, compare_strategies (yfinance, no LLM) |
+| `tests/test_smoke.py` | 9 regression smoke tests — no pytest, assert+print, exit 0/1 |
 | `market_data.py` | Standalone market data module — fetch_macro, fetch_watchlist_prices, fetch_news, run_screener with in-memory cache |
 | `graph_registry.py` | Maps graph IDs (`"simple"` / `"multi"`) to builder functions |
 | `langgraph.json` | LangGraph Studio config — exposes both compiled graphs |
@@ -122,6 +125,9 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 | `SIM_DRIFT` | `0.0001` | Price drift per step |
 | `AGENT_GRAPH` | `simple` | `simple` or `multi` |
 | `X_BEARER_TOKEN` | — | Twitter/X sentiment (optional) |
+| `USE_LIVEFEED` | `true` | Delegate Portfolio.fetch_prices() to LiveFeed; set `false` in tests |
+| `PORTFOLIO_STATE_PATH` | `portfolio_state.json` | Path for JSON portfolio persistence |
+| `PORTFOLIO_SAVE_ENABLED` | `true` | Enable/disable Portfolio save_state(); set `false` in unit tests |
 | `MACRO_SYMBOLS` | `{"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}` | Symbols for the TERMINAL macro header bar |
 | `MARKET_DATA_CACHE_SEC` | `60` | TTL for macro data cache in `market_data.py` |
 | `WATCHLIST_CACHE_SEC` | `10` | TTL for watchlist prices cache in `market_data.py` |
@@ -144,6 +150,9 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **Multi-symbol position limit** — `Portfolio.buy()` silently returns `None` (not a dict) if the symbol is already held. Callers in `execute_node` check `result["success"]` — ensure any new callers handle a `None` return gracefully.
 - **`market_data.py` cache** — macro cached 60s, watchlist 10s to avoid yfinance rate limiting. Cache is in-memory only; resets on restart.
 - **`market_data.py` decoupled** — zero imports from `agent.py` or `agent_multi.py` by design.
+- **`USE_LIVEFEED=False` in tests** — set via env or config override to avoid yfinance rate limiting during test runs.
+- **`portfolio_state.json` created on first run** — added to `.gitignore`, do not commit.
+- **`PORTFOLIO_SAVE_ENABLED=True` by default** — set to `False` in unit tests to avoid disk writes.
 
 ## Code conventions
 
