@@ -14,10 +14,11 @@ from dash.dash_table import DataTable
 from agent import get_simulation_mode, set_simulation_mode
 from agent_multi import run_daily_postmortem
 from backtest import BacktestEngine
-from config import AGENT_GRAPH, AGENT_INTERVAL, DEATH_THRESHOLD, INITIAL_BALANCE, POSTMORTEM_HOUR, SIMULATION_MODE
+from config import AGENT_GRAPH, AGENT_INTERVAL, DEATH_THRESHOLD, INITIAL_BALANCE, POSTMORTEM_HOUR, SIMULATION_MODE, WATCHLIST
 from data import Portfolio
 from graph_registry import get_graph, get_graph_info
 from leaderboard import Leaderboard
+from market_data import fetch_macro, fetch_watchlist_prices, fetch_news, run_screener
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DESIGN TOKENS
@@ -1119,6 +1120,162 @@ def _tab_leaderboard() -> html.Div:
     })
 
 
+def _tab_terminal() -> html.Div:
+    _input_style = {
+        "background": BG_DEEP, "border": f"1px solid {BORDER}",
+        "color": TEXT_MAIN, "fontFamily": FONT, "fontSize": "11px",
+        "padding": "5px 9px", "borderRadius": "3px", "outline": "none",
+        "width": "140px",
+    }
+    _btn_style = {
+        "background": "transparent", "border": f"1px solid {GREEN}",
+        "color": GREEN, "fontFamily": FONT, "fontSize": "10px",
+        "letterSpacing": "0.1em", "padding": "5px 12px",
+        "cursor": "pointer", "borderRadius": "3px", "flexShrink": "0",
+    }
+    _tbl_hdr_style = {
+        "display": "grid",
+        "gridTemplateColumns": "80px 80px 70px 70px 55px 60px 80px",
+        "gap": "0",
+        "padding": "5px 10px",
+        "borderBottom": f"1px solid {BORDER}",
+        "fontSize": "9px", "color": TEXT_DIM, "letterSpacing": "0.1em",
+        "fontWeight": "700",
+    }
+    return html.Div([
+        # ── A) Macro Header Bar ───────────────────────────────────────────────
+        html.Div([
+            html.Div(id="macro-bar-content", style={
+                "display": "flex", "alignItems": "center", "gap": "28px", "flex": "1",
+            }),
+        ], style={
+            "background": BG_HOVER, "borderBottom": f"1px solid {BORDER}",
+            "padding": "8px 18px", "display": "flex", "alignItems": "center",
+            "flexShrink": "0",
+        }),
+
+        # ── B) 2-column layout ────────────────────────────────────────────────
+        html.Div([
+            # Left column (60%)
+            html.Div([
+                # C) Watchlist
+                html.Div([
+                    _section_label("WATCHLIST"),
+                    # Add input row
+                    html.Div([
+                        dcc.Input(
+                            id="watchlist-add-input",
+                            placeholder="Symbol (e.g. NVDA)",
+                            debounce=False,
+                            style=_input_style,
+                        ),
+                        html.Button("ADD", id="btn-watchlist-add", n_clicks=0, style=_btn_style),
+                    ], style={"display": "flex", "gap": "8px", "marginBottom": "10px", "alignItems": "center"}),
+                    # Symbol chips
+                    html.Div(id="watchlist-chips", style={
+                        "display": "flex", "flexWrap": "wrap", "gap": "6px", "marginBottom": "10px",
+                    }),
+                    # Table header
+                    html.Div([
+                        html.Span("SYMBOL"),
+                        html.Span("PRICE"),
+                        html.Span("CHG%"),
+                        html.Span("CHG$"),
+                        html.Span("RSI"),
+                        html.Span("MA20"),
+                        html.Span("VOLUME"),
+                    ], style=_tbl_hdr_style),
+                    # Table rows
+                    html.Div(id="watchlist-table"),
+                ], style={
+                    "background": BG_CARD, "border": f"1px solid {BORDER}",
+                    "borderRadius": "4px", "padding": "12px 14px", "marginBottom": "12px",
+                }),
+
+                # D) Screener
+                html.Div([
+                    _section_label("SCREENER"),
+                    html.Div([
+                        html.Div("RSI RANGE", style={"fontSize": "9px", "color": TEXT_DIM, "letterSpacing": "0.1em", "marginBottom": "4px"}),
+                        dcc.RangeSlider(
+                            id="screener-rsi",
+                            min=0, max=100, step=1, value=[30, 70],
+                            marks={0: "0", 30: "30", 50: "50", 70: "70", 100: "100"},
+                            tooltip={"placement": "bottom", "always_visible": False},
+                        ),
+                    ], style={"marginBottom": "12px"}),
+                    html.Div([
+                        html.Div([
+                            html.Div("CHG% MIN", style={"fontSize": "9px", "color": TEXT_DIM, "marginBottom": "3px"}),
+                            dcc.Input(id="screener-chg-min", type="number", placeholder="-5",
+                                      style={**_input_style, "width": "80px"}),
+                        ]),
+                        html.Div([
+                            html.Div("CHG% MAX", style={"fontSize": "9px", "color": TEXT_DIM, "marginBottom": "3px"}),
+                            dcc.Input(id="screener-chg-max", type="number", placeholder="5",
+                                      style={**_input_style, "width": "80px"}),
+                        ]),
+                        html.Div([
+                            dcc.Checklist(
+                                id="screener-flags",
+                                options=[
+                                    {"label": " Above MA20", "value": "above_ma20"},
+                                    {"label": " Vol > 1M",   "value": "high_volume"},
+                                ],
+                                value=[],
+                                style={"fontSize": "11px", "color": TEXT_MAIN, "display": "flex", "flexDirection": "column", "gap": "4px"},
+                                labelStyle={"display": "flex", "alignItems": "center", "gap": "4px", "cursor": "pointer"},
+                            ),
+                        ], style={"display": "flex", "alignItems": "center"}),
+                        html.Button("RUN SCREENER", id="btn-screener-run", n_clicks=0, style={
+                            **_btn_style, "border": f"1px solid {PURPLE}", "color": PURPLE,
+                            "letterSpacing": "0.12em", "padding": "6px 14px",
+                        }),
+                    ], style={"display": "flex", "gap": "16px", "alignItems": "flex-end", "marginBottom": "12px"}),
+                    # Results table header
+                    html.Div([
+                        html.Span("SYMBOL"),
+                        html.Span("PRICE"),
+                        html.Span("CHG%"),
+                        html.Span("CHG$"),
+                        html.Span("RSI"),
+                        html.Span("MA20"),
+                        html.Span("VOLUME"),
+                    ], style=_tbl_hdr_style),
+                    html.Div(id="screener-results"),
+                ], style={
+                    "background": BG_CARD, "border": f"1px solid {BORDER}",
+                    "borderRadius": "4px", "padding": "12px 14px",
+                }),
+            ], style={"width": "60%", "paddingRight": "10px", "display": "flex", "flexDirection": "column"}),
+
+            # Right column (40%)
+            html.Div([
+                html.Div([
+                    html.Div(id="news-header", style={
+                        "fontSize": "9px", "fontWeight": "700", "letterSpacing": "0.18em",
+                        "color": TEXT_DIM, "textTransform": "uppercase",
+                        "borderBottom": f"1px solid {BORDER}",
+                        "paddingBottom": "6px", "marginBottom": "10px",
+                    }),
+                    html.Div(id="news-feed", style={
+                        "maxHeight": "600px", "overflowY": "auto",
+                    }),
+                ], style={
+                    "background": BG_CARD, "border": f"1px solid {BORDER}",
+                    "borderRadius": "4px", "padding": "12px 14px",
+                }),
+            ], style={"width": "40%", "paddingLeft": "10px", "display": "flex", "flexDirection": "column"}),
+        ], style={
+            "display": "flex", "flex": "1", "padding": "14px 16px",
+            "overflowY": "auto", "minHeight": "0",
+        }),
+    ], style={
+        "display": "flex", "flexDirection": "column",
+        "height": "calc(100vh - 96px)", "overflow": "hidden",
+    })
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # APP
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1229,6 +1386,11 @@ app.layout = html.Div(
         dcc.Interval(id="tick",           interval=2000,  n_intervals=0),
         dcc.Interval(id="analytics-tick", interval=30000, n_intervals=0),
         dcc.Interval(id="agents-tick",    interval=60000, n_intervals=0),
+        dcc.Interval(id="macro-interval",     interval=60000,  n_intervals=0),
+        dcc.Interval(id="watchlist-interval", interval=10000,  n_intervals=0),
+        dcc.Interval(id="news-interval",      interval=120000, n_intervals=0),
+        dcc.Store(id="terminal-watchlist",      data=list(WATCHLIST)),
+        dcc.Store(id="terminal-active-symbol",  data=WATCHLIST[0] if WATCHLIST else "AAPL"),
 
         # ── TOP BAR (48px) ───────────────────────────────────────────────────
         html.Div(id="top-bar", children=[
@@ -1393,6 +1555,21 @@ app.layout = html.Div(
                         "background": BG_CARD, "cursor": "pointer",
                     },
                 ),
+                dcc.Tab(
+                    label="TERMINAL", value="terminal",
+                    style={
+                        "color": TEXT_DIM, "fontSize": "11px", "letterSpacing": "0.15em",
+                        "fontFamily": FONT, "fontWeight": "700", "padding": "0 16px",
+                        "border": "none", "borderBottom": f"2px solid transparent",
+                        "background": BG_CARD, "cursor": "pointer",
+                    },
+                    selected_style={
+                        "color": BLUE, "fontSize": "11px", "letterSpacing": "0.15em",
+                        "fontFamily": FONT, "fontWeight": "700", "padding": "0 16px",
+                        "border": "none", "borderBottom": f"2px solid {BLUE}",
+                        "background": BG_CARD, "cursor": "pointer",
+                    },
+                ),
             ],
             style={"height": "38px", "flexShrink": "0"},
             colors={"border": BORDER, "primary": GREEN, "background": BG_CARD},
@@ -1419,6 +1596,7 @@ def _render_tab(tab: str):
     if tab == "leaderboard": return _tab_leaderboard()
     if tab == "heatmap":     return _tab_heatmap()
     if tab == "agents":      return _tab_agents()
+    if tab == "terminal":    return _tab_terminal()
     return _tab_live()
 
 
@@ -2732,6 +2910,364 @@ def _agents_refresh(_, __):
     ])
 
     return html.Div([agents_section, postmortem_section])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CALLBACKS — TERMINAL TAB
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _fmt_volume(v) -> str:
+    """Format volume as 45.2M, 1.2B, etc."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "—"
+    if v >= 1_000_000_000:
+        return f"{v / 1_000_000_000:.1f}B"
+    if v >= 1_000_000:
+        return f"{v / 1_000_000:.1f}M"
+    if v >= 1_000:
+        return f"{v / 1_000:.1f}K"
+    return str(int(v))
+
+
+def _watchlist_row(sym: str, data: dict, active: bool) -> html.Div:
+    chg_pct = data.get("change_pct", 0.0) or 0.0
+    chg_abs = data.get("change_abs", 0.0) or 0.0
+    price   = data.get("price", 0.0) or 0.0
+    rsi     = data.get("rsi_14")
+    above   = data.get("above_ma20", None)
+    volume  = data.get("volume", 0)
+    sym_col = GREEN if chg_pct >= 0 else RED
+    chg_col = GREEN if chg_pct >= 0 else RED
+
+    if rsi is not None:
+        try:
+            rsi_f = float(rsi)
+            rsi_col = RED if rsi_f > 70 else (GREEN if rsi_f < 30 else TEXT_DIM)
+            rsi_el = html.Span(f"{rsi_f:.0f}", style={
+                "fontSize": "10px", "fontWeight": "700", "color": rsi_col,
+                "background": f"{rsi_col}22", "padding": "1px 5px", "borderRadius": "2px",
+            })
+        except (TypeError, ValueError):
+            rsi_el = html.Span("—", style={"color": TEXT_DIM, "fontSize": "10px"})
+    else:
+        rsi_el = html.Span("—", style={"color": TEXT_DIM, "fontSize": "10px"})
+
+    if above is True:
+        ma20_el = html.Span("▲", style={"color": GREEN, "fontSize": "12px"})
+    elif above is False:
+        ma20_el = html.Span("▼", style={"color": RED, "fontSize": "12px"})
+    else:
+        ma20_el = html.Span("—", style={"color": TEXT_DIM, "fontSize": "10px"})
+
+    row_bg = f"{BLUE}08" if active else "transparent"
+    row_border = f"1px solid {BLUE}44" if active else f"1px solid transparent"
+
+    return html.Div([
+        html.Button(
+            "",
+            id={"type": "watchlist-row-btn", "index": sym},
+            n_clicks=0,
+            style={
+                "position": "absolute", "inset": "0", "background": "transparent",
+                "border": "none", "cursor": "pointer", "width": "100%", "height": "100%",
+            },
+        ),
+        html.Span(sym, style={
+            "fontSize": "11px", "fontWeight": "700", "color": sym_col,
+            "width": "80px", "flexShrink": "0",
+        }),
+        html.Span(f"{price:.2f}", style={"fontSize": "11px", "color": TEXT_MAIN, "width": "80px", "flexShrink": "0"}),
+        html.Span(f"{chg_pct:+.2f}%", style={"fontSize": "11px", "color": chg_col, "fontWeight": "700", "width": "70px", "flexShrink": "0"}),
+        html.Span(f"{chg_abs:+.2f}", style={"fontSize": "11px", "color": chg_col, "width": "70px", "flexShrink": "0"}),
+        html.Div(rsi_el, style={"width": "55px", "flexShrink": "0"}),
+        html.Div(ma20_el, style={"width": "60px", "flexShrink": "0"}),
+        html.Span(_fmt_volume(volume), style={"fontSize": "10px", "color": TEXT_DIM, "width": "80px", "flexShrink": "0"}),
+    ], style={
+        "position": "relative",
+        "display": "grid",
+        "gridTemplateColumns": "80px 80px 70px 70px 55px 60px 80px",
+        "gap": "0",
+        "padding": "7px 10px",
+        "background": row_bg,
+        "border": row_border,
+        "borderRadius": "2px",
+        "marginBottom": "2px",
+        "alignItems": "center",
+    })
+
+
+@app.callback(
+    Output("macro-bar-content", "children"),
+    Input("macro-interval", "n_intervals"),
+    prevent_initial_call=False,
+)
+def _update_macro_bar(_):
+    try:
+        data = fetch_macro()
+    except Exception:
+        data = {}
+
+    blocs = []
+    for key in ("VIX", "SPY", "DXY"):
+        d = data.get(key, {})
+        price  = d.get("price")
+        chg    = d.get("change_pct")
+        dirn   = d.get("direction", "flat")
+
+        if price is None:
+            price_str = "—"
+        else:
+            price_str = f"{float(price):.2f}"
+
+        if chg is None:
+            chg_str = "—"
+            chg_col = TEXT_DIM
+            arrow   = ""
+        else:
+            chg_f   = float(chg)
+            chg_col = GREEN if dirn == "up" else (RED if dirn == "down" else TEXT_DIM)
+            arrow   = "▲ " if dirn == "up" else ("▼ " if dirn == "down" else "")
+            chg_str = f"{arrow}{chg_f:+.2f}%"
+
+        blocs.append(html.Div([
+            html.Span(key, style={
+                "fontSize": "9px", "color": TEXT_DIM, "letterSpacing": "0.12em",
+                "marginRight": "8px", "fontWeight": "700",
+            }),
+            html.Span(price_str, style={
+                "fontSize": "13px", "fontWeight": "700", "color": TEXT_MAIN,
+                "marginRight": "6px",
+            }),
+            html.Span(chg_str, style={
+                "fontSize": "11px", "color": chg_col, "fontWeight": "600",
+            }),
+        ], style={"display": "flex", "alignItems": "center"}))
+
+    ts = data.get("updated_at", "")
+    ts_el = html.Span(f"⏱ {ts}" if ts else "", style={
+        "fontSize": "9px", "color": TEXT_DIM, "marginLeft": "auto",
+        "letterSpacing": "0.08em",
+    })
+
+    return blocs + [ts_el]
+
+
+@app.callback(
+    Output("terminal-watchlist", "data"),
+    Input("btn-watchlist-add", "n_clicks"),
+    State("watchlist-add-input", "value"),
+    State("terminal-watchlist", "data"),
+    prevent_initial_call=True,
+)
+def _add_symbol(_, symbol, watchlist):
+    if not symbol:
+        return watchlist or []
+    sym = symbol.strip().upper()
+    wl  = list(watchlist or [])
+    if sym and sym not in wl:
+        wl.append(sym)
+    return wl
+
+
+@app.callback(
+    Output("terminal-watchlist", "data", allow_duplicate=True),
+    Input({"type": "watchlist-remove", "index": MATCH}, "n_clicks"),
+    State("terminal-watchlist", "data"),
+    prevent_initial_call=True,
+)
+def _remove_symbol(_, watchlist):
+    sym = ctx.triggered_id["index"]
+    wl  = [s for s in (watchlist or []) if s != sym]
+    return wl
+
+
+@app.callback(
+    Output("watchlist-chips", "children"),
+    Output("watchlist-table", "children"),
+    Input("terminal-watchlist", "data"),
+    Input("watchlist-interval", "n_intervals"),
+    Input("terminal-active-symbol", "data"),
+)
+def _update_watchlist(watchlist, _, active_sym):
+    wl = watchlist or []
+    if not wl:
+        chips = []
+        table = html.Div("No symbols. Add one above.", style={
+            "color": TEXT_DIM, "fontSize": "11px", "fontStyle": "italic", "padding": "10px",
+        })
+        return chips, table
+
+    try:
+        prices = fetch_watchlist_prices(wl)
+    except Exception:
+        prices = {}
+
+    # Build chips
+    chips = []
+    for sym in wl:
+        d = prices.get(sym, {})
+        chg = d.get("change_pct", 0.0) or 0.0
+        dot_col = GREEN if chg >= 0 else RED
+        is_active = sym == active_sym
+        chip_border = "1px solid #ffffff" if is_active else f"1px solid {BORDER}"
+        chips.append(html.Div([
+            html.Span("●", style={"color": dot_col, "marginRight": "4px", "fontSize": "9px"}),
+            html.Span(sym, style={"fontSize": "10px", "fontWeight": "700", "color": TEXT_MAIN}),
+            html.Button(
+                "×",
+                id={"type": "watchlist-remove", "index": sym},
+                n_clicks=0,
+                style={
+                    "background": "transparent", "border": "none",
+                    "color": TEXT_DIM, "cursor": "pointer",
+                    "fontSize": "12px", "padding": "0 0 0 4px",
+                    "lineHeight": "1", "fontFamily": FONT,
+                },
+            ),
+        ], style={
+            "display": "inline-flex", "alignItems": "center",
+            "background": BG_DEEP, "border": chip_border,
+            "borderRadius": "3px", "padding": "3px 6px",
+        }))
+
+    # Build table rows
+    rows = []
+    for sym in wl:
+        d = prices.get(sym, {})
+        rows.append(_watchlist_row(sym, d, sym == active_sym))
+
+    return chips, html.Div(rows)
+
+
+@app.callback(
+    Output("terminal-active-symbol", "data"),
+    Input({"type": "watchlist-row-btn", "index": MATCH}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def _select_symbol(_):
+    return ctx.triggered_id["index"]
+
+
+@app.callback(
+    Output("news-feed", "children"),
+    Output("news-header", "children"),
+    Input("terminal-active-symbol", "data"),
+    Input("news-interval", "n_intervals"),
+)
+def _update_news(symbol, _):
+    sym = symbol or (WATCHLIST[0] if WATCHLIST else "AAPL")
+    header = f"NEWS — {sym}"
+
+    try:
+        items = fetch_news(sym)
+    except Exception:
+        items = []
+
+    if not items:
+        return html.Div("No news available.", style={
+            "color": TEXT_DIM, "fontSize": "11px", "fontStyle": "italic", "padding": "8px",
+        }), header
+
+    cards = []
+    for item in items:
+        sentiment = item.get("sentiment", "neutral")
+        if sentiment == "positive":
+            sent_col  = GREEN
+            sent_dot  = "🟢"
+        elif sentiment == "negative":
+            sent_col  = RED
+            sent_dot  = "🔴"
+        else:
+            sent_col  = GRAY
+            sent_dot  = "⚪"
+
+        title  = item.get("title", "")
+        source = item.get("source", "")
+        age    = item.get("age", "")
+        url    = item.get("url", "#")
+
+        cards.append(html.Div([
+            html.Div([
+                html.Span(sent_dot, style={"marginRight": "6px", "fontSize": "10px"}),
+                html.A(
+                    title,
+                    href=url,
+                    target="_blank",
+                    style={
+                        "color": TEXT_MAIN, "fontSize": "11px", "fontWeight": "600",
+                        "textDecoration": "none", "lineHeight": "1.4",
+                        "fontFamily": FONT,
+                    },
+                ),
+            ], style={"display": "flex", "alignItems": "flex-start", "marginBottom": "4px"}),
+            html.Div(
+                f"{source}  ·  {age}",
+                style={"fontSize": "9px", "color": TEXT_DIM, "fontStyle": "italic"},
+            ),
+        ], style={
+            "borderLeft": f"3px solid {sent_col}",
+            "background": f"{sent_col}07",
+            "padding": "8px 10px",
+            "marginBottom": "7px",
+            "borderRadius": "0 3px 3px 0",
+        }))
+
+    return html.Div(cards), header
+
+
+@app.callback(
+    Output("screener-results", "children"),
+    Input("btn-screener-run", "n_clicks"),
+    State("terminal-watchlist", "data"),
+    State("screener-rsi", "value"),
+    State("screener-chg-min", "value"),
+    State("screener-chg-max", "value"),
+    State("screener-flags", "value"),
+    prevent_initial_call=True,
+)
+def _run_screener(_, watchlist, rsi_range, chg_min, chg_max, flags):
+    wl = watchlist or []
+    if not wl:
+        return html.Div("No symbols to screen.", style={"color": TEXT_DIM, "fontSize": "11px", "padding": "8px"})
+
+    rsi_min = (rsi_range or [0, 100])[0]
+    rsi_max = (rsi_range or [0, 100])[1]
+
+    filters: dict = {"rsi_min": rsi_min, "rsi_max": rsi_max}
+    if chg_min is not None:
+        try:
+            filters["change_pct_min"] = float(chg_min)
+        except (TypeError, ValueError):
+            pass
+    if chg_max is not None:
+        try:
+            filters["change_pct_max"] = float(chg_max)
+        except (TypeError, ValueError):
+            pass
+    flags = flags or []
+    if "above_ma20" in flags:
+        filters["above_ma20"] = True
+    if "high_volume" in flags:
+        filters["volume_min"] = 1_000_000
+
+    try:
+        results = run_screener(wl, filters)
+    except Exception:
+        results = []
+
+    if not results:
+        return html.Div("No symbols match the current filters.", style={
+            "color": TEXT_DIM, "fontSize": "11px", "fontStyle": "italic", "padding": "8px",
+        })
+
+    rows = []
+    for item in results:
+        sym = item.get("symbol", "")
+        rows.append(_watchlist_row(sym, item, False))
+
+    return html.Div(rows, style={"background": BG_HOVER, "borderRadius": "3px", "padding": "4px"})
 
 
 if __name__ == "__main__":
