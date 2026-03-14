@@ -42,7 +42,7 @@ The entire reasoning process is visible in real time on the terminal dashboard.
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        app.py (Dash)                        │
-│  LIVE · ANALYTICS · BACKTEST · LEADERBOARD · HEATMAP · AGENTS│
+│  LIVE · ANALYTICS · BACKTEST · LEADERBOARD · HEATMAP · AGENTS · TERMINAL│
 │  dcc.Interval (2s) → callbacks → portfolio state display    │
 └──────────────────────────┬──────────────────────────────────┘
                            │ reads
@@ -163,6 +163,7 @@ apex7-trader/
 ├── app.py             # Dash app — layout, callbacks, UI helpers
 ├── backtest.py        # BacktestEngine — GBM+RSI backtesting, 4 market scenarios
 ├── leaderboard.py     # Leaderboard — ranks 4 agent configs via BacktestEngine
+├── market_data.py     # Standalone market data module — fetch_macro, fetch_watchlist_prices, fetch_news, run_screener
 ├── config.py          # All configuration constants, loaded from .env
 ├── data.py            # Portfolio class + LiveFeed — thread-safe state, buy/sell/log
 ├── graph_registry.py  # Maps graph IDs ("simple"/"multi") to builder functions
@@ -329,6 +330,28 @@ Per-agent comparison table loaded from `agent_memory` in `trades.db`:
 - Accuracy rate (correct votes / total votes)
 - Average confidence
 - Win rate per agent
+
+### TERMINAL tab
+
+Bloomberg-style market terminal with live data from `market_data.py`.
+
+```
+┌────────────────────────────────────────────────┐
+│ TERMINAL                                       │
+├────────────────────────────────────────────────┤
+│ VIX 18.50 ▼-2.1% │ SPY 512.3 ▲+0.8% │ DXY... │
+├────────────────┬───────────────────────────────┤
+│ WATCHLIST      │  NEWS — AAPL                  │
+│ [AAPL ×][TSLA] │  🟢 Apple beats estimates...  │
+│ SCREENER       │  🔴 Market volatility rises   │
+│ RSI [30──70]   │  ⚪ Trading volume normal     │
+└────────────────┴───────────────────────────────┘
+```
+
+- **Macro bar** — VIX, SPY, DXY with price + change %; refreshes every 60s
+- **Watchlist** — add/remove symbols, table with price, RSI, MA20, volume; refreshes every 10s
+- **Screener** — filter by RSI range, CHG%, MA20, volume; runs on demand
+- **News feed** — latest headlines for the selected symbol with sentiment indicator; refreshes every 120s
 
 ---
 

@@ -200,6 +200,22 @@ CREATE TABLE postmortem (
 | LEADERBOARD | Scenario selector, ranked agent comparison table | on button click |
 | HEATMAP | Per-symbol return heatmap + trade frequency matrix | on button click |
 | AGENTS | Per-agent accuracy, confidence, win-rate comparison table | on button click |
+| TERMINAL | Macro header bar (VIX/SPY/DXY), watchlist table, screener, news feed | macro: 60s, watchlist: 10s, news: 120s |
+
+New `dcc.Store` ids (TERMINAL tab):
+
+| Store id | Purpose |
+|----------|---------|
+| `terminal-watchlist` | List of symbols shown in the watchlist (initialized from config.WATCHLIST) |
+| `terminal-active-symbol` | Currently selected symbol for the news feed |
+
+New `dcc.Interval` ids (TERMINAL tab):
+
+| Interval id | Period | Drives |
+|-------------|--------|--------|
+| `macro-interval` | 60s | Macro header bar refresh |
+| `watchlist-interval` | 10s | Watchlist table refresh |
+| `news-interval` | 120s | News feed refresh |
 
 Agent cards panel (LIVE tab, multi-agent mode only):
 - TECH (blue), ANLST (green), RISK (orange), MACRO (purple) — each collapsible
@@ -297,6 +313,19 @@ Currently defined but not wired into the agent graph.
 - `_ctrl` dict (pause/step) and `_state` dict are mutated by both threads — not lock-protected (acceptable: only booleans and references)
 - Graph switch and reset: agent thread is killed (portfolio.is_dead = True), new Portfolio + thread created
 
+## market_data.py — Standalone Market Data Module
+
+Zero imports from `agent.py` or `agent_multi.py`. Used exclusively by `app.py` TERMINAL tab callbacks.
+
+| Function | Cache TTL | Description |
+|----------|-----------|-------------|
+| `fetch_macro()` | 60s | Fetches VIX (`^VIX`), SPY, DXY (`DX-Y.NYB`) via yfinance; returns price, change_pct, direction; fallback to last known value on error |
+| `fetch_watchlist_prices(symbols)` | 10s | Per-symbol: price, change_pct, change_abs, volume, high_52w, low_52w, rsi_14 (14-day daily close), above_ma20 (bool) |
+| `fetch_news(symbol, max_items)` | none | Uses `yf.Ticker.news`; returns title, source, age ("Xm/Xh/Xd ago"), url, sentiment (positive/negative/neutral via keyword rule) |
+| `run_screener(symbols, filters)` | n/a | Reuses `fetch_watchlist_prices()`; filters: rsi_min/max, change_pct_min, above_ma20, volume_min; returns list of passing symbols |
+
+Cache uses `threading.Lock()` — thread-safe for concurrent Dash callbacks.
+
 ## Configuration
 
 | Constant | Source | Default | Effect |
@@ -307,6 +336,10 @@ Currently defined but not wired into the agent graph.
 | `SIM_DRIFT` | env | `0.0001` | Price drift per step |
 | `AGENT_GRAPH` | env | `simple` | `simple` or `multi` |
 | `X_BEARER_TOKEN` | env | — | Twitter/X sentiment (optional) |
+| `MACRO_SYMBOLS` | hardcoded | `{"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}` | Symbols fetched for TERMINAL macro bar |
+| `MARKET_DATA_CACHE_SEC` | hardcoded | `60` | Macro cache TTL in `market_data.py` |
+| `WATCHLIST_CACHE_SEC` | hardcoded | `10` | Watchlist prices cache TTL in `market_data.py` |
+| `NEWS_MAX_ITEMS` | hardcoded | `8` | Max news items from `fetch_news()` |
 | `STOP_LOSS_PCT` | hardcoded | `0.05` | Stop-loss threshold (5%) — enforced as a pre-check loop in `execute_node` before the agent decision |
 | `POSTMORTEM_HOUR` | hardcoded | `22` | Hour (0–23) at which daily postmortem runs |
 | `WATCHLIST` | hardcoded | 5 tickers | AAPL, MSFT, GOOG, AMZN, TSLA |

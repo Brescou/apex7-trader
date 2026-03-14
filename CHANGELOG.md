@@ -4,6 +4,14 @@
 
 No uncommitted changes.
 
+## [2026-03-14] — Sprint 3: Bloomberg Terminal Tab
+
+### Added
+- `market_data.py`: standalone market data module (fetch_macro, fetch_watchlist_prices, fetch_news, run_screener)
+- TERMINAL tab in Dash dashboard (8th tab): macro bar, watchlist, screener, news feed
+- In-memory cache: 60s macro / 10s watchlist prices
+- `MACRO_SYMBOLS`, `MARKET_DATA_CACHE_SEC`, `WATCHLIST_CACHE_SEC`, `NEWS_MAX_ITEMS` config constants
+
 ## [2026-03-07] — Stop-loss enforcement + portfolio persistence + dynamic agent weights + real backtest/leaderboard engines
 
 - `agent.py` / `execute_node`: stop-loss pre-check loop runs before agent decision — all open positions checked against `STOP_LOSS_PCT` (5%); triggers immediate SELL with slippage if threshold breached

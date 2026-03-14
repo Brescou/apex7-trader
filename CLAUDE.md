@@ -34,6 +34,7 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `agent_multi.py` | Multi-agent graph: 4 specialized agents + arbitration node + `run_daily_postmortem()` |
 | `data.py` | `Portfolio` — thread-safe state (cash, positions, value history, logs); `LiveFeed` — multi-symbol yfinance wrapper |
 | `config.py` | All constants, loaded from `.env` |
+| `market_data.py` | Standalone market data module — fetch_macro, fetch_watchlist_prices, fetch_news, run_screener with in-memory cache |
 | `graph_registry.py` | Maps graph IDs (`"simple"` / `"multi"`) to builder functions |
 | `langgraph.json` | LangGraph Studio config — exposes both compiled graphs |
 
@@ -121,6 +122,10 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 | `SIM_DRIFT` | `0.0001` | Price drift per step |
 | `AGENT_GRAPH` | `simple` | `simple` or `multi` |
 | `X_BEARER_TOKEN` | — | Twitter/X sentiment (optional) |
+| `MACRO_SYMBOLS` | `{"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}` | Symbols for the TERMINAL macro header bar |
+| `MARKET_DATA_CACHE_SEC` | `60` | TTL for macro data cache in `market_data.py` |
+| `WATCHLIST_CACHE_SEC` | `10` | TTL for watchlist prices cache in `market_data.py` |
+| `NEWS_MAX_ITEMS` | `8` | Max news items returned by `fetch_news()` |
 
 `WATCHLIST`, `INITIAL_BALANCE`, `DEATH_THRESHOLD`, `MAX_POSITIONS`, `MAX_ALLOC_PCT`, `AGENT_INTERVAL`, `STOP_LOSS_PCT`, and `POSTMORTEM_HOUR` are hardcoded in `config.py` and not overridable by env vars.
 
@@ -137,6 +142,8 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **Postmortem thread only in `app.py`** — `run_daily_postmortem()` is never called from `main.py` or `agent.py`. It only runs when the full Dash app is started, not from standalone `python agent.py`.
 - **`agent_memory` inserts in live path only for specialist nodes** — in simulation mode, `sim_technician`, `sim_analyst`, `sim_risk_manager`, `sim_macro_watcher` each insert into `agent_memory` with `source='simulation'`. In live mode, `technician_node`, `analyst_node`, `risk_manager_node`, `macro_watcher_node` each insert with `source='live'`. The simple graph does not write to `agent_memory` at all.
 - **Multi-symbol position limit** — `Portfolio.buy()` silently returns `None` (not a dict) if the symbol is already held. Callers in `execute_node` check `result["success"]` — ensure any new callers handle a `None` return gracefully.
+- **`market_data.py` cache** — macro cached 60s, watchlist 10s to avoid yfinance rate limiting. Cache is in-memory only; resets on restart.
+- **`market_data.py` decoupled** — zero imports from `agent.py` or `agent_multi.py` by design.
 
 ## Code conventions
 
