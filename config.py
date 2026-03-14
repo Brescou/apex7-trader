@@ -36,3 +36,7 @@ MACRO_SYMBOLS = {"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}
 MARKET_DATA_CACHE_SEC = 60
 WATCHLIST_CACHE_SEC = 10
 NEWS_MAX_ITEMS = 8
+
+USE_LIVEFEED = os.getenv("USE_LIVEFEED", "true").lower() == "true"
+PORTFOLIO_STATE_PATH = os.getenv("PORTFOLIO_STATE_PATH", "portfolio_state.json")
+PORTFOLIO_SAVE_ENABLED = os.getenv("PORTFOLIO_SAVE_ENABLED", "true").lower() == "true"

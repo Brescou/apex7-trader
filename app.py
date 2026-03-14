@@ -1003,33 +1003,59 @@ def _tab_analytics() -> html.Div:
 
 
 def _tab_backtest() -> html.Div:
-    scenarios = ["Bull Market", "Bear Market", "High Volatility", "Flat Market", "Flash Crash"]
-    configs   = ["Default", "Aggressive", "Conservative", "YOLO"]
-
+    _input_style = {
+        "background": BG_DEEP, "border": f"1px solid {BORDER}",
+        "color": TEXT_MAIN, "fontFamily": FONT, "fontSize": "11px",
+        "padding": "5px 9px", "borderRadius": "3px", "outline": "none",
+        "width": "100px",
+    }
     return html.Div([
         # Controls row
         html.Div([
-            dcc.Dropdown(
-                id="bt-scenario", options=[{"label": s, "value": s} for s in scenarios],
-                value=scenarios[0], clearable=False,
-                style={"width": "200px", "background": BG_CARD, "color": TEXT_MAIN,
-                       "fontFamily": FONT, "fontSize": "11px"},
-            ),
-            dcc.Dropdown(
-                id="bt-config", options=[{"label": c, "value": c} for c in configs],
-                value=configs[0], clearable=False,
-                style={"width": "160px", "background": BG_CARD, "color": TEXT_MAIN,
-                       "fontFamily": FONT, "fontSize": "11px"},
-            ),
+            html.Div([
+                html.Div("SYMBOL", style={"fontSize": "9px", "color": TEXT_DIM,
+                                          "letterSpacing": "0.1em", "marginBottom": "3px"}),
+                dcc.Input(
+                    id="backtest-symbol", type="text",
+                    placeholder="AAPL", value="AAPL", debounce=True,
+                    style=_input_style,
+                ),
+            ]),
+            html.Div([
+                html.Div("PERIOD", style={"fontSize": "9px", "color": TEXT_DIM,
+                                          "letterSpacing": "0.1em", "marginBottom": "3px"}),
+                dcc.Dropdown(
+                    id="backtest-period",
+                    options=[{"label": p, "value": p} for p in ["1mo", "3mo", "6mo", "1y"]],
+                    value="6mo", clearable=False,
+                    style={"width": "100px", "background": BG_CARD, "color": TEXT_MAIN,
+                           "fontFamily": FONT, "fontSize": "11px"},
+                ),
+            ]),
+            html.Div([
+                html.Div("STRATEGY", style={"fontSize": "9px", "color": TEXT_DIM,
+                                            "letterSpacing": "0.1em", "marginBottom": "3px"}),
+                dcc.RadioItems(
+                    id="backtest-strategy",
+                    options=[{"label": " SIMPLE", "value": "simple"},
+                             {"label": " MULTI",  "value": "multi"}],
+                    value="simple", inline=True,
+                    style={"fontSize": "11px", "color": TEXT_MAIN, "display": "flex",
+                           "gap": "12px", "alignItems": "center"},
+                    labelStyle={"display": "flex", "alignItems": "center", "gap": "4px",
+                                "cursor": "pointer"},
+                ),
+            ]),
             html.Button("▶ RUN BACKTEST", id="btn-backtest-run", n_clicks=0, style={
                 "background": "transparent", "border": f"1px solid {GREEN}",
                 "color": GREEN, "fontFamily": FONT, "fontSize": "10px",
                 "letterSpacing": "0.12em", "padding": "6px 16px",
-                "cursor": "pointer", "borderRadius": "3px",
+                "cursor": "pointer", "borderRadius": "3px", "alignSelf": "flex-end",
             }),
         ], style={
-            "display": "flex", "gap": "10px", "alignItems": "center",
+            "display": "flex", "gap": "16px", "alignItems": "flex-end",
             "padding": "12px 16px", "borderBottom": f"1px solid {BORDER}",
+            "flexShrink": "0",
         }),
 
         dcc.Loading(
@@ -2308,94 +2334,248 @@ def _analytics_refresh(_, __):
 @app.callback(
     Output("bt-results", "children"),
     Input("btn-backtest-run", "n_clicks"),
-    [State("bt-scenario", "value"), State("bt-config", "value")],
+    [State("backtest-symbol", "value"),
+     State("backtest-period", "value"),
+     State("backtest-strategy", "value")],
     prevent_initial_call=True,
 )
-def _backtest_run(n_clicks, scenario, config):
+def _backtest_run(n_clicks, symbol, period, strategy):
     if not n_clicks:
         return html.Div()
 
-    engine = BacktestEngine(scenario, config or {})
-    result = engine.run()
+    from backtest import run_backtest as _run_backtest
+    try:
+        result = _run_backtest(
+            symbol   = (symbol or "AAPL").strip().upper(),
+            period   = period   or "6mo",
+            strategy = strategy or "simple",
+        )
+    except Exception as e:
+        return html.Div(
+            f"Backtest error: {e}",
+            style={"color": RED, "fontSize": "12px", "padding": "20px", "fontStyle": "italic"},
+        )
 
-    survived_badge = html.Span("✓ SURVIVED", style={"color": GREEN, "fontWeight": "700"}) \
-        if result.get("survived") else \
-        html.Span("💀 LIQUIDATED", style={"color": RED, "fontWeight": "700"})
+    sym       = result.get("symbol", symbol or "AAPL")
+    per       = result.get("period",  period  or "6mo")
+    strat     = result.get("strategy", strategy or "simple")
+    ret_pct   = float(result.get("total_return_pct", 0.0))
+    vs_bench  = float(result.get("vs_benchmark", 0.0))
+    win_rate  = float(result.get("win_rate", 0.0))
+    drawdown  = float(result.get("max_drawdown_pct", 0.0))
+    sharpe    = float(result.get("sharpe_ratio", 0.0))
+    n_trades  = int(result.get("n_trades", 0))
+    bench_pct = float(result.get("benchmark_return_pct", 0.0))
+    equity    = result.get("equity_curve", [INITIAL_BALANCE])
+    trades    = result.get("trades", [])
 
+    # ── KPI row (5 metrics) ──────────────────────────────────────────────────
     kpis = [
-        ("RETURN",       f"{result.get('return_pct', 0):+.1f}%",   GREEN if result.get('return_pct', 0) >= 0 else RED),
-        ("SHARPE",       f"{result.get('sharpe', 0):.2f}",          BLUE),
-        ("WIN RATE",     f"{result.get('win_rate', 0):.1f}%",       GREEN),
-        ("MAX DRAWDOWN", f"{result.get('max_drawdown', 0):.1f}%",   RED),
-        ("TRADES",       str(result.get("trades_count", 0)),         TEXT_MAIN),
-        ("STATUS",       survived_badge,                              GREEN),
+        ("TOTAL RETURN",   f"{ret_pct:+.1f}%",   GREEN if ret_pct  >= 0 else RED),
+        ("VS BENCHMARK",   f"{vs_bench:+.1f}%",  GREEN if vs_bench >= 0 else RED),
+        ("WIN RATE",       f"{win_rate:.1f}%",    GREEN if win_rate >= 50 else ORANGE),
+        ("MAX DRAWDOWN",   f"{drawdown:.1f}%",    RED),
+        ("SHARPE RATIO",   f"{sharpe:.2f}",        BLUE),
     ]
-
     kpi_row = html.Div([
         html.Div([
-            html.Div(lbl, style={"fontSize": "9px", "color": TEXT_DIM, "letterSpacing": "0.1em", "marginBottom": "4px"}),
+            html.Div(lbl, style={"fontSize": "9px", "color": TEXT_DIM,
+                                  "letterSpacing": "0.1em", "marginBottom": "4px"}),
             html.Div(val, style={"fontSize": "16px", "fontWeight": "700", "color": col}),
-        ], style={"background": BG_CARD, "border": f"1px solid {BORDER}", "borderRadius": "4px", "padding": "12px 14px"})
+        ], style={"background": BG_CARD, "border": f"1px solid {BORDER}",
+                  "borderRadius": "4px", "padding": "12px 14px"})
         for lbl, val, col in kpis
-    ], style={"display": "grid", "gridTemplateColumns": "repeat(6, 1fr)", "gap": "8px", "marginBottom": "16px"})
+    ], style={"display": "grid", "gridTemplateColumns": "repeat(5, 1fr)",
+              "gap": "8px", "marginBottom": "16px"})
 
-    # Portfolio history chart
-    hist = result.get("portfolio_history", [INITIAL_BALANCE])
-    xs   = list(range(len(hist)))
+    # ── Equity curve with benchmark + trade markers ───────────────────────────
+    xs = list(range(len(equity)))
+
+    # Benchmark line: linear from INITIAL_BALANCE to INITIAL_BALANCE*(1+bench_pct/100)
+    bench_end = INITIAL_BALANCE * (1 + bench_pct / 100)
+    bench_xs  = [0, len(equity) - 1] if len(equity) > 1 else [0, 1]
+    bench_ys  = [INITIAL_BALANCE, bench_end]
+
+    # Map trade dates to x-indices (equity_curve has one entry per bar + initial)
+    # trades are indexed by bar, equity_curve[0] = initial, equity_curve[i+1] = after bar i
+    # Build index lookup: date string -> bar index
+    buy_xs,  buy_ys,  buy_dates  = [], [], []
+    sell_xs, sell_ys, sell_dates = [], [], []
+
+    # equity_curve[0] = initial cash; bar i corresponds to equity_curve[i+1]
+    # We'll match trades to position in the equity_curve by order
+    buy_idx_map: dict[str, int] = {}  # date -> equity index
+    _bar = 0
+    for t in trades:
+        _bar += 1  # crude approximation: each trade occupies next bar slot
+        ei = min(_bar, len(equity) - 1)
+        date_str = t.get("date", "")
+        action   = t.get("action", "")
+        price    = float(t.get("price", 0.0))
+        eq_val   = equity[ei]
+        if action == "BUY":
+            buy_xs.append(ei); buy_ys.append(eq_val)
+            buy_dates.append(f"{date_str} BUY @ ${price:.2f}")
+            buy_idx_map[date_str] = ei
+        elif action == "SELL":
+            sell_xs.append(ei); sell_ys.append(eq_val)
+            sell_dates.append(f"{date_str} SELL @ ${price:.2f}")
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=xs, y=hist, mode="lines", name="APEX-7",
-        line=dict(color=GREEN, width=1.5),
-        fill="tozeroy", fillcolor=_rgba(GREEN, 0.04),
+        x=xs, y=equity, mode="lines", name=sym,
+        line=dict(color=GREEN, width=2),
+        fill="tozeroy", fillcolor=_rgba(GREEN, 0.05),
     ))
-    # Buy-and-hold reference (flat)
-    spy_end = hist[-1] * 1.05 if hist else INITIAL_BALANCE * 1.05
     fig.add_trace(go.Scatter(
-        x=[0, len(hist) - 1],
-        y=[INITIAL_BALANCE, spy_end],
-        mode="lines", name="SPY B&H",
-        line=dict(color=GRAY, width=1, dash="dot"),
+        x=bench_xs, y=bench_ys, mode="lines", name="SPY",
+        line=dict(color=YELLOW, width=1, dash="dot"),
     ))
-    fig.add_hline(y=DEATH_THRESHOLD,
-                  line=dict(color=RED, dash="dot", width=1),
-                  annotation_text="DEATH FLOOR",
-                  annotation_position="bottom right",
-                  annotation_font=dict(color=RED, size=8, family=FONT))
+    if buy_xs:
+        fig.add_trace(go.Scatter(
+            x=buy_xs, y=buy_ys, mode="markers", name="BUY",
+            marker=dict(symbol="triangle-up", size=10, color=GREEN,
+                        line=dict(color=GREEN, width=1)),
+            text=buy_dates, hovertemplate="%{text}<extra></extra>",
+        ))
+    if sell_xs:
+        fig.add_trace(go.Scatter(
+            x=sell_xs, y=sell_ys, mode="markers", name="SELL",
+            marker=dict(symbol="triangle-down", size=10, color=RED,
+                        line=dict(color=RED, width=1)),
+            text=sell_dates, hovertemplate="%{text}<extra></extra>",
+        ))
     fig.update_layout(
-        template="plotly_dark",
         paper_bgcolor=BG_DEEP, plot_bgcolor=BG_CARD,
         font=dict(family=FONT, color=TEXT_MAIN, size=10),
-        margin=dict(l=50, r=20, t=30, b=40),
-        height=300, legend=dict(x=0, y=1),
-        title=f"Portfolio — {scenario} ({config})",
+        margin=dict(l=50, r=20, t=36, b=40),
+        height=320,
+        legend=dict(x=0, y=1, bgcolor="rgba(0,0,0,0)",
+                    font=dict(family=FONT, size=9, color=TEXT_DIM)),
+        title=dict(text=f"{sym} — {per} — {strat.upper()}",
+                   font=dict(family=FONT, size=11, color=TEXT_DIM)),
+        xaxis=dict(showgrid=False, zeroline=False,
+                   tickfont=dict(size=8, color=TEXT_DIM)),
+        yaxis=dict(showgrid=True, gridcolor=BORDER, zeroline=False,
+                   tickprefix="$", tickfont=dict(size=8, color=TEXT_DIM)),
     )
 
-    trade_log_items = []
-    for entry in result.get("trade_log", []):
-        badge, color = _classify_v2(entry.get("message", ""), entry.get("level", "info"))
-        trade_log_items.append(html.Div([
-            html.Span(badge, style={
-                "fontSize": "9px", "fontWeight": "700", "padding": "1px 6px",
-                "borderRadius": "2px", "background": f"{color}22", "color": color,
-                "marginRight": "8px",
-            }),
-            html.Span(entry.get("message", "")[:140], style={"fontSize": "11px", "color": TEXT_MAIN}),
+    # ── Trade log table ───────────────────────────────────────────────────────
+    _tbl_hdr_style = {
+        "display": "grid",
+        "gridTemplateColumns": "100px 70px 80px 80px 80px 80px",
+        "gap": "0", "padding": "5px 10px",
+        "borderBottom": f"1px solid {BORDER}",
+        "fontSize": "9px", "color": TEXT_DIM,
+        "letterSpacing": "0.1em", "fontWeight": "700",
+    }
+    tbl_header = html.Div([
+        html.Span("DATE"),
+        html.Span("ACTION"),
+        html.Span("PRICE"),
+        html.Span("SHARES"),
+        html.Span("P&L $"),
+        html.Span("P&L %"),
+    ], style=_tbl_hdr_style)
+
+    tbl_rows = []
+    _buy_price: dict[str, float] = {}
+    _buy_shares: dict[str, float] = {}
+    total_pnl = 0.0
+
+    for t in trades:
+        action     = t.get("action", "")
+        date_str   = t.get("date", "—")
+        price      = float(t.get("price", 0.0))
+        sym_t      = t.get("symbol", sym)
+
+        if action == "BUY":
+            # invest 95% of initial cash (mirrors backtest engine logic)
+            shares = (INITIAL_BALANCE * 0.95) / price if price > 0 else 0.0
+            _buy_price[sym_t]  = price
+            _buy_shares[sym_t] = shares
+            pnl_usd = 0.0
+            pnl_pct = 0.0
+            row_bg  = f"{BLUE}0f"
+            action_col = BLUE
+        elif action == "SELL":
+            bp     = _buy_price.pop(sym_t, price)
+            shares = _buy_shares.pop(sym_t, 0.0)
+            pnl_pct = ((price - bp) / bp * 100) if bp > 0 else 0.0
+            pnl_usd = shares * (price - bp)
+            total_pnl += pnl_usd
+            row_bg   = f"{GREEN}0f" if pnl_usd >= 0 else f"{RED}0f"
+            action_col = RED
+        else:
+            shares = pnl_usd = pnl_pct = 0.0
+            row_bg = "transparent"
+            action_col = GRAY
+
+        pnl_col = GREEN if pnl_usd >= 0 else RED
+        tbl_rows.append(html.Div([
+            html.Span(date_str,  style={"fontSize": "10px", "color": TEXT_DIM}),
+            html.Span(action,    style={"fontSize": "10px", "fontWeight": "700", "color": action_col}),
+            html.Span(f"${price:.2f}", style={"fontSize": "10px", "color": TEXT_MAIN}),
+            html.Span(f"{shares:.4f}", style={"fontSize": "10px", "color": TEXT_DIM}),
+            html.Span(f"{pnl_usd:+.2f}" if action == "SELL" else "—",
+                      style={"fontSize": "10px", "color": pnl_col if action == "SELL" else TEXT_DIM,
+                             "fontWeight": "700" if action == "SELL" else "400"}),
+            html.Span(f"{pnl_pct:+.2f}%" if action == "SELL" else "—",
+                      style={"fontSize": "10px", "color": pnl_col if action == "SELL" else TEXT_DIM}),
         ], style={
-            "borderLeft": f"3px solid {color}",
-            "background": f"{color}07",
-            "padding": "5px 10px", "marginBottom": "5px",
-            "borderRadius": "0 3px 3px 0",
+            "display": "grid",
+            "gridTemplateColumns": "100px 70px 80px 80px 80px 80px",
+            "gap": "0", "padding": "6px 10px",
+            "background": row_bg,
+            "borderBottom": f"1px solid {BORDER}22",
+            "alignItems": "center",
         }))
 
-    return html.Div([
-        kpi_row,
-        dcc.Graph(figure=fig, config={"displayModeBar": False}, style={"marginBottom": "16px"}),
-        html.Div(trade_log_items or [html.Div(
-            "No trade log available.",
-            style={"color": TEXT_DIM, "fontSize": "11px", "fontStyle": "italic"},
-        )]),
-    ])
+    # Totals row
+    totals_row = html.Div([
+        html.Span("TOTAL", style={"fontSize": "10px", "fontWeight": "700", "color": TEXT_DIM}),
+        html.Span(f"{n_trades} trades", style={"fontSize": "10px", "color": TEXT_DIM}),
+        html.Span(""),
+        html.Span(""),
+        html.Span(f"{total_pnl:+.2f}",
+                  style={"fontSize": "10px", "fontWeight": "700",
+                         "color": GREEN if total_pnl >= 0 else RED}),
+        html.Span(f"{ret_pct:+.1f}%",
+                  style={"fontSize": "10px", "fontWeight": "700",
+                         "color": GREEN if ret_pct >= 0 else RED}),
+    ], style={
+        "display": "grid",
+        "gridTemplateColumns": "100px 70px 80px 80px 80px 80px",
+        "gap": "0", "padding": "6px 10px",
+        "borderTop": f"1px solid {BORDER}",
+        "background": BG_CARD,
+        "alignItems": "center",
+    })
+
+    trade_table = html.Div([
+        html.Div("TRADE LOG", style={
+            "fontSize": "9px", "fontWeight": "700", "letterSpacing": "0.18em",
+            "color": TEXT_DIM, "textTransform": "uppercase",
+            "borderBottom": f"1px solid {BORDER}",
+            "paddingBottom": "6px", "marginBottom": "0",
+            "padding": "10px 10px 6px",
+        }),
+        tbl_header,
+        html.Div(tbl_rows if tbl_rows else [
+            html.Div("No trades executed.",
+                     style={"color": TEXT_DIM, "fontSize": "11px",
+                            "fontStyle": "italic", "padding": "12px 10px"}),
+        ]),
+        totals_row,
+    ], style={
+        "background": BG_CARD, "border": f"1px solid {BORDER}",
+        "borderRadius": "4px", "overflow": "hidden",
+        "marginTop": "16px",
+    })
+
+    return html.Div([kpi_row,
+                     dcc.Graph(figure=fig, config={"displayModeBar": False}),
+                     trade_table])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

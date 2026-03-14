@@ -395,7 +395,7 @@ def _sim_seed_prices(watchlist: list[str], last_known: dict[str, float]) -> dict
 
 def sim_fetch_data(state: AgentState, portfolio: Portfolio) -> dict:
     """Simulation version of fetch_data — zero network calls."""
-    logs = [_entry("[SIM] fetch_data: generating mock market data")]
+    logs = [_entry("fetch_data: using simulation")]
 
     current = dict(portfolio.last_prices) or {}
     if not all(s in current for s in WATCHLIST):
@@ -602,7 +602,7 @@ def make_fetch_data_node(portfolio: Portfolio):
         if _sim_mode["enabled"]:
             return sim_fetch_data(state, portfolio)
 
-        logs = [_entry("fetch_data: async gather (prices, news, sentiment)...")]
+        logs = [_entry("fetch_data: using LiveFeed")]
 
         pos = state["positions"]
         news_syms = (
@@ -1040,6 +1040,7 @@ def get_agent_status() -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def start_agent(portfolio: Portfolio) -> threading.Thread:
+    """Unused from dashboard. For standalone use only. See app.py _agent_loop."""
     graph = build_graph(portfolio)
 
     def _loop() -> None:

@@ -1,11 +1,19 @@
 import json
+import os
 import threading
 from datetime import datetime
-from pathlib import Path
 
 import yfinance as yf
 
-from config import DEATH_THRESHOLD, INITIAL_BALANCE, MAX_ALLOC_PCT, WATCHLIST
+from config import (
+    DEATH_THRESHOLD,
+    INITIAL_BALANCE,
+    MAX_ALLOC_PCT,
+    PORTFOLIO_SAVE_ENABLED,
+    PORTFOLIO_STATE_PATH,
+    USE_LIVEFEED,
+    WATCHLIST,
+)
 
 
 class Portfolio:
@@ -21,10 +29,27 @@ class Portfolio:
         self.is_dead = False
         self.last_prices: dict[str, float] = {}
         self.peak_value: float = float(INITIAL_BALANCE)
+        self._livefeed: "LiveFeed | None" = None
+        self._livefeed_symbols: list[str] = []
 
     def fetch_prices(self, symbols: list[str] | None = None) -> dict[str, float]:
         symbols = symbols or WATCHLIST
         prices = {}
+
+        if USE_LIVEFEED:
+            try:
+                # Lazily create or update LiveFeed when symbol list changes
+                if self._livefeed is None or self._livefeed_symbols != symbols:
+                    self._livefeed = LiveFeed(symbols)
+                    self._livefeed_symbols = list(symbols)
+                result = self._livefeed.fetch()
+                if result:
+                    with self._lock:
+                        self.last_prices = result
+                    return result
+            except Exception:
+                pass  # Fall through to yf.Tickers fast_info
+
         try:
             tickers = yf.Tickers(" ".join(symbols))
             for sym in symbols:
@@ -70,7 +95,9 @@ class Portfolio:
                 "amount": round(amount_usd, 2),
             }
             self.trade_history.append(trade)
-            return {"success": True, **trade}
+            result = {"success": True, **trade}
+        self.save_state()
+        return result
 
     def sell(self, symbol: str, sell_pct: float, price: float) -> dict:
         with self._lock:
@@ -94,7 +121,9 @@ class Portfolio:
                 "amount": round(amount, 2),
             }
             self.trade_history.append(trade)
-            return {"success": True, **trade}
+            result = {"success": True, **trade}
+        self.save_state()
+        return result
 
     def open_symbols(self) -> list[str]:
         with self._lock:
@@ -126,30 +155,43 @@ class Portfolio:
             self.agent_log.append(entry)
         print(f"[APEX-7/{level.upper()}] {message}")
 
-    def save_state(self, path: Path) -> None:
+    def save_state(self, path: str | None = None) -> None:
+        if not PORTFOLIO_SAVE_ENABLED:
+            return
+        path = path or PORTFOLIO_STATE_PATH
         with self._lock:
             state = {
                 "cash": self.cash,
                 "positions": dict(self.positions),
-                "trade_history": list(self.trade_history),
-                "value_history": list(self.value_history),
+                "trade_history": list(self.trade_history[-50:]),
+                "value_history": list(self.value_history[-200:]),
                 "peak_value": self.peak_value,
             }
-        path.write_text(json.dumps(state))
-
-    def load_state(self, path: Path) -> None:
-        if not path.exists():
-            return
+        tmp_path = path + ".tmp"
         try:
-            state = json.loads(path.read_text())
-        except Exception:
-            return
+            with open(tmp_path, "w") as f:
+                json.dump(state, f)
+            os.replace(tmp_path, path)
+        except Exception as e:
+            self.log(f"save_state error: {e}", "error")
+
+    def load_state(self, path: str | None = None) -> bool:
+        path = path or PORTFOLIO_STATE_PATH
+        if not os.path.exists(path):
+            return False
+        try:
+            with open(path) as f:
+                state = json.load(f)
+        except Exception as e:
+            self.log(f"load_state: corrupt file at {path}, starting fresh ({e})", "warning")
+            return False
         with self._lock:
             self.cash = float(state.get("cash", self.cash))
             self.positions = state.get("positions", self.positions)
-            self.trade_history = state.get("trade_history", self.trade_history)
-            self.value_history = state.get("value_history", self.value_history)
+            self.trade_history = state.get("trade_history", self.trade_history)[-50:]
+            self.value_history = state.get("value_history", self.value_history)[-200:]
             self.peak_value = float(state.get("peak_value", self.peak_value))
+        return True
 
 
 class LiveFeed:
@@ -158,8 +200,10 @@ class LiveFeed:
             symbols = [symbols]
         self.symbols = symbols
 
+    def update_symbols(self, symbols: list[str]) -> None:
+        self.symbols = symbols
+
     def fetch(self) -> dict[str, float]:
-        import yfinance as yf
         result = {}
         for sym in self.symbols:
             try:
