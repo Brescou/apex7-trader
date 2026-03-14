@@ -19,7 +19,56 @@ uv run langgraph dev
 
 # Run regression smoke tests (9 tests, no pytest)
 uv run python tests/test_smoke.py
+
+# Run terminal/market data tests (7 tests, no pytest)
+uv run python tests/test_terminal.py
+
+# Lint (CI-grade)
+uv run ruff check . --select E,F,W --ignore E501
+
+# Format check
+uv run black --check .
+
+# Run all pre-commit hooks
+uv run pre-commit run --all-files
 ```
+
+## Repo Structure
+
+```
+apex7-trader/
+├── agent.py           # Simple graph (canonical source)
+├── agent_multi.py     # Multi-agent graph (canonical source)
+├── app.py             # Dash app — layout, callbacks, Terminal extensions
+├── backtest.py        # BacktestEngine root copy (legacy; canonical: core/backtest.py)
+├── config.py          # All constants
+├── data.py            # Portfolio + LiveFeed root copy (legacy; canonical: core/data.py)
+├── graph_registry.py  # Graph map root copy (legacy; canonical: core/registry.py)
+├── leaderboard.py     # Leaderboard runner
+├── main.py            # Entrypoint
+├── market_data.py     # Terminal market data (fetch_macro, sparkline, comparison, etc.)
+├── langgraph.json     # LangGraph Studio config
+├── pyproject.toml     # uv deps + dev group (black, ruff, pre-commit)
+├── core/
+│   ├── __init__.py
+│   ├── data.py        # Canonical Portfolio + LiveFeed
+│   ├── backtest.py    # Canonical BacktestEngine + run_backtest
+│   └── registry.py   # Canonical graph ID → builder map
+├── docs/
+│   ├── README.md
+│   ├── ARCHITECTURE.md
+│   └── CHANGELOG.md
+├── tests/
+│   ├── test_smoke.py
+│   └── test_terminal.py
+├── .github/workflows/ci.yml
+└── .pre-commit-config.yaml
+```
+
+**File ownership:**
+- `agent.py`, `agent_multi.py`, `core/` — apex7-senior-back
+- `app.py`, `market_data.py` — apex7-senior-front
+- `config.py`, `data.py`, `backtest.py`, `leaderboard.py` — apex7-senior-back
 
 ## Architecture
 
@@ -30,16 +79,20 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | File | Role |
 |------|------|
 | `main.py` | Entrypoint — calls `app.run()` |
-| `app.py` | Dash layout, callbacks, and the `_agent_loop` background thread |
+| `app.py` | Dash layout, callbacks, `_agent_loop` background thread, Terminal extensions (sparklines, alerts, comparison, CSV) |
 | `agent.py` | Simple graph: LangGraph nodes, simulation engine, `start_agent()` |
 | `agent_multi.py` | Multi-agent graph: 4 specialized agents + arbitration node + `run_daily_postmortem()` |
 | `data.py` | `Portfolio` — thread-safe state (cash, positions, value history, logs); `LiveFeed` — multi-symbol yfinance wrapper |
+| `core/data.py` | Canonical copy of `data.py` (migrated Sprint 5) |
+| `core/backtest.py` | Canonical BacktestEngine + functional API (migrated Sprint 5) |
+| `core/registry.py` | Canonical graph ID → builder map (migrated Sprint 5) |
 | `config.py` | All constants, loaded from `.env` |
-| `backtest.py` | Real backtest engine — fetch_historical, compute_indicators, run_backtest, compare_strategies (yfinance, no LLM) |
-| `tests/test_smoke.py` | 9 regression smoke tests — no pytest, assert+print, exit 0/1 |
-| `market_data.py` | Standalone market data module — fetch_macro, fetch_watchlist_prices, fetch_news, run_screener with in-memory cache |
-| `graph_registry.py` | Maps graph IDs (`"simple"` / `"multi"`) to builder functions |
+| `backtest.py` | BacktestEngine root copy — kept for backward compat |
+| `market_data.py` | Standalone market data — fetch_macro, fetch_watchlist_prices, fetch_news, run_screener, fetch_sparkline, fetch_comparison |
+| `graph_registry.py` | Graph ID map root copy — kept for backward compat |
 | `langgraph.json` | LangGraph Studio config — exposes both compiled graphs |
+| `tests/test_smoke.py` | 9 regression smoke tests — no pytest, assert+print, exit 0/1 |
+| `tests/test_terminal.py` | 7 market data tests (sparkline, comparison, screener, cache) |
 
 ### Concurrency model
 
@@ -153,6 +206,10 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`USE_LIVEFEED=False` in tests** — set via env or config override to avoid yfinance rate limiting during test runs.
 - **`portfolio_state.json` created on first run** — added to `.gitignore`, do not commit.
 - **`PORTFOLIO_SAVE_ENABLED=True` by default** — set to `False` in unit tests to avoid disk writes.
+- **Dual copies of core files** — `data.py`, `backtest.py`, `graph_registry.py` remain at root alongside `core/data.py`, `core/backtest.py`, `core/registry.py`. The `core/` versions are canonical. Update both or update only `core/` and keep root copies for backward compat with existing imports in `app.py`, `leaderboard.py`, etc.
+- **docs/ is not at root** — `ARCHITECTURE.md`, `CHANGELOG.md`, `README.md` are in `docs/`. The root `README.md` is a separate copy for GitHub. Edit `docs/README.md` for documentation changes; the root copy may diverge.
+- **`fetch_sparkline` and `fetch_comparison` require yfinance network access** — set `SIMULATION_MODE=true` in CI to avoid rate-limiting; `test_terminal.py` should handle network failures gracefully.
+- **`agents/` and `dashboard/` packages not yet created** — Sprint 5 created `core/` only. `agent.py`, `agent_multi.py`, `app.py` remain at root as single files.
 
 ## Code conventions
 

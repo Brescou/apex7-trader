@@ -1,5 +1,7 @@
 # APEX-7 // SURVIVAL TRADER
 
+[![CI](https://github.com/USERNAME/apex7-trader/actions/workflows/ci.yml/badge.svg)](https://github.com/USERNAME/apex7-trader/actions/workflows/ci.yml)
+
 > An autonomous AI trading agent built on LangGraph + Claude, with a real-time Bloomberg-style terminal dashboard.
 > The agent starts with $1,000 and must survive — it dies if its portfolio falls below $50.
 
@@ -160,18 +162,32 @@ Key Dash patterns used:
 apex7-trader/
 ├── agent.py           # Simple graph: all nodes, simulation engine, _llm helper
 ├── agent_multi.py     # Multi-agent graph: 4 specialists + arbitration + run_daily_postmortem
-├── app.py             # Dash app — layout, callbacks, UI helpers
-├── backtest.py        # BacktestEngine — real yfinance backtest (fetch_historical, compute_indicators, run_backtest, compare_strategies) + legacy GBM scenarios
+├── app.py             # Dash app — layout, callbacks, UI helpers (incl. Terminal extensions)
+├── backtest.py        # BacktestEngine (legacy root copy)
 ├── leaderboard.py     # Leaderboard — ranks 4 agent configs via BacktestEngine
-├── market_data.py     # Standalone market data module — fetch_macro, fetch_watchlist_prices, fetch_news, run_screener
+├── market_data.py     # Standalone market data — fetch_macro, fetch_watchlist_prices, fetch_news, run_screener, fetch_sparkline, fetch_comparison
 ├── config.py          # All configuration constants, loaded from .env
 ├── data.py            # Portfolio class + LiveFeed — thread-safe state, buy/sell/log
 ├── graph_registry.py  # Maps graph IDs ("simple"/"multi") to builder functions
 ├── main.py            # Entrypoint: app.run()
 ├── langgraph.json     # LangGraph Studio config — exposes both graphs
-├── pyproject.toml     # Dependencies (uv)
+├── pyproject.toml     # Dependencies (uv) + [tool.black] + [tool.ruff] + dev deps
+├── core/
+│   ├── __init__.py
+│   ├── data.py        # Migrated from root data.py
+│   ├── backtest.py    # Migrated from root backtest.py
+│   └── registry.py   # Migrated from root graph_registry.py
+├── docs/
+│   ├── README.md      # This file
+│   ├── ARCHITECTURE.md
+│   └── CHANGELOG.md
 ├── tests/
-│   └── test_smoke.py  # 9 regression smoke tests — no pytest, assert+print, exit 0/1
+│   ├── test_smoke.py  # 9 regression smoke tests
+│   └── test_terminal.py  # 7 market data tests (fetch_sparkline, fetch_comparison, etc.)
+├── .github/
+│   └── workflows/
+│       └── ci.yml     # GitHub Actions: ruff + black + smoke tests + terminal tests
+├── .pre-commit-config.yaml  # ruff + black + standard hooks
 ├── .env               # API keys (not committed)
 ├── portfolio_state.json  # Portfolio snapshot — written on every trade (not committed)
 └── trades.db          # SQLite — auto-created on first run (not committed)

@@ -1,5 +1,39 @@
 # Architecture
 
+## Repo Structure
+
+```
+apex7-trader/
+├── agent.py           # Simple LangGraph graph + simulation engine
+├── agent_multi.py     # Multi-agent graph + daily postmortem
+├── app.py             # Dash dashboard + agent background thread + Terminal extensions
+├── backtest.py        # BacktestEngine (legacy root copy; canonical: core/backtest.py)
+├── config.py          # All constants and env-var loading
+├── data.py            # Portfolio + LiveFeed (legacy root copy; canonical: core/data.py)
+├── graph_registry.py  # Graph ID → builder map (legacy; canonical: core/registry.py)
+├── leaderboard.py     # Runs BacktestEngine across 4 allocation strategies
+├── main.py            # Entrypoint — calls app.run()
+├── market_data.py     # Standalone market data module (Terminal tab)
+├── langgraph.json     # LangGraph Studio registration
+├── pyproject.toml     # uv deps + [tool.black] + [tool.ruff] + dev group
+├── core/
+│   ├── __init__.py
+│   ├── data.py        # Canonical Portfolio + LiveFeed
+│   ├── backtest.py    # Canonical BacktestEngine + functional API
+│   └── registry.py   # Canonical graph ID → builder map
+├── docs/
+│   ├── README.md
+│   ├── ARCHITECTURE.md  (this file)
+│   └── CHANGELOG.md
+├── tests/
+│   ├── test_smoke.py    # 9 regression tests
+│   └── test_terminal.py # 7 market data tests
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+└── .pre-commit-config.yaml
+```
+
 ## Simple Graph
 
 ```
@@ -121,7 +155,7 @@ Macro filter: `regime == "risk-off"` → BUY dampened ×0.5.
 | `save_memory` | `execute` | END |
 | `skip` | `risk_check` | END |
 
-Shared nodes (imported from `agent.py` into `agent_multi.py`): `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`.
+Shared nodes (defined in `agent.py`, imported into `agent_multi.py`): `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`.
 
 ## SQLite Schema
 
@@ -331,8 +365,32 @@ Zero imports from `agent.py` or `agent_multi.py`. Used exclusively by `app.py` T
 | `fetch_watchlist_prices(symbols)` | 10s | Per-symbol: price, change_pct, change_abs, volume, high_52w, low_52w, rsi_14 (14-day daily close), above_ma20 (bool) |
 | `fetch_news(symbol, max_items)` | none | Uses `yf.Ticker.news`; returns title, source, age ("Xm/Xh/Xd ago"), url, sentiment (positive/negative/neutral via keyword rule) |
 | `run_screener(symbols, filters)` | n/a | Reuses `fetch_watchlist_prices()`; filters: rsi_min/max, change_pct_min, above_ma20, volume_min; returns list of passing symbols |
+| `fetch_sparkline(symbol)` | 5 min | 1-day hourly OHLC via yfinance; returns `[{"time": "14:00", "price": 182.5, "open": 181.0}, ...]`; empty list on failure |
+| `fetch_comparison(symbols, period)` | 5 min | Daily closes normalized to 100.0 at first point; returns `{"AAPL": [{"date": "...", "value": 100.0}, ...], ...}`; empty dict on failure |
 
-Cache uses `threading.Lock()` — thread-safe for concurrent Dash callbacks.
+Cache uses `threading.Lock()` — thread-safe for concurrent Dash callbacks. Separate lock per cache (`_sparkline_lock`, `_comparison_lock`).
+
+## CI/CD Pipeline
+
+```
+push / PR to master
+        │
+        ▼
+  GitHub Actions (.github/workflows/ci.yml)
+        │
+        ├── job: test (ubuntu-latest)
+        │     ├── uv python install 3.12
+        │     ├── uv sync
+        │     ├── ruff check . --select E,F,W --ignore E501
+        │     ├── uv run python tests/test_smoke.py   (SIMULATION_MODE=true)
+        │     └── uv run python tests/test_terminal.py
+        │
+        └── job: lint (ubuntu-latest)
+              ├── uv sync
+              └── black --check --diff .
+```
+
+Pre-commit hooks (`.pre-commit-config.yaml`): ruff (auto-fix) + black + trailing-whitespace + end-of-file-fixer + check-yaml + check-json + check-merge-conflict.
 
 ## Configuration
 

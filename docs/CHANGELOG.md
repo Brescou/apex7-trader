@@ -4,6 +4,25 @@
 
 No uncommitted changes.
 
+## [2026-03-14] — Sprint 5: Restructuration + Terminal étendu + CI/CD
+
+### Changed
+- Repo structure: `data.py` → `core/data.py`, `backtest.py` → `core/backtest.py`, `graph_registry.py` → `core/registry.py`
+- `ARCHITECTURE.md`, `CHANGELOG.md`, `README.md` moved from root to `docs/`
+- `docs/` folder created; root `README.md` remains as a copy for GitHub rendering
+
+### Added
+- Terminal sparklines: `market_data.fetch_sparkline()` — 1-day hourly OHLC per symbol, 5-min cache; rendered as 40px mini chart per watchlist row
+- Price alerts: set ABOVE/BELOW thresholds per symbol, flash banner on trigger, auto-remove after 5s
+- Multi-symbol comparison chart: normalized to 100 at start, period selector (1d/5d/1mo/3mo), collapsible panel
+- CSV export for watchlist (symbol, price, change_pct, rsi_14, volume, timestamp)
+- `market_data.fetch_comparison(symbols, period)` — normalized-to-100 daily closes, 5-min cache
+- CI/CD: `.github/workflows/ci.yml` (GitHub Actions — ruff lint, black check, smoke tests, terminal tests)
+- `.pre-commit-config.yaml` (ruff + black + standard hooks)
+- `pyproject.toml`: `[tool.black]`, `[tool.ruff]` sections + dev dependency group (black, ruff, pre-commit)
+- `tests/test_terminal.py` — 7 market data regression tests (fetch_macro, fetch_watchlist_prices, fetch_news, run_screener, fetch_sparkline, fetch_comparison, cache_behavior)
+- `core/__init__.py` package marker
+
 ## [2026-03-14] — Sprint 4: Solidification
 
 ### Changed
