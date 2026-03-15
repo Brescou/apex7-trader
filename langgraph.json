@@ -1,8 +1,8 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "apex7_simple": "./agent.py:agent_graph",
-    "apex7_multi":  "./agent_multi.py:agent_multi_graph"
+    "apex7_simple": "./agents/simple.py:agent_graph",
+    "apex7_multi":  "./agents/multi.py:agent_multi_graph"
   },
   "env": ".env"
 }

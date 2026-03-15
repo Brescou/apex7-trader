@@ -22,10 +22,10 @@ GRAPHS: dict[str, dict] = {
 
 def get_graph(graph_id: str, portfolio: Portfolio):
     if graph_id == "multi":
-        from agent_multi import build_multi_graph
+        from agents.multi import build_multi_graph
 
         return build_multi_graph(portfolio)
-    from agent import build_graph
+    from agents.simple import build_graph
 
     return build_graph(portfolio)
 
