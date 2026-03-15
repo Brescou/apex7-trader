@@ -84,7 +84,7 @@ def test_portfolio_multi_symbol():
 
 
 def test_simple_graph_build():
-    from agent import build_graph as build_simple_graph
+    from agents.simple import build_graph as build_simple_graph
     from core.data import Portfolio
 
     g = build_simple_graph(Portfolio())
@@ -104,7 +104,7 @@ def test_simple_graph_build():
 
 
 def test_multi_graph_build():
-    from agent_multi import build_multi_graph
+    from agents.multi import build_multi_graph
     from core.data import Portfolio
 
     g = build_multi_graph(Portfolio())
@@ -132,7 +132,8 @@ def test_multi_graph_build():
 
 
 def test_simulation_cycle():
-    from agent import build_graph as build_simple_graph, _sim_mode
+    from agents.simple import build_graph as build_simple_graph
+    from agents.shared.nodes import _sim_mode
     from core.data import Portfolio
 
     # Force simulation mode on
@@ -210,11 +211,10 @@ def test_sqlite_schema():
 
 
 def test_app_import():
-    import app  # noqa: F401
+    from dashboard import create_app
 
-    assert hasattr(app, "server") or hasattr(
-        app, "app"
-    ), "app module imported but missing 'server' or 'app' attribute"
+    a = create_app()
+    assert a is not None, "create_app() returned None"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

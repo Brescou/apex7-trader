@@ -1,4 +1,6 @@
-from app import app
+from dashboard import create_app
+
+app = create_app()
 
 
 def main():
