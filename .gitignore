@@ -35,3 +35,7 @@ poetry.lock
 
 # DB files
 trades.db
+
+# Runtime state files
+portfolio_state.json
+.apex7_state.json
