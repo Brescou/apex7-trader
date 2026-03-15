@@ -4,6 +4,26 @@
 
 No uncommitted changes.
 
+## [2026-03-14] — Sprint 5b: Complete Repo Migration
+
+### Added
+- `agents/` package: `simple.py`, `multi.py`, `shared/state.py`, `shared/nodes.py`
+- `dashboard/` package: `server.py`, `layout.py`, `callbacks/` (6 modules)
+- `docs/CLAUDE.md` — copy of root CLAUDE.md with Sprint 5b paths and pitfalls
+
+### Changed
+- `agent.py` → `agents/simple.py` + `agents/shared/`
+- `agent_multi.py` → `agents/multi.py` + `agents/shared/`
+- `app.py` → `dashboard/` package
+- `core/registry.py` updated to import from `agents.*`
+- `main.py` updated to import from `dashboard`
+
+### Removed
+- `agent.py` (migrated)
+- `agent_multi.py` (migrated)
+- `app.py` (migrated)
+- `dashboard_split_plan.md` (temp file)
+
 ## [2026-03-14] — Sprint 5: Restructuration + Terminal étendu + CI/CD
 
 ### Changed

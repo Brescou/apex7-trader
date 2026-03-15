@@ -4,27 +4,43 @@
 
 ```
 apex7-trader/
-├── agent.py           # Simple LangGraph graph + simulation engine
-├── agent_multi.py     # Multi-agent graph + daily postmortem
-├── app.py             # Dash dashboard + agent background thread + Terminal extensions
-├── backtest.py        # BacktestEngine (legacy root copy; canonical: core/backtest.py)
-├── config.py          # All constants and env-var loading
-├── data.py            # Portfolio + LiveFeed (legacy root copy; canonical: core/data.py)
-├── graph_registry.py  # Graph ID → builder map (legacy; canonical: core/registry.py)
-├── leaderboard.py     # Runs BacktestEngine across 4 allocation strategies
-├── main.py            # Entrypoint — calls app.run()
-├── market_data.py     # Standalone market data module (Terminal tab)
-├── langgraph.json     # LangGraph Studio registration
-├── pyproject.toml     # uv deps + [tool.black] + [tool.ruff] + dev group
+├── main.py
+├── config.py
+├── market_data.py
+├── leaderboard.py
+├── pyproject.toml
+├── langgraph.json
+├── README.md → docs/README.md
+├── agents/
+│   ├── __init__.py
+│   ├── simple.py          ← simple graph (was agent.py)
+│   ├── multi.py           ← multi-agent graph (was agent_multi.py)
+│   └── shared/
+│       ├── __init__.py
+│       ├── state.py       ← AgentState, MultiAgentState TypedDicts
+│       └── nodes.py       ← shared nodes (load_memory, execute, etc.)
 ├── core/
 │   ├── __init__.py
-│   ├── data.py        # Canonical Portfolio + LiveFeed
-│   ├── backtest.py    # Canonical BacktestEngine + functional API
-│   └── registry.py   # Canonical graph ID → builder map
+│   ├── data.py            ← Portfolio, LiveFeed
+│   ├── backtest.py        ← BacktestEngine, run_backtest
+│   └── registry.py       ← build_graph()
+├── dashboard/
+│   ├── __init__.py        ← create_app()
+│   ├── server.py          ← Dash() init + design tokens
+│   ├── layout.py          ← app.layout + UI helpers
+│   └── callbacks/
+│       ├── __init__.py    ← imports all callback modules
+│       ├── live.py
+│       ├── analytics.py
+│       ├── backtest_tab.py
+│       ├── terminal.py
+│       ├── history.py
+│       └── heatmap.py
 ├── docs/
-│   ├── README.md
+│   ├── CLAUDE.md
 │   ├── ARCHITECTURE.md  (this file)
-│   └── CHANGELOG.md
+│   ├── CHANGELOG.md
+│   └── README.md
 ├── tests/
 │   ├── test_smoke.py    # 9 regression tests
 │   └── test_terminal.py # 7 market data tests
@@ -33,6 +49,28 @@ apex7-trader/
 │       └── ci.yml
 └── .pre-commit-config.yaml
 ```
+
+## Package Dependency Graph
+
+```
+main.py
+  └── dashboard (create_app)
+        ├── dashboard.server (Dash app, design tokens)
+        ├── dashboard.layout (UI helpers, app.layout)
+        └── dashboard.callbacks.* (all @app.callback)
+              ├── core.data (Portfolio)
+              ├── core.backtest (run_backtest)
+              ├── core.registry (build_graph)
+              └── market_data (fetch_*)
+
+core.registry
+  ├── agents.simple (build_simple_graph)
+  └── agents.multi (build_multi_graph)
+        └── agents.shared.nodes, agents.shared.state
+              └── core.data (Portfolio)
+```
+
+Import direction is one-way: `dashboard` → `core`/`agents`/`market_data`. Never import from `dashboard` inside `agents/` or `core/`.
 
 ## Simple Graph
 
@@ -155,7 +193,7 @@ Macro filter: `regime == "risk-off"` → BUY dampened ×0.5.
 | `save_memory` | `execute` | END |
 | `skip` | `risk_check` | END |
 
-Shared nodes (defined in `agent.py`, imported into `agent_multi.py`): `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`.
+Shared nodes (defined in `agents/shared/nodes.py`, imported by both `agents/simple.py` and `agents/multi.py`): `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`.
 
 ## SQLite Schema
 
