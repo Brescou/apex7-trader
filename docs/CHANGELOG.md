@@ -4,6 +4,29 @@
 
 No uncommitted changes.
 
+## [2026-03-18] — Sprint Terminal UX
+
+### Added
+- `market_data.fetch_ohlcv(symbol, period)` — daily OHLCV data, 5-min TTL cache per `(symbol, period)`, returns `[{date, open, high, low, close, volume}, ...]`; never raises
+- `dashboard/callbacks/terminal.py`: `_update_news_content` callback — renders news feed to `news-feed-content`; tab-gated (`no_update` when terminal not active)
+- `dashboard/callbacks/terminal.py`: `_update_chart_overlay` callback — renders 1mo OHLCV area chart with max/min annotations to `chart-overlay-content`; uses `fetch_ohlcv`
+- `dashboard/callbacks/terminal.py`: `_clear_screener` callback — resets `screener-active-store` + `screener-results-store` on CLEAR click
+- `dashboard/layout.py`: `screener-results-store` and `screener-active-store` added to global stores
+- `dashboard/server.py`: added config imports — `AGENT_GRAPH`, `DEATH_THRESHOLD`, `INITIAL_BALANCE`, `WATCHLIST`
+
+### Changed
+- **Static tabs architecture** (`dashboard/layout.py`): replaced single `tab-content` dynamic div with 7 static tab divs (`tab-live`, `tab-analytics`, `tab-backtest`, `tab-leaderboard`, `tab-heatmap`, `tab-agents`, `tab-terminal`) — all always in DOM, visibility toggled via CSS `display`
+- `dashboard/callbacks/live.py`: `_render_tab` replaced by `_show_tab` — toggles CSS `display` on 7 static tab divs (no HTML reconstruction on tab switch)
+- `dashboard/callbacks/live.py`: `_refresh` retains `no_update` guard — skips portfolio computation when not on live tab
+- `dashboard/callbacks/terminal.py`: `_update_macro_bar` — each macro bloc now includes 80×30px mini sparkline chart
+- `dashboard/callbacks/terminal.py`: `_run_screener` — now returns 3-tuple to 3 outputs (`children`, `screener-results-store`, `screener-active-store`)
+- `dashboard/callbacks/terminal.py`: `_tab_terminal()` fully rewritten — 65/35 column split, 64px macro bar, 2-column symbol card grid, news feed panel (`news-feed-content`), chart overlay panel (`chart-overlay-content`), compact screener section
+- `dashboard/callbacks/analytics.py` + `agents.py`: added `State("main-tabs", "value")` + `no_update` guard (skip computation when tab not active)
+- `dashboard/callbacks/heatmap.py`: fixed deprecated Plotly `titlefont` → `title=dict(text=..., font=dict(...))`
+- `market_data.fetch_news()`: fixed yfinance API format — title now read from `item['content']['title']` with fallback to `item['title']`; source, url, pubDate extracted from `content` dict
+- `core/data.py`: fixed `save_state()` TypeError — `path = str(path or PORTFOLIO_STATE_PATH)` (was failing with `PosixPath` argument)
+- `dashboard/layout.py`: `_make_sparkline_fig()` — removed `fill="tozeroy"` that caused solid-block appearance on high-priced stocks
+
 ## [2026-03-14] — Sprint 5b: Complete Repo Migration
 
 ### Added

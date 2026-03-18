@@ -264,24 +264,53 @@ CREATE TABLE postmortem (
 
 ## Dash Dashboard
 
+### Tab architecture
+
+All 7 tab content divs are always present in the DOM (`id` = `tab-live`, `tab-analytics`, `tab-backtest`, `tab-leaderboard`, `tab-heatmap`, `tab-agents`, `tab-terminal`). Visibility is toggled via CSS `display` by the `_show_tab` callback in `dashboard/callbacks/live.py` — no HTML reconstruction on tab switch.
+
 | Tab | Content | Refresh |
 |-----|---------|---------|
 | LIVE | Portfolio value, agent state, equity curve, activity log, agent cards (multi mode), Track Records badges | 2s interval |
-| ANALYTICS | KPI row, 4 charts, full trade table | 30s + manual |
+| ANALYTICS | KPI row, 4 charts, full trade table | 30s + manual; `no_update` guard when tab not active |
 | BACKTEST | Symbol input, period dropdown, strategy selector (simple/multi), RUN BACKTEST button; KPI row (return, vs benchmark, win rate, max drawdown, Sharpe); equity curve with SPY benchmark overlay and BUY/SELL trade markers; trade log table with P&L per row | on button click |
 | LEADERBOARD | Scenario selector, ranked agent comparison table | on button click |
 | HEATMAP | Per-symbol return heatmap + trade frequency matrix | on button click |
-| AGENTS | Per-agent accuracy, confidence, win-rate comparison table | on button click |
-| TERMINAL | Macro header bar (VIX/SPY/DXY), watchlist table, screener, news feed | macro: 60s, watchlist: 10s, news: 120s |
+| AGENTS | Per-agent accuracy, confidence, win-rate comparison table; `no_update` guard when tab not active | on button click |
+| TERMINAL | 65/35 split: left = 64px macro bar + 2-col symbol cards; right = chart overlay panel + news feed panel + compact screener | macro: 60s, watchlist: 10s, news: 120s |
 
-New `dcc.Store` ids (TERMINAL tab):
+### Terminal tab components
+
+| Component / div id | Description |
+|--------------------|-------------|
+| `macro-bar-content` | VIX / SPY / DXY blocs — price, change_pct, 80×30px mini sparkline per symbol |
+| `watchlist-table` | 2-column symbol card grid — price, change_pct, RSI badge, MA20 indicator, volume, sparkline |
+| `chart-overlay-content` | 1mo OHLCV area chart for the selected symbol; max/min annotations; driven by `fetch_ohlcv()` |
+| `news-feed-content` | News cards for the selected symbol; sentiment-coloured left border; tab-gated |
+| `screener-results` | Screener matches list |
+| `screener-results-store` | List of matched symbol strings (for watchlist card highlighting) |
+| `screener-active-store` | Bool — true when screener has been run and not cleared |
+
+### Terminal tab callbacks (`dashboard/callbacks/terminal.py`)
+
+| Callback | Trigger | Output |
+|----------|---------|--------|
+| `_update_macro_bar` | `macro-interval` | `macro-bar-content` — blocs with mini sparklines |
+| `_update_watchlist` | `watchlist-interval`, `terminal-watchlist`, `terminal-active-symbol`, screener stores | `watchlist-table` (2-col card grid) |
+| `_update_news_content` | `terminal-active-symbol`, `news-interval` | `news-feed-content`; tab-gated |
+| `_update_chart_overlay` | `terminal-active-symbol` | `chart-overlay-content`; tab-gated |
+| `_run_screener` | `btn-screener-run` | 3-tuple: `screener-results`, `screener-results-store`, `screener-active-store` |
+| `_clear_screener` | `btn-screener-clear` | resets `screener-active-store` + `screener-results-store` |
+
+### dcc.Store ids
 
 | Store id | Purpose |
 |----------|---------|
 | `terminal-watchlist` | List of symbols shown in the watchlist (initialized from config.WATCHLIST) |
-| `terminal-active-symbol` | Currently selected symbol for the news feed |
+| `terminal-active-symbol` | Currently selected symbol for chart overlay and news feed |
+| `screener-results-store` | List of symbols matched by the most recent screener run |
+| `screener-active-store` | Bool — whether screener results are currently active (for watchlist card highlighting) |
 
-New `dcc.Interval` ids (TERMINAL tab):
+### dcc.Interval ids
 
 | Interval id | Period | Drives |
 |-------------|--------|--------|
@@ -395,7 +424,7 @@ Wired into `Portfolio.fetch_prices()` when `USE_LIVEFEED=True`. If `LiveFeed.fet
 
 ## market_data.py — Standalone Market Data Module
 
-Zero imports from `agent.py` or `agent_multi.py`. Used exclusively by `app.py` TERMINAL tab callbacks.
+Zero imports from `agents/` or `dashboard/`. Used exclusively by `dashboard/callbacks/terminal.py` callbacks.
 
 | Function | Cache TTL | Description |
 |----------|-----------|-------------|
@@ -405,6 +434,7 @@ Zero imports from `agent.py` or `agent_multi.py`. Used exclusively by `app.py` T
 | `run_screener(symbols, filters)` | n/a | Reuses `fetch_watchlist_prices()`; filters: rsi_min/max, change_pct_min, above_ma20, volume_min; returns list of passing symbols |
 | `fetch_sparkline(symbol)` | 5 min | 1-day hourly OHLC via yfinance; returns `[{"time": "14:00", "price": 182.5, "open": 181.0}, ...]`; empty list on failure |
 | `fetch_comparison(symbols, period)` | 5 min | Daily closes normalized to 100.0 at first point; returns `{"AAPL": [{"date": "...", "value": 100.0}, ...], ...}`; empty dict on failure |
+| `fetch_ohlcv(symbol, period)` | 5 min per `(symbol, period)` | Daily OHLCV; returns `[{"date": "...", "open": ..., "high": ..., "low": ..., "close": ..., "volume": ...}, ...]`; empty list on failure; never raises |
 
 Cache uses `threading.Lock()` — thread-safe for concurrent Dash callbacks. Separate lock per cache (`_sparkline_lock`, `_comparison_lock`).
 
