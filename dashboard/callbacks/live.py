@@ -3,7 +3,7 @@
 import sqlite3
 import time
 
-from dash import Input, Output, State, ctx, html, MATCH
+from dash import Input, Output, State, ctx, html, no_update, MATCH
 
 from agents.shared.nodes import get_simulation_mode, set_simulation_mode
 from config import INITIAL_BALANCE
@@ -25,13 +25,6 @@ from dashboard.layout import (
     _section_label,
     _sim_chip,
     _sparkline,
-    _tab_agents,
-    _tab_analytics,
-    _tab_backtest,
-    _tab_heatmap,
-    _tab_leaderboard,
-    _tab_live,
-    _tab_terminal,
     _tech_body_children,
     _thinking,
 )
@@ -58,26 +51,24 @@ from dashboard.server import (
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+_TABS = ["live", "analytics", "backtest", "leaderboard", "heatmap", "agents", "terminal"]
+_TAB_SHOW = {"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "block"}
+_TAB_HIDE = {"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "none"}
+
+
 @app.callback(
-    Output("tab-content", "children"),
+    Output("tab-live", "style"),
+    Output("tab-analytics", "style"),
+    Output("tab-backtest", "style"),
+    Output("tab-leaderboard", "style"),
+    Output("tab-heatmap", "style"),
+    Output("tab-agents", "style"),
+    Output("tab-terminal", "style"),
     Input("main-tabs", "value"),
+    prevent_initial_call=True,
 )
-def _render_tab(tab: str):
-    if tab == "live":
-        return _tab_live()
-    if tab == "analytics":
-        return _tab_analytics()
-    if tab == "backtest":
-        return _tab_backtest()
-    if tab == "leaderboard":
-        return _tab_leaderboard()
-    if tab == "heatmap":
-        return _tab_heatmap()
-    if tab == "agents":
-        return _tab_agents()
-    if tab == "terminal":
-        return _tab_terminal()
-    return _tab_live()
+def _show_tab(tab: str):
+    return [_TAB_SHOW if t == tab else _TAB_HIDE for t in _TABS]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -220,6 +211,8 @@ def _switch_graph(graph_id: str) -> dict:
     [State("main-tabs", "value"), State("graph-store", "data")],
 )
 def _refresh(_, store, active_tab, graph_store):
+    if active_tab != "live":
+        return [no_update] * 24
     p = _state["portfolio"]
     prices = p.last_prices
     total = p.total_value(prices)

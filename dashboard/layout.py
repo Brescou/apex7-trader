@@ -381,15 +381,11 @@ def _make_sparkline_fig(data: list) -> go.Figure:
     prices = [d["price"] for d in data]
     first_open = data[0].get("open", prices[0])
     color = GREEN if prices[-1] >= first_open else RED
-    h = color.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     fig.add_trace(
         go.Scatter(
             y=prices,
             mode="lines",
-            line=dict(color=color, width=1),
-            fill="tozeroy",
-            fillcolor=f"rgba({r},{g},{b},0.08)",
+            line=dict(color=color, width=1.5),
         )
     )
     fig.update_layout(**_empty_layout)
@@ -1893,17 +1889,6 @@ def _tab_terminal() -> html.Div:
         "borderRadius": "3px",
         "flexShrink": "0",
     }
-    _tbl_hdr_style = {
-        "display": "grid",
-        "gridTemplateColumns": "80px 80px 70px 70px 55px 60px 80px 90px",
-        "gap": "0",
-        "padding": "5px 10px",
-        "borderBottom": f"1px solid {BORDER}",
-        "fontSize": "9px",
-        "color": TEXT_DIM,
-        "letterSpacing": "0.1em",
-        "fontWeight": "700",
-    }
     _alert_input_style = {
         "background": BG_DEEP,
         "border": f"1px solid {BORDER}",
@@ -1917,7 +1902,7 @@ def _tab_terminal() -> html.Div:
     }
     return html.Div(
         [
-            # ── A) Macro Header Bar ───────────────────────────────────────────────
+            # ── A) Macro Header Bar (64px, full width) ────────────────────────────
             html.Div(
                 [
                     html.Div(
@@ -1925,7 +1910,7 @@ def _tab_terminal() -> html.Div:
                         style={
                             "display": "flex",
                             "alignItems": "center",
-                            "gap": "28px",
+                            "gap": "0",
                             "flex": "1",
                         },
                     ),
@@ -1933,19 +1918,20 @@ def _tab_terminal() -> html.Div:
                 style={
                     "background": BG_HOVER,
                     "borderBottom": f"1px solid {BORDER}",
-                    "padding": "8px 18px",
+                    "padding": "0 18px",
+                    "height": "64px",
                     "display": "flex",
                     "alignItems": "center",
                     "flexShrink": "0",
                 },
             ),
-            # ── B) 2-column layout ────────────────────────────────────────────────
+            # ── B) 2-column layout (65% / 35%) ───────────────────────────────────
             html.Div(
                 [
-                    # Left column (60%)
+                    # Left column (65%)
                     html.Div(
                         [
-                            # C) Watchlist
+                            # C) Watchlist header + ADD input + card grid
                             html.Div(
                                 [
                                     _section_label("WATCHLIST"),
@@ -1963,25 +1949,6 @@ def _tab_terminal() -> html.Div:
                                                 n_clicks=0,
                                                 style=_btn_style,
                                             ),
-                                        ],
-                                        style={
-                                            "display": "flex",
-                                            "gap": "8px",
-                                            "marginBottom": "10px",
-                                            "alignItems": "center",
-                                        },
-                                    ),
-                                    html.Div(
-                                        id="watchlist-chips",
-                                        style={
-                                            "display": "flex",
-                                            "flexWrap": "wrap",
-                                            "gap": "6px",
-                                            "marginBottom": "10px",
-                                        },
-                                    ),
-                                    html.Div(
-                                        [
                                             html.Button(
                                                 "COMPARE",
                                                 id="btn-compare",
@@ -1993,9 +1960,10 @@ def _tab_terminal() -> html.Div:
                                                     "fontFamily": FONT,
                                                     "fontSize": "10px",
                                                     "letterSpacing": "0.1em",
-                                                    "padding": "4px 10px",
+                                                    "padding": "5px 10px",
                                                     "cursor": "pointer",
                                                     "borderRadius": "3px",
+                                                    "flexShrink": "0",
                                                 },
                                             ),
                                             html.Button(
@@ -2009,9 +1977,10 @@ def _tab_terminal() -> html.Div:
                                                     "fontFamily": FONT,
                                                     "fontSize": "10px",
                                                     "letterSpacing": "0.1em",
-                                                    "padding": "4px 10px",
+                                                    "padding": "5px 10px",
                                                     "cursor": "pointer",
                                                     "borderRadius": "3px",
+                                                    "flexShrink": "0",
                                                 },
                                             ),
                                             dcc.Download(id="csv-download"),
@@ -2019,10 +1988,14 @@ def _tab_terminal() -> html.Div:
                                         style={
                                             "display": "flex",
                                             "gap": "8px",
-                                            "marginBottom": "8px",
+                                            "marginBottom": "10px",
                                             "alignItems": "center",
+                                            "flexWrap": "wrap",
                                         },
                                     ),
+                                    # Hidden backward-compat chips output
+                                    html.Div(id="watchlist-chips", style={"display": "none"}),
+                                    # Compare panel (toggled by _toggle_compare callback)
                                     html.Div(
                                         id="compare-panel",
                                         style={"display": "none"},
@@ -2114,19 +2087,7 @@ def _tab_terminal() -> html.Div:
                                             ),
                                         ],
                                     ),
-                                    html.Div(
-                                        [
-                                            html.Span("SYMBOL"),
-                                            html.Span("PRICE"),
-                                            html.Span("CHG%"),
-                                            html.Span("CHG$"),
-                                            html.Span("RSI"),
-                                            html.Span("MA20"),
-                                            html.Span("VOLUME"),
-                                            html.Span("1H CHART"),
-                                        ],
-                                        style=_tbl_hdr_style,
-                                    ),
+                                    # Symbol card grid (2-col) — populated by _update_watchlist
                                     html.Div(id="watchlist-table"),
                                 ],
                                 style={
@@ -2137,7 +2098,7 @@ def _tab_terminal() -> html.Div:
                                     "marginBottom": "12px",
                                 },
                             ),
-                            # D) Screener
+                            # D) Screener bar
                             html.Div(
                                 [
                                     _section_label("SCREENER"),
@@ -2255,6 +2216,18 @@ def _tab_terminal() -> html.Div:
                                                     "padding": "6px 14px",
                                                 },
                                             ),
+                                            html.Button(
+                                                "CLEAR",
+                                                id="btn-screener-clear",
+                                                n_clicks=0,
+                                                style={
+                                                    **_btn_style,
+                                                    "border": f"1px solid {BORDER}",
+                                                    "color": TEXT_DIM,
+                                                    "letterSpacing": "0.12em",
+                                                    "padding": "6px 10px",
+                                                },
+                                            ),
                                         ],
                                         style={
                                             "display": "flex",
@@ -2262,18 +2235,6 @@ def _tab_terminal() -> html.Div:
                                             "alignItems": "flex-end",
                                             "marginBottom": "12px",
                                         },
-                                    ),
-                                    html.Div(
-                                        [
-                                            html.Span("SYMBOL"),
-                                            html.Span("PRICE"),
-                                            html.Span("CHG%"),
-                                            html.Span("CHG$"),
-                                            html.Span("RSI"),
-                                            html.Span("MA20"),
-                                            html.Span("VOLUME"),
-                                        ],
-                                        style=_tbl_hdr_style,
                                     ),
                                     html.Div(id="screener-results"),
                                 ],
@@ -2284,7 +2245,7 @@ def _tab_terminal() -> html.Div:
                                     "padding": "12px 14px",
                                 },
                             ),
-                            # E) Price Alerts
+                            # E) Price Alerts — compact one-line input row
                             html.Div(
                                 [
                                     _section_label("PRICE ALERTS"),
@@ -2316,7 +2277,7 @@ def _tab_terminal() -> html.Div:
                                             dcc.Input(
                                                 id="alert-price-input",
                                                 type="number",
-                                                placeholder="Price",
+                                                placeholder="$190.00",
                                                 debounce=False,
                                                 style=_alert_input_style,
                                             ),
@@ -2343,6 +2304,7 @@ def _tab_terminal() -> html.Div:
                                             "gap": "6px",
                                             "marginBottom": "10px",
                                             "alignItems": "center",
+                                            "flexWrap": "nowrap",
                                         },
                                     ),
                                     html.Div(id="alerts-list"),
@@ -2357,15 +2319,16 @@ def _tab_terminal() -> html.Div:
                             ),
                         ],
                         style={
-                            "width": "60%",
+                            "width": "65%",
                             "paddingRight": "10px",
                             "display": "flex",
                             "flexDirection": "column",
                         },
                     ),
-                    # Right column (40%)
+                    # Right column (35%)
                     html.Div(
                         [
+                            # News feed
                             html.Div(
                                 [
                                     html.Div(
@@ -2381,24 +2344,36 @@ def _tab_terminal() -> html.Div:
                                             "marginBottom": "10px",
                                         },
                                     ),
+                                    # Primary news slot (new)
                                     html.Div(
-                                        id="news-feed",
-                                        style={
-                                            "maxHeight": "600px",
-                                            "overflowY": "auto",
-                                        },
+                                        id="news-feed-content",
+                                        style={"maxHeight": "340px", "overflowY": "auto"},
                                     ),
+                                    # Legacy slot kept hidden for backward compat
+                                    html.Div(id="news-feed", style={"display": "none"}),
                                 ],
                                 style={
                                     "background": BG_CARD,
                                     "border": f"1px solid {BORDER}",
                                     "borderRadius": "4px",
                                     "padding": "12px 14px",
+                                    "marginBottom": "12px",
+                                },
+                            ),
+                            # Chart overlay (1mo OHLCV)
+                            html.Div(
+                                [html.Div(id="chart-overlay-content")],
+                                style={
+                                    "background": BG_CARD,
+                                    "border": f"1px solid {BORDER}",
+                                    "borderRadius": "4px",
+                                    "padding": "0",
+                                    "overflow": "hidden",
                                 },
                             ),
                         ],
                         style={
-                            "width": "40%",
+                            "width": "35%",
                             "paddingLeft": "10px",
                             "display": "flex",
                             "flexDirection": "column",
@@ -2454,6 +2429,8 @@ app.layout = html.Div(
         dcc.Store(id="terminal-watchlist", data=list(WATCHLIST)),
         dcc.Store(id="terminal-active-symbol", data=WATCHLIST[0] if WATCHLIST else "AAPL"),
         dcc.Store(id="price-alerts-store", data=[]),
+        dcc.Store(id="screener-results-store", data=[]),
+        dcc.Store(id="screener-active-store", data=False),
         dcc.Interval(id="check-alerts-interval", interval=10000, n_intervals=0),
         # ── TOP BAR (48px) ───────────────────────────────────────────────────
         html.Div(
@@ -2769,7 +2746,41 @@ app.layout = html.Div(
             style={"height": "38px", "flexShrink": "0"},
             colors={"border": BORDER, "primary": GREEN, "background": BG_CARD},
         ),
-        # ── TAB CONTENT ──────────────────────────────────────────────────────
-        html.Div(id="tab-content", style={"flex": "1", "minHeight": "0", "overflow": "hidden"}),
+        # ── TAB CONTENT (static — all tabs in DOM, visibility toggled) ──────
+        html.Div(
+            id="tab-live",
+            children=_tab_live(),
+            style={"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "block"},
+        ),
+        html.Div(
+            id="tab-analytics",
+            children=_tab_analytics(),
+            style={"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "none"},
+        ),
+        html.Div(
+            id="tab-backtest",
+            children=_tab_backtest(),
+            style={"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "none"},
+        ),
+        html.Div(
+            id="tab-leaderboard",
+            children=_tab_leaderboard(),
+            style={"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "none"},
+        ),
+        html.Div(
+            id="tab-heatmap",
+            children=_tab_heatmap(),
+            style={"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "none"},
+        ),
+        html.Div(
+            id="tab-agents",
+            children=_tab_agents(),
+            style={"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "none"},
+        ),
+        html.Div(
+            id="tab-terminal",
+            children=_tab_terminal(),
+            style={"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "none"},
+        ),
     ],
 )

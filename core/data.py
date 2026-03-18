@@ -159,7 +159,7 @@ class Portfolio:
     def save_state(self, path: str | None = None) -> None:
         if not PORTFOLIO_SAVE_ENABLED:
             return
-        path = path or PORTFOLIO_STATE_PATH
+        path = str(path or PORTFOLIO_STATE_PATH)
         with self._lock:
             state = {
                 "cash": self.cash,

@@ -26,8 +26,12 @@ _sparkline_lock = threading.Lock()
 _comparison_cache: dict = {}  # "sym1,sym2|period" → {"data": {...}, "ts": float}
 _comparison_lock = threading.Lock()
 
+_ohlcv_cache: dict = {}  # "symbol|period" → {"data": [...], "ts": float}
+_ohlcv_lock = threading.Lock()
+
 _SPARKLINE_CACHE_SEC = 300
 _COMPARISON_CACHE_SEC = 300
+_OHLCV_CACHE_SEC = 300
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -240,9 +244,11 @@ def fetch_news(symbol: str, max_items: int = NEWS_MAX_ITEMS) -> list[dict]:
         raw_news = ticker.news or []
         items = []
         for item in raw_news[:max_items]:
-            title = item.get("title", "")
             # yfinance news item structure varies — handle both old and new formats
             content = item.get("content", {})
+            title = item.get("title", "")
+            if not title and isinstance(content, dict):
+                title = content.get("title", "")
             if isinstance(content, dict):
                 source = content.get("provider", {}).get(
                     "displayName", item.get("publisher", "Unknown")
@@ -338,6 +344,40 @@ def fetch_comparison(symbols: list[str], period: str = "1mo") -> dict:
             return result
         except Exception:
             return {}
+
+
+def fetch_ohlcv(symbol: str, period: str = "1mo") -> list[dict]:
+    """
+    Fetch daily OHLCV data for a symbol.
+    Returns: [{"date": "2025-02-01", "open": 180.0, "high": 185.0, "low": 178.0, "close": 182.5, "volume": 45230000}, ...]
+    Cached 5 minutes per (symbol, period). Returns empty list on failure, never raises.
+    """
+    cache_key = f"{symbol}|{period}"
+    with _ohlcv_lock:
+        now = time.time()
+        cached = _ohlcv_cache.get(cache_key)
+        if cached is not None and (now - cached["ts"]) < _OHLCV_CACHE_SEC:
+            return cached["data"]
+        try:
+            hist = yf.Ticker(symbol).history(period=period, interval="1d")
+            if hist.empty:
+                return []
+            result = []
+            for ts_idx, row in hist.iterrows():
+                result.append(
+                    {
+                        "date": ts_idx.strftime("%Y-%m-%d"),
+                        "open": round(float(row["Open"]), 4),
+                        "high": round(float(row["High"]), 4),
+                        "low": round(float(row["Low"]), 4),
+                        "close": round(float(row["Close"]), 4),
+                        "volume": int(row["Volume"]),
+                    }
+                )
+            _ohlcv_cache[cache_key] = {"data": result, "ts": now}
+            return result
+        except Exception:
+            return []
 
 
 def run_screener(symbols: list[str], filters: dict) -> list[dict]:

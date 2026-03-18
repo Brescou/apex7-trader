@@ -124,8 +124,7 @@ def _heatmap_refresh(_):
             text=text1,
             hovertemplate="%{y} %{x}<br>%{text}<extra></extra>",
             colorbar=dict(
-                title="Win %",
-                titlefont=dict(family=FONT, size=9, color=TEXT_DIM),
+                title=dict(text="Win %", font=dict(family=FONT, size=9, color=TEXT_DIM)),
                 tickfont=dict(family=FONT, size=8, color=TEXT_DIM),
                 thickness=8,
                 len=0.8,
@@ -194,8 +193,7 @@ def _heatmap_refresh(_):
             text=text2,
             hovertemplate="%{text}<extra></extra>",
             colorbar=dict(
-                title="Avg P&L %",
-                titlefont=dict(family=FONT, size=9, color=TEXT_DIM),
+                title=dict(text="Avg P&L %", font=dict(family=FONT, size=9, color=TEXT_DIM)),
                 tickfont=dict(family=FONT, size=8, color=TEXT_DIM),
                 thickness=8,
                 len=0.8,

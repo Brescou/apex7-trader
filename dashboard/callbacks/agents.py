@@ -4,7 +4,7 @@ import datetime as _dt
 import sqlite3
 
 import plotly.graph_objects as go
-from dash import Input, Output, dcc, html
+from dash import Input, Output, State, dcc, html, no_update
 
 from dashboard.server import (
     BG_CARD,
@@ -25,9 +25,12 @@ from dashboard.server import (
 @app.callback(
     Output("agents-content", "children"),
     [Input("agents-tick", "n_intervals"), Input("btn-agents-refresh", "n_clicks")],
+    State("main-tabs", "value"),
     prevent_initial_call=False,
 )
-def _agents_refresh(_, __):
+def _agents_refresh(_, __, active_tab):
+    if active_tab != "agents":
+        return no_update
     try:
         _con = sqlite3.connect(DB_PATH)
         _mem_rows = _con.execute(

@@ -4,7 +4,7 @@ import statistics
 from collections import Counter, defaultdict
 
 import plotly.graph_objects as go
-from dash import Input, Output, dcc, html
+from dash import Input, Output, State, dcc, html, no_update
 from dash.dash_table import DataTable
 
 from dashboard.layout import _load_trades_db
@@ -30,9 +30,12 @@ from dashboard.server import (
 @app.callback(
     Output("analytics-content", "children"),
     [Input("analytics-tick", "n_intervals"), Input("btn-analytics-refresh", "n_clicks")],
+    State("main-tabs", "value"),
     prevent_initial_call=False,
 )
-def _analytics_refresh(_, __):
+def _analytics_refresh(_, __, active_tab):
+    if active_tab != "analytics":
+        return no_update
     trades = _load_trades_db()
 
     if not trades:
