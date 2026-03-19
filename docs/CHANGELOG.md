@@ -4,6 +4,18 @@
 
 No uncommitted changes.
 
+## [2026-03-18] — Sprint Designer Terminal Polish
+
+### Changed
+- `dashboard/callbacks/terminal.py`: macro bar — `BG_PANEL` background, height 64px, blocs flex égaux padding `0 24px`, label 10px block, prix 22px lineHeight 1.1, variation 12px ▲/▼, mini charts `fill="tozeroy"` opacity 0.08, timestamp `margin-left: auto`
+- `dashboard/callbacks/terminal.py`: symbol cards — dot palette index-based (GOLD/BLUE/GREEN/PURPLE), symbol 13px `letterSpacing`, card `transition: border-color 0.15s`, prix 22px, variation abs `TEXT_DIM`, RSI badges avec border, badges row `flex gap 6px`, sparklines 32px, screener no-match opacity 0.3
+- `dashboard/callbacks/terminal.py`: screener results container — `BG_PANEL` background, `border: 1px BORDER`, `borderRadius: 4px`
+- `dashboard/callbacks/terminal.py`: news feed — tokens `GREEN`/`RED` pour `border_col`, card `display: flex column`, link `webkit-line-clamp: 2`, empty state italic center
+- `dashboard/callbacks/terminal.py`: chart overlay — `margin t=32 b=24`, `xaxis`/`yaxis` `showline=False zeroline=False`, markers `size=5`
+- `dashboard/callbacks/terminal.py`: price alerts chips — border toujours `GOLD`, prix 11px
+- `dashboard/callbacks/terminal.py`: local constant `BG_PANEL = "#0d1424"` ajouté en tête de fichier
+- `dashboard/server.py`: config imports `AGENT_GRAPH`, `DEATH_THRESHOLD`, `INITIAL_BALANCE`, `WATCHLIST` ajoutés (fix manquants)
+
 ## [2026-03-18] — Sprint Terminal UX
 
 ### Added
