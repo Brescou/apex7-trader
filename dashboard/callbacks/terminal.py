@@ -35,29 +35,45 @@ from dashboard.server import (
     app,
 )
 
+# Local token not in server.py
+BG_PANEL = "#0d1424"
+
 _MACRO_KEYS = {"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}
+
+# Dot color palette for symbol cards (by position)
+_DOT_PALETTE = [YELLOW, BLUE, GREEN, PURPLE]
 
 
 def _mini_macro_chart(spark_data, chg):
-    """80x30px sparkline for macro bar blocs."""
+    """80x28px sparkline for macro bar blocs."""
     if not spark_data:
-        return html.Div(style={"height": "30px", "width": "80px"})
+        return html.Div(style={"height": "28px", "width": "80px"})
     prices = [d["price"] for d in spark_data[-5:]]
     color = GREEN if (chg is not None and chg > 0) else RED
-    fig = go.Figure(go.Scatter(y=prices, mode="lines", line=dict(color=color, width=1.5)))
+    h = color.lstrip("#")
+    r_c, g_c, b_c = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    fig = go.Figure(
+        go.Scatter(
+            y=prices,
+            mode="lines",
+            line=dict(color=color, width=1.5),
+            fill="tozeroy",
+            fillcolor=f"rgba({r_c},{g_c},{b_c},0.08)",
+        )
+    )
     fig.update_layout(
         margin=dict(l=0, r=0, t=0, b=0),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         showlegend=False,
-        height=30,
+        height=28,
         xaxis=dict(visible=False),
         yaxis=dict(visible=False),
     )
     return dcc.Graph(
         figure=fig,
-        config={"displayModeBar": False},
-        style={"height": "30px", "width": "80px"},
+        config={"displayModeBar": False, "staticPlot": True},
+        style={"height": "28px", "width": "80px"},
     )
 
 
@@ -105,11 +121,11 @@ def _update_macro_bar(_):
                     html.Span(
                         key,
                         style={
-                            "fontSize": "11px",
+                            "fontSize": "10px",
                             "color": TEXT_DIM,
                             "letterSpacing": "2px",
-                            "fontWeight": "700",
                             "textTransform": "uppercase",
+                            "display": "block",
                         },
                     ),
                     html.Div(
@@ -117,15 +133,17 @@ def _update_macro_bar(_):
                             html.Span(
                                 price_str,
                                 style={
-                                    "fontSize": "20px",
-                                    "fontWeight": "700",
+                                    "fontSize": "22px",
+                                    "fontWeight": "bold",
                                     "color": TEXT_MAIN,
+                                    "lineHeight": "1.1",
+                                    "fontFamily": FONT,
                                 },
                             ),
                             html.Span(
                                 chg_str,
                                 style={
-                                    "fontSize": "13px",
+                                    "fontSize": "12px",
                                     "color": chg_col,
                                     "marginLeft": "8px",
                                 },
@@ -139,8 +157,9 @@ def _update_macro_bar(_):
                     "flex": "1",
                     "display": "flex",
                     "flexDirection": "column",
-                    "gap": "2px",
-                    "padding": "8px 16px",
+                    "alignItems": "center",
+                    "justifyContent": "center",
+                    "padding": "0 24px",
                     "borderRight": "none" if is_last else f"1px solid {BORDER}",
                 },
             )
@@ -150,12 +169,10 @@ def _update_macro_bar(_):
     ts_el = html.Span(
         f"⏱ {ts}" if ts else "",
         style={
-            "fontSize": "9px",
+            "fontSize": "10px",
             "color": TEXT_DIM,
             "marginLeft": "auto",
-            "letterSpacing": "0.08em",
-            "alignSelf": "flex-end",
-            "paddingBottom": "8px",
+            "paddingRight": "16px",
         },
     )
 
@@ -226,7 +243,7 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
 
     # Build 2-column symbol card grid
     cards = []
-    for sym in wl:
+    for i, sym in enumerate(wl):
         d = prices.get(sym, {})
         chg_pct = d.get("change_pct", 0.0) or 0.0
         chg_abs = d.get("change_abs", 0.0) or 0.0
@@ -235,7 +252,7 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
         above = d.get("above_ma20", None)
         volume = d.get("volume", 0)
         chg_col = GREEN if chg_pct >= 0 else RED
-        dot_col = GREEN if chg_pct >= 0 else RED
+        dot_col = _DOT_PALETTE[i % len(_DOT_PALETTE)]
         active = sym == active_sym
 
         try:
@@ -253,8 +270,9 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
                         style={
                             "fontSize": "10px",
                             "color": GREEN,
-                            "background": "rgba(16,185,129,0.15)",
-                            "padding": "1px 5px",
+                            "background": "rgba(16,185,129,0.12)",
+                            "border": "1px solid rgba(16,185,129,0.3)",
+                            "padding": "1px 6px",
                             "borderRadius": "2px",
                         },
                     )
@@ -264,8 +282,9 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
                         style={
                             "fontSize": "10px",
                             "color": RED,
-                            "background": "rgba(239,68,68,0.15)",
-                            "padding": "1px 5px",
+                            "background": "rgba(239,68,68,0.12)",
+                            "border": "1px solid rgba(239,68,68,0.3)",
+                            "padding": "1px 6px",
                             "borderRadius": "2px",
                         },
                     )
@@ -298,6 +317,11 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
         else:
             border_color = BORDER
 
+        # Screener no-match: fade out
+        card_opacity = (
+            "0.3" if (is_screener_active and sym not in screener_matched and not active) else "1"
+        )
+
         card = html.Div(
             [
                 # Header row: dot + symbol + remove button
@@ -314,9 +338,10 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
                         html.Span(
                             sym,
                             style={
-                                "fontSize": "12px",
-                                "fontWeight": "700",
+                                "fontSize": "13px",
+                                "fontWeight": "bold",
                                 "color": TEXT_MAIN,
+                                "letterSpacing": "0.5px",
                                 "flex": "1",
                             },
                         ),
@@ -347,8 +372,8 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
                         html.Span(
                             f"${price:.2f}",
                             style={
-                                "fontSize": "20px",
-                                "fontWeight": "700",
+                                "fontSize": "22px",
+                                "fontWeight": "bold",
                                 "color": TEXT_MAIN,
                                 "marginRight": "8px",
                             },
@@ -363,10 +388,15 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
                         ),
                         html.Span(
                             f" {chg_abs:+.2f}",
-                            style={"fontSize": "11px", "color": chg_col},
+                            style={"fontSize": "11px", "color": TEXT_DIM, "marginLeft": "4px"},
                         ),
                     ],
-                    style={"marginBottom": "6px"},
+                    style={
+                        "display": "flex",
+                        "alignItems": "baseline",
+                        "marginTop": "6px",
+                        "marginBottom": "6px",
+                    },
                 ),
                 # RSI + MA20 + VOL row
                 html.Div(
@@ -389,13 +419,19 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
                             },
                         ),
                     ],
-                    style={"marginBottom": "6px"},
+                    style={
+                        "display": "flex",
+                        "alignItems": "center",
+                        "gap": "6px",
+                        "marginTop": "6px",
+                        "marginBottom": "6px",
+                    },
                 ),
                 # Sparkline
                 dcc.Graph(
                     figure=_make_sparkline_fig(spark or []),
                     config={"displayModeBar": False},
-                    style={"height": "35px", "margin": "0"},
+                    style={"height": "32px", "margin": "0"},
                 ),
                 # Invisible click overlay button
                 html.Button(
@@ -418,8 +454,10 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
                 "background": BG_CARD,
                 "border": f"1px solid {border_color}",
                 "borderRadius": "4px",
-                "padding": "10px 12px",
+                "padding": "12px",
                 "cursor": "pointer",
+                "transition": "border-color 0.15s ease",
+                "opacity": card_opacity,
             },
         )
         cards.append(card)
@@ -469,9 +507,10 @@ def _update_news(symbol, _):
                 "No news available.",
                 style={
                     "color": TEXT_DIM,
-                    "fontSize": "11px",
+                    "fontSize": "12px",
                     "fontStyle": "italic",
-                    "padding": "8px",
+                    "textAlign": "center",
+                    "padding": "20px",
                 },
             ),
             header,
@@ -507,11 +546,15 @@ def _update_news(symbol, _):
                                 target="_blank",
                                 style={
                                     "color": TEXT_MAIN,
-                                    "fontSize": "11px",
+                                    "fontSize": "12px",
                                     "fontWeight": "600",
                                     "textDecoration": "none",
                                     "lineHeight": "1.4",
                                     "fontFamily": FONT,
+                                    "display": "-webkit-box",
+                                    "WebkitLineClamp": "2",
+                                    "WebkitBoxOrient": "vertical",
+                                    "overflow": "hidden",
                                 },
                             ),
                         ],
@@ -523,15 +566,18 @@ def _update_news(symbol, _):
                     ),
                     html.Div(
                         f"{source}  ·  {age}",
-                        style={"fontSize": "9px", "color": TEXT_DIM, "fontStyle": "italic"},
+                        style={"fontSize": "10px", "color": TEXT_DIM, "marginTop": "2px"},
                     ),
                 ],
                 style={
                     "borderLeft": f"3px solid {sent_col}",
-                    "background": f"{sent_col}07",
+                    "background": BG_CARD,
                     "padding": "8px 10px",
-                    "marginBottom": "7px",
-                    "borderRadius": "0 3px 3px 0",
+                    "marginBottom": "3px",
+                    "borderRadius": "0 4px 4px 0",
+                    "display": "flex",
+                    "flexDirection": "column",
+                    "gap": "3px",
                 },
             )
         )
@@ -560,9 +606,10 @@ def _update_news_content(symbol, _, active_tab):
             "No news available.",
             style={
                 "color": TEXT_DIM,
-                "fontSize": "11px",
+                "fontSize": "12px",
                 "fontStyle": "italic",
-                "padding": "8px",
+                "textAlign": "center",
+                "padding": "20px",
             },
         )
 
@@ -571,10 +618,10 @@ def _update_news_content(symbol, _, active_tab):
         sentiment = item.get("sentiment", "neutral")
         if sentiment == "positive":
             sent_dot = "🟢"
-            border_col = "#10b981"
+            border_col = GREEN
         elif sentiment == "negative":
             sent_dot = "🔴"
-            border_col = "#ef4444"
+            border_col = RED
         else:
             sent_dot = "⚪"
             border_col = "#334155"
@@ -609,6 +656,10 @@ def _update_news_content(symbol, _, active_tab):
                                             "textDecoration": "none",
                                             "fontSize": "12px",
                                             "lineHeight": "1.4",
+                                            "display": "-webkit-box",
+                                            "WebkitLineClamp": "2",
+                                            "WebkitBoxOrient": "vertical",
+                                            "overflow": "hidden",
                                         },
                                     ),
                                     html.Div(
@@ -630,6 +681,9 @@ def _update_news_content(symbol, _, active_tab):
                     "marginBottom": "3px",
                     "background": BG_CARD,
                     "borderRadius": "0 4px 4px 0",
+                    "display": "flex",
+                    "flexDirection": "column",
+                    "gap": "3px",
                 },
             )
         )
@@ -674,7 +728,7 @@ def _update_chart_overlay(symbol, active_tab):
             mode="lines",
             line=dict(color=color, width=1.5),
             fill="tozeroy",
-            fillcolor=f"rgba({r_c},{g_c},{b_c},0.08)",
+            fillcolor=f"rgba({r_c},{g_c},{b_c},0.06)",
             showlegend=False,
         )
     )
@@ -683,7 +737,7 @@ def _update_chart_overlay(symbol, active_tab):
             x=[dates[max_idx]],
             y=[closes[max_idx]],
             mode="markers+text",
-            marker=dict(color=YELLOW, size=6),
+            marker=dict(color=YELLOW, size=5),
             text=[f"${closes[max_idx]:.2f}"],
             textposition="top center",
             textfont=dict(size=9, color=YELLOW),
@@ -695,7 +749,7 @@ def _update_chart_overlay(symbol, active_tab):
             x=[dates[min_idx]],
             y=[closes[min_idx]],
             mode="markers+text",
-            marker=dict(color=RED, size=6),
+            marker=dict(color=RED, size=5),
             text=[f"${closes[min_idx]:.2f}"],
             textposition="bottom center",
             textfont=dict(size=9, color=RED),
@@ -710,19 +764,23 @@ def _update_chart_overlay(symbol, active_tab):
         ),
         paper_bgcolor=BG_CARD,
         plot_bgcolor=BG_CARD,
-        margin=dict(l=8, r=8, t=28, b=8),
+        margin=dict(l=8, r=8, t=32, b=24),
         height=200,
         showlegend=False,
         xaxis=dict(
             showgrid=True,
             gridcolor=BORDER,
             tickfont=dict(size=9, color=TEXT_DIM),
+            showline=False,
+            zeroline=False,
         ),
         yaxis=dict(
             showgrid=True,
             gridcolor=BORDER,
             tickfont=dict(size=9, color=TEXT_DIM),
             tickprefix="$",
+            showline=False,
+            zeroline=False,
         ),
     )
     return dcc.Graph(
@@ -803,7 +861,15 @@ def _run_screener(_, watchlist, rsi_range, chg_min, chg_max, flags):
         rows.append(_watchlist_row(sym, item, False))
 
     return (
-        html.Div(rows, style={"background": BG_HOVER, "borderRadius": "3px", "padding": "4px"}),
+        html.Div(
+            rows,
+            style={
+                "background": BG_PANEL,
+                "border": f"1px solid {BORDER}",
+                "borderRadius": "4px",
+                "padding": "12px",
+            },
+        ),
         matched_syms,
         True,
     )
@@ -1043,7 +1109,7 @@ def _check_alerts(_, alerts, watchlist):
             triggered.append(a)
 
         dir_col = GREEN if a["direction"] == "above" else RED
-        # Alert chip: BG_CARD background, YELLOW left border
+        # Alert chip: BG_CARD background, YELLOW left border always
         list_items.append(
             html.Div(
                 [
@@ -1069,7 +1135,7 @@ def _check_alerts(_, alerts, watchlist):
                     html.Span(
                         f"${a['price']:.2f}",
                         style={
-                            "fontSize": "10px",
+                            "fontSize": "11px",
                             "color": TEXT_MAIN,
                             "flex": "1",
                         },
@@ -1101,9 +1167,9 @@ def _check_alerts(_, alerts, watchlist):
                     "display": "flex",
                     "alignItems": "center",
                     "gap": "8px",
-                    "padding": "5px 8px",
+                    "padding": "4px 8px",
                     "background": BG_CARD,
-                    "borderLeft": f"3px solid {YELLOW if fired else BORDER}",
+                    "borderLeft": f"3px solid {YELLOW}",
                     "borderRadius": "0 2px 2px 0",
                     "marginBottom": "3px",
                 },
