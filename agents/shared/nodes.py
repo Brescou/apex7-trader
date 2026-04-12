@@ -2,13 +2,19 @@
 
 import asyncio
 import json
+import logging
 import random
 import re
 import sqlite3
-from datetime import datetime
+import threading
+import time
+import uuid as _uuid_mod
+from contextlib import closing
+from datetime import datetime, date
 from pathlib import Path
 
 import anthropic
+import httpx
 import yfinance as yf
 
 try:
@@ -33,21 +39,35 @@ from config import (
 )
 from core.data import Portfolio
 from agents.shared.state import AgentState
+from core.indicators import rsi as _rsi
+from agents.shared.schemas import validate_decision
+
+logger = logging.getLogger("apex7")
 
 # ── Models ───────────────────────────────────────────────────────────────────
 
 SONNET_ID = "claude-sonnet-4-5"
 HAIKU_ID = "claude-haiku-4-5-20251001"
 
-sonnet = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-haiku = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+_API_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
+sonnet = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=_API_TIMEOUT)
+haiku = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=_API_TIMEOUT)
 
 # Runtime simulation toggle (survives hot-switch from Dash UI)
 _sim_mode: dict = {"enabled": SIMULATION_MODE}
 
 # ── SQLite ───────────────────────────────────────────────────────────────────
 
-DB_PATH = Path(__file__).parent.parent.parent / "trades.db"
+_DB_ROOT = Path(__file__).parent.parent.parent
+DB_PATH = _DB_ROOT / "trades.db"  # kept for backward compat
+
+
+def _get_db_path() -> Path:
+    """Return the DB path based on current simulation mode."""
+    if _sim_mode["enabled"]:
+        return _DB_ROOT / "trades_sim.db"
+    return _DB_ROOT / "trades.db"
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS trades (
@@ -96,19 +116,92 @@ CREATE TABLE IF NOT EXISTS postmortem (
 """
 
 
+_db_init_lock = threading.Lock()
+_db_initialized = False
+
+
 def _init_db() -> None:
-    con = sqlite3.connect(DB_PATH)
-    con.executescript(_SCHEMA)
-    # Soft migration: add source column if missing (idempotent)
+    """Create tables and set WAL mode for both live and sim databases."""
+    for db_file in [_DB_ROOT / "trades.db", _DB_ROOT / "trades_sim.db"]:
+        with closing(sqlite3.connect(db_file)) as con:
+            con.execute("PRAGMA journal_mode=WAL")
+            con.execute("PRAGMA busy_timeout=5000")
+            con.executescript(_SCHEMA)
+            try:
+                con.execute("ALTER TABLE trades ADD COLUMN source TEXT DEFAULT 'live'")
+                con.commit()
+            except sqlite3.OperationalError:
+                pass
+
+
+def _ensure_db() -> None:
+    """Lazy DB initialisation — called on first write/read, not at import time."""
+    global _db_initialized
+    if _db_initialized:
+        return
+    with _db_init_lock:
+        if _db_initialized:
+            return
+        _init_db()
+        _db_initialized = True
+
+
+def _db_write(query: str, params: tuple, *, retries: int = 3) -> bool:
+    """Centralized SQLite write with retries and logging.
+
+    WAL mode is set once by ``_init_db()`` — no need to repeat per-write.
+    """
+    _ensure_db()
+    for attempt in range(retries):
+        try:
+            with closing(sqlite3.connect(_get_db_path(), timeout=5)) as con:
+                con.execute(query, params)
+                con.commit()
+            return True
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e) and attempt < retries - 1:
+                time.sleep(0.1 * (attempt + 1))
+                continue
+            logger.error("SQLite write failed: %s (query=%s)", e, query[:80])
+            return False
+        except Exception as e:
+            logger.error("SQLite unexpected error: %s", e)
+            return False
+    return False
+
+
+def _db_write_multi(queries: list[tuple[str, tuple]], *, retries: int = 3) -> bool:
+    """Write multiple queries in a single transaction."""
+    _ensure_db()
+    for attempt in range(retries):
+        try:
+            with closing(sqlite3.connect(_get_db_path(), timeout=5)) as con:
+                for query, params in queries:
+                    con.execute(query, params)
+                con.commit()
+            return True
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e) and attempt < retries - 1:
+                time.sleep(0.1 * (attempt + 1))
+                continue
+            logger.error("SQLite multi-write failed: %s", e)
+            return False
+        except Exception as e:
+            logger.error("SQLite unexpected error: %s", e)
+            return False
+    return False
+
+
+def _db_read(query: str, params: tuple = ()) -> list:
+    """Centralized SQLite read — uses correct sim/live DB, context-managed."""
+    _ensure_db()
     try:
-        con.execute("ALTER TABLE trades ADD COLUMN source TEXT DEFAULT 'live'")
-        con.commit()
-    except sqlite3.OperationalError:
-        pass  # column already exists
-    con.close()
+        with closing(sqlite3.connect(_get_db_path(), timeout=5)) as con:
+            return con.execute(query, params).fetchall()
+    except Exception as e:
+        logger.error("SQLite read failed: %s (query=%s)", e, query[:80])
+        return []
 
-
-_init_db()
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -141,6 +234,23 @@ def _parse_json_obj(text: str) -> dict:
     return {}
 
 
+# ── API safety ────────────────────────────────────────────────────────────────
+
+_token_counter: dict = {"input": 0, "output": 0, "max_daily": 500_000, "reset_date": ""}
+_circuit_breaker: dict = {"consecutive_failures": 0, "paused_until": 0.0}
+_CIRCUIT_BREAKER_THRESHOLD = 3
+_CIRCUIT_BREAKER_PAUSE = 300  # 5 minutes
+
+
+def _maybe_reset_token_counter() -> None:
+    """Reset the daily token counter at midnight."""
+    today = date.today().isoformat()
+    if _token_counter["reset_date"] != today:
+        _token_counter["input"] = 0
+        _token_counter["output"] = 0
+        _token_counter["reset_date"] = today
+
+
 def _llm(
     client: anthropic.Anthropic,
     model: str,
@@ -149,7 +259,27 @@ def _llm(
     max_tokens: int = 1024,
     web_search: bool = False,
 ) -> str:
-    """Single LLM call or agentic web-search loop. Returns assistant text."""
+    """Single LLM call or agentic web-search loop with budget cap and circuit breaker."""
+    _maybe_reset_token_counter()
+
+    # Circuit breaker check
+    now = time.time()
+    if _circuit_breaker["consecutive_failures"] >= _CIRCUIT_BREAKER_THRESHOLD:
+        if now < _circuit_breaker["paused_until"]:
+            logger.warning(
+                "Circuit breaker OPEN — skipping LLM call (resumes in %.0fs)",
+                _circuit_breaker["paused_until"] - now,
+            )
+            return ""
+        _circuit_breaker["consecutive_failures"] = 0
+        logger.info("Circuit breaker CLOSED — resuming LLM calls")
+
+    # Token budget check
+    total_tokens = _token_counter["input"] + _token_counter["output"]
+    if total_tokens > _token_counter["max_daily"]:
+        logger.critical("Daily token budget exceeded (%d tokens) — skipping LLM call", total_tokens)
+        return ""
+
     tools = [{"type": "web_search_20250305", "name": "web_search"}] if web_search else []
     msgs = list(messages)
     kwargs: dict = {"model": model, "max_tokens": max_tokens, "messages": msgs}
@@ -159,21 +289,46 @@ def _llm(
         kwargs["tools"] = tools
 
     resp = None
-    for _ in range(8):
-        resp = client.messages.create(**kwargs)
-        if resp.stop_reason == "end_turn" or not tools:
-            break
-        if resp.stop_reason == "tool_use":
-            msgs = msgs + [{"role": "assistant", "content": resp.content}]
-            results = [
-                {"type": "tool_result", "tool_use_id": b.id, "content": ""}
-                for b in resp.content
-                if b.type == "tool_use"
-            ]
-            msgs = msgs + [{"role": "user", "content": results}]
-            kwargs["messages"] = msgs
+    try:
+        for _ in range(8):
+            resp = client.messages.create(**kwargs)
+            # Track token usage
+            if hasattr(resp, "usage"):
+                _token_counter["input"] += resp.usage.input_tokens
+                _token_counter["output"] += resp.usage.output_tokens
+            if resp.stop_reason == "end_turn" or not tools:
+                break
+            if resp.stop_reason == "tool_use":
+                msgs = msgs + [{"role": "assistant", "content": resp.content}]
+                results = [
+                    {"type": "tool_result", "tool_use_id": b.id, "content": ""}
+                    for b in resp.content
+                    if b.type == "tool_use"
+                ]
+                msgs = msgs + [{"role": "user", "content": results}]
+                kwargs["messages"] = msgs
+            else:
+                break
+        # Success — reset circuit breaker
+        _circuit_breaker["consecutive_failures"] = 0
+    except Exception as e:
+        _circuit_breaker["consecutive_failures"] += 1
+        if _circuit_breaker["consecutive_failures"] >= _CIRCUIT_BREAKER_THRESHOLD:
+            _circuit_breaker["paused_until"] = time.time() + _CIRCUIT_BREAKER_PAUSE
+            logger.error(
+                "Circuit breaker OPEN after %d failures — pausing for %ds: %s",
+                _CIRCUIT_BREAKER_THRESHOLD,
+                _CIRCUIT_BREAKER_PAUSE,
+                e,
+            )
         else:
-            break
+            logger.error(
+                "LLM call failed (%d/%d): %s",
+                _circuit_breaker["consecutive_failures"],
+                _CIRCUIT_BREAKER_THRESHOLD,
+                e,
+            )
+        return ""
 
     if resp is None:
         return ""
@@ -229,7 +384,7 @@ def _fetch_sentiment_sync(symbols: list[str]) -> dict[str, float]:
 
 
 async def _gather_data(portfolio: Portfolio, news_syms: list[str]) -> tuple[dict, str, dict]:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     prices, news, sentiment = await asyncio.gather(
         loop.run_in_executor(None, _fetch_prices_sync, portfolio),
         loop.run_in_executor(None, _fetch_news_sync, news_syms),
@@ -288,20 +443,6 @@ _SIM_THOUGHTS = {
 
 # Per-symbol simulated price history (for RSI computation)
 _sim_price_history: dict[str, list[float]] = {}
-
-
-def _sim_rsi(prices_hist: list[float], period: int = 14) -> float:
-    """Compute RSI from a list of prices. Returns 50.0 if not enough data."""
-    if len(prices_hist) < period + 1:
-        return 50.0
-    deltas = [prices_hist[i + 1] - prices_hist[i] for i in range(-period - 1, -1)]
-    gains = [d for d in deltas if d > 0]
-    losses = [-d for d in deltas if d < 0]
-    avg_g = sum(gains) / period if gains else 0.0
-    avg_l = sum(losses) / period if losses else 0.0
-    if avg_l == 0:
-        return 100.0
-    return 100.0 - (100.0 / (1.0 + avg_g / avg_l))
 
 
 def _sim_step_prices(current: dict[str, float]) -> dict[str, float]:
@@ -363,9 +504,7 @@ def sim_analyze(state: AgentState) -> dict:
 
     # Compute RSI per symbol and pick best candidate
     rsi_map: dict[str, float] = {
-        sym: _sim_rsi(_sim_price_history.get(sym, [prices[sym]]))
-        for sym in WATCHLIST
-        if sym in prices
+        sym: _rsi(_sim_price_history.get(sym, [prices[sym]])) for sym in WATCHLIST if sym in prices
     }
     logs.append(_entry(f"[SIM] RSI: {rsi_map}"))
 
@@ -450,7 +589,7 @@ def sim_research(state: AgentState) -> dict:
 def _write_env_var(key: str, value: str) -> None:
     env_path = Path(__file__).parent.parent.parent / ".env"
     try:
-        lines = env_path.read_text().splitlines()
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
         updated = False
         for i, line in enumerate(lines):
             if line.startswith(f"{key}="):
@@ -460,8 +599,8 @@ def _write_env_var(key: str, value: str) -> None:
         if not updated:
             lines.append(f"{key}={value}")
         env_path.write_text("\n".join(lines) + "\n")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Failed to write %s to .env: %s", key, e)
 
 
 def set_simulation_mode(enabled: bool) -> None:
@@ -481,13 +620,11 @@ def get_simulation_mode() -> bool:
 def load_memory_node(state: AgentState) -> dict:
     logs = [_entry("load_memory: querying SQLite...")]
 
-    con = sqlite3.connect(DB_PATH)
-    rows = con.execute(
+    rows = _db_read(
         "SELECT timestamp,symbol,action,price,amount_usd,shares,"
         "reasoning,confidence,emotion,portfolio_value_after,lesson "
         "FROM trades ORDER BY timestamp DESC LIMIT 20"
-    ).fetchall()
-    con.close()
+    )
 
     cols = (
         "timestamp",
@@ -666,10 +803,10 @@ Retourne ce JSON (et RIEN d'autre) :
         web_search=True,
     )
 
-    decision = _parse_json_obj(text)
-    confidence = float(decision.get("confidence", 0.5))
-    emotion = decision.get("emotion", "CALM")
-    thoughts = decision.get("thoughts", "")
+    decision = validate_decision(_parse_json_obj(text))
+    confidence = decision["confidence"]
+    emotion = decision["emotion"]
+    thoughts = decision["thoughts"]
 
     # skip_research: no positions + conf ok, or flat market (already set in fetch_data)
     skip = state["skip_research"] or (not state["positions"] and confidence >= 0.60)
@@ -885,36 +1022,36 @@ def make_save_memory_node(portfolio: Portfolio):
                 haiku, HAIKU_ID, [{"role": "user", "content": lesson_prompt}], max_tokens=80
             ).strip()
 
-        try:
-            con = sqlite3.connect(DB_PATH)
-            con.execute(
-                "INSERT INTO trades "
-                "(timestamp,symbol,action,price,amount_usd,shares,"
-                "reasoning,confidence,emotion,portfolio_value_after,lesson,source) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        success = _db_write_multi(
+            [
                 (
-                    _ts(),
-                    symbol,
-                    action,
-                    price,
-                    amount,
-                    shares,
-                    decision.get("reasoning", ""),
-                    float(decision.get("confidence", 0.0)),
-                    state["emotion"],
-                    pv_after,
-                    lesson,
-                    source,
+                    "INSERT INTO trades "
+                    "(timestamp,symbol,action,price,amount_usd,shares,"
+                    "reasoning,confidence,emotion,portfolio_value_after,lesson,source) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        _ts(),
+                        symbol,
+                        action,
+                        price,
+                        amount,
+                        shares,
+                        decision.get("reasoning", ""),
+                        float(decision.get("confidence", 0.0)),
+                        state["emotion"],
+                        pv_after,
+                        lesson,
+                        source,
+                    ),
                 ),
-            )
-            con.execute(
-                "INSERT INTO patterns (timestamp, pattern) VALUES (?,?)",
-                (_ts(), lesson),
-            )
-            con.commit()
-            con.close()
-        except Exception as e:
-            logs.append(_entry(f"save_memory DB error: {e}", "error"))
+                (
+                    "INSERT INTO patterns (timestamp, pattern) VALUES (?,?)",
+                    (_ts(), lesson),
+                ),
+            ]
+        )
+        if not success:
+            logs.append(_entry("save_memory: DB write failed", "error"))
 
         logs.append(_entry(f"save_memory: lesson → {lesson[:90]}"))
         return {
@@ -964,6 +1101,19 @@ _agent_status: dict = {
     "alive": True,
     "last_update": None,
 }
+
+_trace_id: dict = {"current": ""}
+
+
+def _new_trace_id() -> str:
+    """Generate a new trace ID for a cycle."""
+    tid = _uuid_mod.uuid4().hex[:8]
+    _trace_id["current"] = tid
+    return tid
+
+
+def _get_trace_id() -> str:
+    return _trace_id["current"]
 
 
 def get_agent_status() -> dict:

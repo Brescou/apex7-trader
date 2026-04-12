@@ -243,4 +243,7 @@ if __name__ == "__main__":
 
 
 # LangGraph Studio compatibility — module-level compiled graph
-agent_graph = build_graph()
+try:
+    agent_graph = build_graph()
+except Exception:
+    agent_graph = None
