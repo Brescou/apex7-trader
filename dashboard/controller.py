@@ -1,20 +1,23 @@
 """APEX-7 — Agent controller: agent loop, portfolio state, postmortem thread."""
 
+import logging
 import threading
 import time
 from datetime import datetime
 
-from agents.shared.nodes import get_simulation_mode
+from agents.shared.nodes import _new_trace_id, get_simulation_mode
 from agents.multi import run_daily_postmortem
 from config import AGENT_GRAPH, AGENT_INTERVAL, POSTMORTEM_HOUR
 from core.data import Portfolio
 from core.registry import get_graph
 
+logger = logging.getLogger("apex7.controller")
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # AGENT CONTROLLER STATE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_ctrl: dict = {"paused": False, "step": False}
+_ctrl: dict = {"paused": False, "step": False, "cycle": 0, "sim_mode": False}
 _state: dict = {
     "graph_id": AGENT_GRAPH,
     "last_votes": [],
@@ -37,6 +40,10 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
             break
         _ctrl["step"] = False
         cycle += 1
+        _ctrl["cycle"] = cycle
+        _ctrl["sim_mode"] = get_simulation_mode()
+        trace_id = _new_trace_id()
+        logger.info("[%s] === CYCLE %d START ===", trace_id, cycle)
         p.log(f"=== CYCLE {cycle} START ===")
         try:
             initial: dict = {
@@ -106,12 +113,31 @@ def _launch(p: Portfolio, graph_id: str = "simple") -> threading.Thread:
     return t
 
 
-# ── Startup: initialise portfolio and launch agent thread ─────────────────────
-_state["portfolio"] = Portfolio()
-_state["thread"] = _launch(_state["portfolio"], _state["graph_id"])
-
 # ── Postmortem thread ─────────────────────────────────────────────────────────
 _last_postmortem_date = None
+_controller_lock = threading.Lock()
+_controller_started = False
+
+
+def start_controller() -> None:
+    """Create the live portfolio and start agent + postmortem threads.
+
+    Called explicitly from ``create_app()`` so importing this module does not
+    spawn threads or construct ``Portfolio``.
+    """
+    global _controller_started
+    with _controller_lock:
+        if _controller_started:
+            return
+        _state["portfolio"] = Portfolio()
+        _state["thread"] = _launch(_state["portfolio"], _state["graph_id"])
+        threading.Thread(
+            target=_postmortem_loop,
+            args=(_state["portfolio"],),
+            daemon=True,
+            name="apex7-postmortem",
+        ).start()
+        _controller_started = True
 
 
 def _postmortem_loop(p: Portfolio) -> None:
@@ -126,11 +152,3 @@ def _postmortem_loop(p: Portfolio) -> None:
                 _last_postmortem_date = today
             except Exception as _e:
                 p.log(f"Postmortem error: {_e}", "error")
-
-
-threading.Thread(
-    target=_postmortem_loop,
-    args=(_state["portfolio"],),
-    daemon=True,
-    name="apex7-postmortem",
-).start()

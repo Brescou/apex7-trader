@@ -125,3 +125,17 @@ app.index_string = """<!DOCTYPE html>
   <footer>{%config%}{%scripts%}{%renderer%}</footer>
 </body>
 </html>"""
+
+
+@server.route("/health")
+def _health():
+    """Health check endpoint for monitoring."""
+    from dashboard.controller import _ctrl, _state
+
+    portfolio = _state.get("portfolio")
+    return {
+        "status": "ok",
+        "agent_alive": not portfolio.is_dead if portfolio else False,
+        "cycle": _ctrl.get("cycle", 0),
+        "simulation": _ctrl.get("sim_mode", False),
+    }
