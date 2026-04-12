@@ -13,6 +13,7 @@ import yfinance as yf
 
 from config import INITIAL_BALANCE, MAX_POSITIONS, WATCHLIST
 from core.data import Portfolio
+from core.indicators import rsi
 
 # ── Scenario presets ─────────────────────────────────────────────────────────
 
@@ -35,26 +36,8 @@ _BASE_PRICES: dict[str, float] = {
 # ── RSI helper (legacy, list-based) ──────────────────────────────────────────
 
 
-def _rsi(prices: list[float], period: int = 14) -> float:
-    """Compute RSI from a price series. Returns 50.0 if insufficient data."""
-    if len(prices) < period + 1:
-        return 50.0
-    window = prices[-(period + 1) :]
-    gains, losses = [], []
-    for i in range(1, len(window)):
-        delta = window[i] - window[i - 1]
-        if delta > 0:
-            gains.append(delta)
-            losses.append(0.0)
-        else:
-            gains.append(0.0)
-            losses.append(abs(delta))
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return 100.0 - (100.0 / (1.0 + rs))
+def _rsi(closes: list[float], period: int = 14) -> float:
+    return rsi(closes, period)
 
 
 # ── BacktestEngine (legacy — used by dashboard) ───────────────────────────────

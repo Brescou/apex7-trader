@@ -5,6 +5,7 @@ The root-level data.py remains for backward compatibility during migration.
 """
 
 import json
+import logging
 import os
 import threading
 from datetime import datetime
@@ -20,6 +21,8 @@ from config import (
     USE_LIVEFEED,
     WATCHLIST,
 )
+
+logger = logging.getLogger("apex7.portfolio")
 
 
 class Portfolio:
@@ -154,7 +157,12 @@ class Portfolio:
         entry = {"time": datetime.now().isoformat(), "message": message, "level": level}
         with self._lock:
             self.agent_log.append(entry)
-        print(f"[APEX-7/{level.upper()}] {message}")
+        formatted = f"[APEX-7/{level.upper()}] {message}"
+        lvl = level.lower()
+        if lvl in ("error", "critical", "warning"):
+            logger.warning("%s", formatted)
+        else:
+            logger.info("%s", formatted)
 
     def save_state(self, path: str | None = None) -> None:
         if not PORTFOLIO_SAVE_ENABLED:

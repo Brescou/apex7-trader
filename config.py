@@ -21,8 +21,8 @@ MAX_ALLOC_PCT = 40
 AGENT_INTERVAL = 30
 
 SIMULATION_MODE = os.getenv("SIMULATION_MODE", "false").lower() == "true"
-SIM_VOLATILITY  = float(os.getenv("SIM_VOLATILITY", "0.02"))   # 2% par défaut
-SIM_DRIFT       = float(os.getenv("SIM_DRIFT", "0.0001"))       # léger biais haussier
+SIM_VOLATILITY = float(os.getenv("SIM_VOLATILITY", "0.02"))  # 2% par défaut
+SIM_DRIFT = float(os.getenv("SIM_DRIFT", "0.0001"))  # léger biais haussier
 
 STOP_LOSS_PCT = 0.05
 
