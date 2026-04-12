@@ -11,6 +11,7 @@ from datetime import datetime
 import yfinance as yf
 
 from config import MACRO_SYMBOLS, MARKET_DATA_CACHE_SEC, WATCHLIST_CACHE_SEC, NEWS_MAX_ITEMS
+from core.indicators import rsi
 
 # ─── Cache structures ────────────────────────────────────────────────────────
 
@@ -90,19 +91,8 @@ def _classify_sentiment(title: str) -> str:
     return "neutral"
 
 
-def _calc_rsi(closes: list, period: int = 14) -> float | None:
-    """Wilder RSI from a list of closing prices. Returns None if insufficient data."""
-    if len(closes) < period + 1:
-        return None
-    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-    # Use only the last `period` deltas
-    recent = deltas[-period:]
-    avg_gain = sum(d for d in recent if d > 0) / period
-    avg_loss = sum(-d for d in recent if d < 0) / period
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return round(100 - 100 / (1 + rs), 2)
+def _calc_rsi(prices: list[float], period: int = 14) -> float:
+    return rsi(prices, period)
 
 
 def _format_volume(vol: float) -> str:

@@ -18,16 +18,14 @@ jobs:
       - name: Install dependencies
         run: uv sync
       - name: Run linter (ruff)
-        run: uv run ruff check core/ tests/ market_data.py --select E,F,W --ignore E501
-      - name: Run smoke tests
+        run: uv run ruff check . --select E,F,W --ignore E501
+      - name: Run tests
         env:
           SIMULATION_MODE: "true"
           ANTHROPIC_API_KEY: "sk-dummy-for-ci"
-        run: uv run python tests/test_smoke.py
-      - name: Run terminal tests
-        env:
-          SIMULATION_MODE: "true"
-        run: uv run python tests/test_terminal.py
+          PORTFOLIO_SAVE_ENABLED: "false"
+          USE_LIVEFEED: "false"
+        run: uv run pytest tests/ -v --tb=short
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -37,4 +35,4 @@ jobs:
       - name: Install dependencies
         run: uv sync
       - name: Check formatting (black)
-        run: uv run black --check --diff core/ tests/ market_data.py
+        run: uv run black --check --diff .

@@ -3,7 +3,6 @@
 from core.backtest import BacktestEngine
 from config import INITIAL_BALANCE, MAX_ALLOC_PCT
 
-
 _AGENTS: list[dict] = [
     {"agent_id": "CONSERVATIVE", "max_alloc_pct": 15},
     {"agent_id": "BALANCED", "max_alloc_pct": 25},

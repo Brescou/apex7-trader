@@ -8,11 +8,13 @@ dependencies = [
     "anthropic>=0.84.0",
     "dash>=4.0.0",
     "dash-bootstrap-components>=2.0.4",
+    "httpx>=0.28.1",
     "langchain-anthropic>=1.3.4",
     "langgraph>=1.0.10",
     "langgraph-cli[inmem]>=0.4.14",
     "pandas>=3.0.1",
     "plotly>=6.6.0",
+    "pydantic>=2.12.5",
     "python-dotenv>=1.2.2",
     "tweepy>=4.16.0",
     "yahooquery>=2.4.1",
@@ -24,35 +26,23 @@ dev = [
     "black>=24.10.0",
     "ruff>=0.8.0",
     "pre-commit>=4.0.0",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.black]
 line-length = 100
 target-version = ["py312"]
-# Legacy files excluded — reformatting would pollute git history
-exclude = '''
-/(
-    agent\.py
-  | agent_multi\.py
-  | data\.py
-  | backtest\.py
-  | app\.py
-  | graph_registry\.py
-  | leaderboard\.py
-  | config\.py
-  | main\.py
-)/
-'''
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-# Legacy files excluded — lint-clean incrementally
-exclude = [
-    "agent.py", "agent_multi.py", "data.py", "backtest.py",
-    "app.py", "graph_registry.py", "leaderboard.py", "config.py", "main.py",
-]
 
 [tool.ruff.lint]
 select = ["E", "F", "W"]
 ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
