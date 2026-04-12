@@ -1,7 +1,7 @@
-"""Terminal/market_data tests for APEX-7 — no pytest, just assert + print.
+"""Terminal/market_data tests for APEX-7.
 
-Run with:  uv run python tests/test_terminal.py
-Exit 0 if all pass, exit 1 on any failure.
+Run with:  uv run pytest tests/test_terminal.py -v
+Legacy:    uv run python tests/test_terminal.py
 """
 
 import os
@@ -9,22 +9,6 @@ import sys
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-_results: list[tuple[str, bool, str]] = []
-
-
-def _run(name: str, fn) -> bool:
-    try:
-        fn()
-        _results.append((name, True, ""))
-        print(f"  [PASS] {name}")
-        return True
-    except Exception as e:
-        tb = traceback.format_exc()
-        _results.append((name, False, str(e)))
-        print(f"  [FAIL] {name}: {e}")
-        print(tb)
-        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -35,11 +19,9 @@ def test_fetch_macro():
 
     result = fetch_macro()
     assert isinstance(result, dict), f"fetch_macro must return dict, got {type(result)}"
-    # Must have at least updated_at or at least one symbol key
     assert len(result) > 0, "fetch_macro returned empty dict"
     if "updated_at" in result:
         assert isinstance(result["updated_at"], str)
-    # Each symbol entry should have expected keys
     for key, val in result.items():
         if key == "updated_at":
             continue
@@ -96,19 +78,15 @@ def test_run_screener():
     from market_data import run_screener
 
     symbols = ["AAPL", "MSFT", "GOOGL"]
-    # Empty filters — should return all symbols with valid prices
     result = run_screener(symbols, {})
     assert isinstance(result, list), f"run_screener must return list, got {type(result)}"
 
-    # Filter with rsi_min=0 — should still return results
     result2 = run_screener(symbols, {"rsi_min": 0})
     assert isinstance(result2, list)
 
-    # Filter impossible to satisfy — should return empty
     result3 = run_screener(symbols, {"rsi_min": 150})
     assert result3 == [], f"Expected empty list for impossible filter, got {result3}"
 
-    # Each entry should have 'symbol' key
     for entry in result:
         assert "symbol" in entry, f"Screener entry missing 'symbol': {entry}"
 
@@ -118,17 +96,15 @@ def test_fetch_sparkline():
     import market_data
 
     if not hasattr(market_data, "fetch_sparkline"):
-        print(
-            "    (fetch_sparkline not yet in market_data — skipping, expected until backend-terminal merges)"
-        )
-        return
+        import pytest
+
+        pytest.skip("fetch_sparkline not yet in market_data")
 
     from market_data import fetch_sparkline
 
     result = fetch_sparkline("AAPL")
     assert isinstance(result, list), f"fetch_sparkline must return list, got {type(result)}"
     if len(result) == 0:
-        # Empty list is acceptable on network failure
         return
     first = result[0]
     assert "time" in first, f"Sparkline entry missing 'time': {first}"
@@ -142,17 +118,15 @@ def test_fetch_comparison():
     import market_data
 
     if not hasattr(market_data, "fetch_comparison"):
-        print(
-            "    (fetch_comparison not yet in market_data — skipping, expected until backend-terminal merges)"
-        )
-        return
+        import pytest
+
+        pytest.skip("fetch_comparison not yet in market_data")
 
     from market_data import fetch_comparison
 
     result = fetch_comparison(["AAPL", "MSFT"], period="1mo")
     assert isinstance(result, dict), f"fetch_comparison must return dict, got {type(result)}"
     if not result:
-        # Empty dict is acceptable on network failure
         return
     for sym in ["AAPL", "MSFT"]:
         assert sym in result, f"Missing symbol {sym} in comparison result"
@@ -168,7 +142,7 @@ def test_fetch_comparison():
 
 
 def test_cache_behavior():
-    """Verify that repeated calls return cached data (same object identity or consistent values)."""
+    """Verify that repeated calls return cached data."""
     from market_data import fetch_watchlist_prices
 
     symbols = ["AAPL"]
@@ -176,11 +150,9 @@ def test_cache_behavior():
     result2 = fetch_watchlist_prices(symbols)
 
     assert isinstance(result1, dict) and isinstance(result2, dict)
-    # Both calls should return same symbols
     assert set(result1.keys()) == set(
         result2.keys()
     ), f"Cache inconsistency: {result1.keys()} vs {result2.keys()}"
-    # Price should be identical (served from cache)
     for sym in symbols:
         if result1[sym]["price"] is not None and result2[sym]["price"] is not None:
             assert (
@@ -189,6 +161,24 @@ def test_cache_behavior():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Legacy runner (for backward compat with `uv run python tests/test_terminal.py`)
+
+_results: list[tuple[str, bool, str]] = []
+
+
+def _run(name: str, fn) -> bool:
+    try:
+        fn()
+        _results.append((name, True, ""))
+        print(f"  [PASS] {name}")
+        return True
+    except Exception as e:
+        tb = traceback.format_exc()
+        _results.append((name, False, str(e)))
+        print(f"  [FAIL] {name}: {e}")
+        print(tb)
+        return False
+
 
 if __name__ == "__main__":
     print("=" * 60)

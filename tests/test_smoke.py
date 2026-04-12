@@ -1,34 +1,16 @@
-"""Smoke tests for APEX-7 — no pytest, just assert + print.
+"""Smoke tests for APEX-7.
 
-Run with:  uv run python tests/test_smoke.py
-Exit 0 if all pass, exit 1 on any failure.
+Run with:  uv run pytest tests/test_smoke.py -v
+Legacy:    uv run python tests/test_smoke.py
 """
 
 import os
 import sys
 import traceback
 
-# Ensure project root is on path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Enable simulation mode before any agent import to avoid API calls
 os.environ["SIMULATION_MODE"] = "true"
-
-_results: list[tuple[str, bool, str]] = []
-
-
-def _run(name: str, fn) -> bool:
-    try:
-        fn()
-        _results.append((name, True, ""))
-        print(f"  [PASS] {name}")
-        return True
-    except Exception as e:
-        tb = traceback.format_exc()
-        _results.append((name, False, str(e)))
-        print(f"  [FAIL] {name}: {e}")
-        print(tb)
-        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -41,46 +23,37 @@ def test_imports():
     from core.registry import get_graph  # noqa: F401
 
 
-def test_portfolio_basic():
-    from core.data import Portfolio
+def test_portfolio_basic(portfolio):
+    assert portfolio.cash == 1000.0, f"Expected 1000.0 cash, got {portfolio.cash}"
 
-    p = Portfolio()
-    assert p.cash == 1000.0, f"Expected 1000.0 cash, got {p.cash}"
-
-    result = p.buy("AAPL", 200.0, 100.0)
+    result = portfolio.buy("AAPL", 200.0, 100.0)
     assert result["success"], f"buy failed: {result}"
-    assert "AAPL" in p.positions
-    assert p.cash < 1000.0
+    assert "AAPL" in portfolio.positions
+    assert portfolio.cash < 1000.0
 
-    symbols = p.open_symbols()
+    symbols = portfolio.open_symbols()
     assert "AAPL" in symbols, f"open_symbols missing AAPL: {symbols}"
 
-    result = p.sell("AAPL", 100, 110.0)
+    result = portfolio.sell("AAPL", 100, 110.0)
     assert result["success"], f"sell failed: {result}"
-    assert "AAPL" not in p.positions
+    assert "AAPL" not in portfolio.positions
 
-    assert len(p.trade_history) == 2
-    assert p.trade_history[0]["action"] == "BUY"
-    assert p.trade_history[1]["action"] == "SELL"
+    assert len(portfolio.trade_history) == 2
+    assert portfolio.trade_history[0]["action"] == "BUY"
+    assert portfolio.trade_history[1]["action"] == "SELL"
 
 
-def test_portfolio_multi_symbol():
-    from core.data import Portfolio
-
-    p = Portfolio()
-    # First buy succeeds
-    r1 = p.buy("AAPL", 200.0, 100.0)
+def test_portfolio_multi_symbol(portfolio):
+    r1 = portfolio.buy("AAPL", 200.0, 100.0)
     assert r1["success"], f"first buy failed: {r1}"
 
-    # Second buy on same symbol must fail (1 position per symbol)
-    r2 = p.buy("AAPL", 100.0, 105.0)
+    r2 = portfolio.buy("AAPL", 100.0, 105.0)
     assert not r2["success"], f"duplicate buy should fail but got: {r2}"
     assert "already open" in r2.get("error", "").lower() or not r2["success"]
 
-    # Different symbol succeeds
-    r3 = p.buy("MSFT", 200.0, 400.0)
+    r3 = portfolio.buy("MSFT", 200.0, 400.0)
     assert r3["success"], f"MSFT buy failed: {r3}"
-    assert len(p.positions) == 2
+    assert len(portfolio.positions) == 2
 
 
 def test_simple_graph_build():
@@ -126,17 +99,12 @@ def test_multi_graph_build():
     for node in expected:
         assert node in nodes, f"Missing node '{node}' in multi graph. Got: {nodes}"
 
-    # stoploss_guard: not yet wired — handle gracefully
-    if "stoploss_guard" not in nodes:
-        print("    (stoploss_guard not yet in multi graph — expected, skipping)")
-
 
 def test_simulation_cycle():
     from agents.simple import build_graph as build_simple_graph
     from agents.shared.nodes import _sim_mode
     from core.data import Portfolio
 
-    # Force simulation mode on
     _sim_mode["enabled"] = True
 
     p = Portfolio()
@@ -218,16 +186,36 @@ def test_app_import():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Legacy runner (for backward compat with `uv run python tests/test_smoke.py`)
+
+_results: list[tuple[str, bool, str]] = []
+
+
+def _run(name: str, fn) -> bool:
+    try:
+        fn()
+        _results.append((name, True, ""))
+        print(f"  [PASS] {name}")
+        return True
+    except Exception as e:
+        tb = traceback.format_exc()
+        _results.append((name, False, str(e)))
+        print(f"  [FAIL] {name}: {e}")
+        print(tb)
+        return False
+
 
 if __name__ == "__main__":
+    from core.data import Portfolio
+
     print("=" * 60)
     print("  APEX-7 Smoke Tests")
     print("=" * 60)
 
     tests = [
         ("test_imports", test_imports),
-        ("test_portfolio_basic", test_portfolio_basic),
-        ("test_portfolio_multi_symbol", test_portfolio_multi_symbol),
+        ("test_portfolio_basic", lambda: test_portfolio_basic(Portfolio())),
+        ("test_portfolio_multi_symbol", lambda: test_portfolio_multi_symbol(Portfolio())),
         ("test_simple_graph_build", test_simple_graph_build),
         ("test_multi_graph_build", test_multi_graph_build),
         ("test_simulation_cycle", test_simulation_cycle),
