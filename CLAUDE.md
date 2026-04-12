@@ -12,7 +12,7 @@ uv sync
 uv run python main.py
 
 # Run a single agent cycle standalone (calls Anthropic + yfinance)
-uv run python agent.py
+uv run python agents/simple.py
 
 # Launch LangGraph Studio (visual graph debugger)
 uv run langgraph dev
@@ -37,38 +37,56 @@ uv run pre-commit run --all-files
 
 ```
 apex7-trader/
-├── agent.py           # Simple graph (canonical source)
-├── agent_multi.py     # Multi-agent graph (canonical source)
-├── app.py             # Dash app — layout, callbacks, Terminal extensions
-├── backtest.py        # BacktestEngine root copy (legacy; canonical: core/backtest.py)
-├── config.py          # All constants
-├── data.py            # Portfolio + LiveFeed root copy (legacy; canonical: core/data.py)
-├── graph_registry.py  # Graph map root copy (legacy; canonical: core/registry.py)
-├── leaderboard.py     # Leaderboard runner
-├── main.py            # Entrypoint
-├── market_data.py     # Terminal market data (fetch_macro, sparkline, comparison, etc.)
-├── langgraph.json     # LangGraph Studio config
-├── pyproject.toml     # uv deps + dev group (black, ruff, pre-commit)
+├── main.py
+├── config.py
+├── market_data.py
+├── leaderboard.py
+├── pyproject.toml
+├── langgraph.json
+├── README.md
+├── agents/
+│   ├── __init__.py
+│   ├── simple.py          ← simple graph (was agent.py)
+│   ├── multi.py           ← multi-agent graph (was agent_multi.py)
+│   └── shared/
+│       ├── __init__.py
+│       ├── state.py       ← AgentState, MultiAgentState TypedDicts
+│       ├── nodes.py       ← shared nodes (load_memory, execute, etc.)
+│       └── schemas.py     ← Pydantic validation for LLM outputs
 ├── core/
 │   ├── __init__.py
-│   ├── data.py        # Canonical Portfolio + LiveFeed
-│   ├── backtest.py    # Canonical BacktestEngine + run_backtest
-│   └── registry.py   # Canonical graph ID → builder map
+│   ├── data.py            ← Portfolio, LiveFeed
+│   ├── backtest.py        ← BacktestEngine, run_backtest
+│   ├── indicators.py      ← Shared RSI implementation
+│   └── registry.py        ← graph ID → builder map
+├── dashboard/
+│   ├── __init__.py        ← create_app()
+│   ├── server.py          ← Dash() init + design tokens
+│   ├── controller.py      ← agent loop, portfolio state, postmortem thread
+│   ├── layout.py          ← app.layout + UI helpers
+│   └── callbacks/
+│       ├── __init__.py    ← imports all callback modules
+│       ├── live.py        ← live tab + tab routing
+│       ├── analytics.py   ← analytics tab
+│       ├── backtest_tab.py← backtest tab
+│       ├── leaderboard_tab.py ← leaderboard tab
+│       ├── heatmap.py     ← heatmap tab
+│       ├── agents.py      ← agents tab
+│       └── terminal.py    ← terminal tab (16 callbacks)
 ├── docs/
-│   ├── README.md
 │   ├── ARCHITECTURE.md
-│   └── CHANGELOG.md
-├── tests/
-│   ├── test_smoke.py
-│   └── test_terminal.py
-├── .github/workflows/ci.yml
-└── .pre-commit-config.yaml
+│   ├── CHANGELOG.md
+│   └── README.md
+└── tests/
+    ├── test_smoke.py
+    └── test_terminal.py
 ```
 
 **File ownership:**
-- `agent.py`, `agent_multi.py`, `core/` — apex7-senior-back
-- `app.py`, `market_data.py` — apex7-senior-front
-- `config.py`, `data.py`, `backtest.py`, `leaderboard.py` — apex7-senior-back
+- `agents/` — apex7-senior-back
+- `core/` — apex7-senior-back
+- `dashboard/` — apex7-senior-front
+- `config.py`, `leaderboard.py`, `market_data.py` — apex7-senior-back
 
 ## Architecture
 
@@ -78,18 +96,21 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 
 | File | Role |
 |------|------|
-| `main.py` | Entrypoint — calls `app.run()` |
-| `app.py` | Dash layout, callbacks, `_agent_loop` background thread, Terminal extensions (sparklines, alerts, comparison, CSV) |
-| `agent.py` | Simple graph: LangGraph nodes, simulation engine, `start_agent()` |
-| `agent_multi.py` | Multi-agent graph: 4 specialized agents + arbitration node + `run_daily_postmortem()` |
-| `data.py` | `Portfolio` — thread-safe state (cash, positions, value history, logs); `LiveFeed` — multi-symbol yfinance wrapper |
-| `core/data.py` | Canonical copy of `data.py` (migrated Sprint 5) |
-| `core/backtest.py` | Canonical BacktestEngine + functional API (migrated Sprint 5) |
-| `core/registry.py` | Canonical graph ID → builder map (migrated Sprint 5) |
+| `main.py` | Entrypoint — calls `create_app().run()` |
+| `dashboard/controller.py` | Agent loop thread, portfolio init, postmortem thread |
+| `dashboard/layout.py` | Dash layout + UI helpers |
+| `dashboard/callbacks/` | All `@app.callback` handlers (7 modules) |
+| `agents/simple.py` | Simple graph: LangGraph nodes, simulation engine, `start_agent()` |
+| `agents/multi.py` | Multi-agent graph: 4 specialized agents + arbitration node + `run_daily_postmortem()` |
+| `agents/shared/state.py` | `AgentState`, `MultiAgentState` TypedDicts |
+| `agents/shared/nodes.py` | Shared nodes: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`; also `_llm()` helper, `_db_write()`, simulation engine |
+| `agents/shared/schemas.py` | Pydantic validation models for LLM decision outputs |
+| `core/data.py` | `Portfolio` — thread-safe state; `LiveFeed` — multi-symbol yfinance wrapper |
+| `core/backtest.py` | `BacktestEngine` + functional API (`run_backtest`, `compare_strategies`) |
+| `core/indicators.py` | Shared `rsi()` implementation used across agents, backtest, and market_data |
+| `core/registry.py` | Graph ID → builder map |
 | `config.py` | All constants, loaded from `.env` |
-| `backtest.py` | BacktestEngine root copy — kept for backward compat |
 | `market_data.py` | Standalone market data — fetch_macro, fetch_watchlist_prices, fetch_news, run_screener, fetch_sparkline, fetch_comparison |
-| `graph_registry.py` | Graph ID map root copy — kept for backward compat |
 | `langgraph.json` | LangGraph Studio config — exposes both compiled graphs |
 | `tests/test_smoke.py` | 9 regression smoke tests — no pytest, assert+print, exit 0/1 |
 | `tests/test_terminal.py` | 7 market data tests (sparkline, comparison, screener, cache) |
@@ -98,7 +119,7 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 
 The Dash callback thread and the agent loop thread share a single `Portfolio` object. All mutations on `Portfolio` are protected by `threading.RLock()`. The agent's `AgentState` is a per-cycle snapshot; `Portfolio` is the source of truth for the dashboard.
 
-A third daemon thread (`apex7-postmortem`) runs in `app.py` and calls `run_daily_postmortem()` once per day at `POSTMORTEM_HOUR`. It only reads `portfolio.trade_history` and writes to SQLite — no Portfolio mutations.
+A third daemon thread (`apex7-postmortem`) runs in `dashboard/controller.py` and calls `run_daily_postmortem()` once per day at `POSTMORTEM_HOUR`. It only reads `portfolio.trade_history` and writes to SQLite — no Portfolio mutations.
 
 ### Two graphs
 
@@ -112,26 +133,46 @@ load_memory → fetch_data → analyze → [research loop if conf < 0.70] → ri
 load_memory → fetch_data → supervisor → [technician | analyst | risk_manager | macro_watcher] (parallel, via Send) → arbitrate → [research if conf < 0.72] → risk_check → execute → save_memory
 ```
 
-Nodes shared between both graphs: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`.
+Nodes shared between both graphs: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research` (defined in `agents/shared/nodes.py`).
 
 ### Model usage
 
 - `claude-sonnet-4-5` — `analyze_node`, `analyst_node`, `arbitrate_node` (complex reasoning + web search)
 - `claude-haiku-4-5-20251001` — `load_memory_node` (pattern extraction), `save_memory_node` (lesson generation), `technician_node`, `risk_manager_node`, `macro_watcher_node`, `supervisor_node`
 
-The `_llm()` helper in `agent.py` handles the agentic web-search tool loop (up to 8 iterations) using Claude's `web_search_20250305` tool directly via the Anthropic SDK.
+The `_llm()` helper in `agents/shared/nodes.py` handles the agentic web-search tool loop (up to 8 iterations) using Claude's `web_search_20250305` tool directly via the Anthropic SDK. It includes a daily token budget cap and circuit breaker (3 consecutive failures → 5-minute pause).
 
 ### Simulation mode
 
 When `SIMULATION_MODE=true` (or toggled live from the Dash UI):
 - `sim_fetch_data()` / `sim_analyze()` replace real data fetches and LLM calls with a random-walk price engine and RSI-based rule logic
-- No Anthropic API calls are made; `trades.db` still records trades with `source='simulation'`
+- No Anthropic API calls are made; trades are recorded in `trades_sim.db` (separate from `trades.db`) with `source='simulation'`
 - Cycle interval drops from `AGENT_INTERVAL` (30s) to 3s
 - The mode switch takes effect on the next cycle with no restart
+- `_get_db_path()` returns `trades_sim.db` in sim mode, `trades.db` in live mode
 
 ### State accumulation pattern
 
 `AgentState` uses `Annotated[List, operator.add]` for `log` and `portfolio_history` fields so nodes can append without overwriting. Nodes return only the fields they modify.
+
+### LLM output validation
+
+All LLM JSON outputs are validated through Pydantic models in `agents/shared/schemas.py`:
+
+| Model | Used by | Key validations |
+|-------|---------|-----------------|
+| `DecisionOutput` | `analyze_node`, `arbitrate_node` | action, confidence, allocation_pct, emotion, symbol |
+| `TechVote` | `technician_node` | action, confidence, allocation_pct, key_indicators |
+| `AnalystVote` | `analyst_node` | action, confidence, catalysts, sentiment_score |
+| `RiskVote` | `risk_manager_node` | risk_score [0-10], sizing_recommendation, var_1d |
+| `MacroVote` | `macro_watcher_node` | market_regime, macro_bias, macro_score [-1,1] |
+
+Shared validators via `_ActionConfidenceMixin`:
+- `action` must be `BUY`, `SELL`, or `HOLD` (defaults to `HOLD`)
+- `confidence` is clamped to [0.0, 1.0] (values > 1.0 are divided by 100)
+- `allocation_pct` is clamped to [0, 100]
+
+If validation fails entirely, each `validate_*()` function returns safe defaults (HOLD, 0.5 confidence).
 
 ### LLM prompts
 
@@ -140,7 +181,7 @@ System prompts and user messages in `analyze_node`, `research_node`, and the mul
 ### Adding a new graph node
 
 ```python
-# In agent.py
+# In agents/simple.py
 def my_node(state: AgentState) -> dict:
     return {"log": [_entry("my_node ran")], "confidence": 0.9}
 
@@ -151,7 +192,7 @@ g.add_edge("my_node", "risk_check")
 
 ### SQLite schema
 
-`trades.db` is auto-created at startup. Four tables:
+`trades.db` (live) and `trades_sim.db` (simulation) are auto-created on first access via `_ensure_db()` with WAL mode and busy_timeout=5000ms. Four tables:
 
 | Table | Description |
 |-------|-------------|
@@ -162,9 +203,11 @@ g.add_edge("my_node", "risk_check")
 
 The `source` column on `trades`, `agent_memory`, and `postmortem` is `'live'` or `'simulation'`.
 
+All SQLite writes go through `_db_write()` / `_db_write_multi()` in `agents/shared/nodes.py` which handle retries (3 attempts with backoff), context managers (`with closing(...)`), and logging on failure. All SQLite reads in agent nodes go through `_db_read()` which uses `_get_db_path()` to select the correct sim/live database.
+
 ### LiveFeed
 
-`LiveFeed` in `data.py` provides multi-symbol price fetching using 1m yfinance history. Distinct from `Portfolio.fetch_prices()` (which uses `yf.Tickers` fast_info). Currently defined but not wired into the agent graph.
+`LiveFeed` in `core/data.py` provides multi-symbol price fetching using 1m yfinance history. Wired into `Portfolio.fetch_prices()` when `USE_LIVEFEED=True`. Falls back to `yf.Tickers` fast_info silently on error.
 
 ## Configuration
 
@@ -190,31 +233,36 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 
 ## Known pitfalls
 
-- **No `assets/` directory** — all CSS is inlined in `app.py`'s `index_string`. Do not create an `assets/` folder expecting Dash to pick it up automatically.
+- **No `assets/` directory** — all CSS is inlined in `dashboard/server.py`'s `index_string`. Do not create an `assets/` folder expecting Dash to pick it up automatically.
 - **`HOLD` trades not saved** — `save_memory_node` returns early on HOLD. Patterns table only contains BUY/SELL lessons.
 - **`avg_price` vs `avg_cost`** — both keys appear in `_portfolio_value()` due to backward compat (`pos.get("avg_price", pos.get("avg_cost", 0))`). New positions always use `avg_price`.
-- **`trades.db` soft migration** — on startup, `agent.py` tries `ALTER TABLE trades ADD COLUMN source TEXT DEFAULT 'live'` and silently catches the error if the column exists. Do not remove this block.
+- **`trades.db` soft migration** — on startup, `agents/shared/nodes.py` tries `ALTER TABLE trades ADD COLUMN source TEXT DEFAULT 'live'` and silently catches the error if the column exists. Do not remove this block.
 - **`research` in multi-graph goes directly to `risk_check`** — unlike the simple graph where `research` loops back to `analyze`. This is intentional.
-- **`LiveFeed` not wired** — `LiveFeed` class exists in `data.py` and `STOP_LOSS_PCT` in `config.py` but neither is used in any graph node yet.
-- **graph_registry description outdated** — `graph_registry.py` describes multi as "4 Specialists" — update if a 5th specialist is added.
-- **`start_agent()` in `agent.py` is unused from the dashboard** — `app.py` runs its own `_agent_loop` directly, not via `start_agent()`. The function exists for standalone use.
-- **Postmortem thread only in `app.py`** — `run_daily_postmortem()` is never called from `main.py` or `agent.py`. It only runs when the full Dash app is started, not from standalone `python agent.py`.
-- **`agent_memory` inserts in live path only for specialist nodes** — in simulation mode, `sim_technician`, `sim_analyst`, `sim_risk_manager`, `sim_macro_watcher` each insert into `agent_memory` with `source='simulation'`. In live mode, `technician_node`, `analyst_node`, `risk_manager_node`, `macro_watcher_node` each insert with `source='live'`. The simple graph does not write to `agent_memory` at all.
-- **Multi-symbol position limit** — `Portfolio.buy()` silently returns `None` (not a dict) if the symbol is already held. Callers in `execute_node` check `result["success"]` — ensure any new callers handle a `None` return gracefully.
+- **`LiveFeed` not wired into graph nodes** — `LiveFeed` is wired into `Portfolio.fetch_prices()` only; it is not a LangGraph node.
+- **`core/registry.py` description** — update the "4 Specialists" description string if a 5th specialist is added to `agents/multi.py`.
+- **`start_agent()` in `agents/simple.py` is unused from the dashboard** — `dashboard/controller.py` runs its own `_agent_loop` directly. The function exists for standalone use.
+- **Postmortem thread only in `dashboard/controller.py`** — `run_daily_postmortem()` is never called from `main.py` or `agents/simple.py`. It only runs when the full Dash app is started.
+- **`agent_memory` inserts in live path only for specialist nodes** — the simple graph does not write to `agent_memory` at all.
+- **Multi-symbol position limit** — `Portfolio.buy()` returns `{"success": False, "error": "position already open"}` if the symbol is already held. Callers in `execute_node` check `result["success"]`.
 - **`market_data.py` cache** — macro cached 60s, watchlist 10s to avoid yfinance rate limiting. Cache is in-memory only; resets on restart.
-- **`market_data.py` decoupled** — zero imports from `agent.py` or `agent_multi.py` by design.
+- **`market_data.py` decoupled** — zero imports from `agents/` or `dashboard/` by design.
 - **`USE_LIVEFEED=False` in tests** — set via env or config override to avoid yfinance rate limiting during test runs.
 - **`portfolio_state.json` created on first run** — added to `.gitignore`, do not commit.
 - **`PORTFOLIO_SAVE_ENABLED=True` by default** — set to `False` in unit tests to avoid disk writes.
-- **Dual copies of core files** — `data.py`, `backtest.py`, `graph_registry.py` remain at root alongside `core/data.py`, `core/backtest.py`, `core/registry.py`. The `core/` versions are canonical. Update both or update only `core/` and keep root copies for backward compat with existing imports in `app.py`, `leaderboard.py`, etc.
-- **docs/ is not at root** — `ARCHITECTURE.md`, `CHANGELOG.md`, `README.md` are in `docs/`. The root `README.md` is a separate copy for GitHub. Edit `docs/README.md` for documentation changes; the root copy may diverge.
-- **`fetch_sparkline` and `fetch_comparison` require yfinance network access** — set `SIMULATION_MODE=true` in CI to avoid rate-limiting; `test_terminal.py` should handle network failures gracefully.
-- **`agents/` and `dashboard/` packages not yet created** — Sprint 5 created `core/` only. `agent.py`, `agent_multi.py`, `app.py` remain at root as single files.
+- **`dashboard/callbacks/__init__.py` must import all callback modules** — `live`, `analytics`, `backtest_tab`, `leaderboard_tab`, `heatmap`, `agents`, `terminal` must all be imported. If any are missing, those `@app.callback` decorators are never registered and the corresponding UI updates silently fail.
+- **`agents/` → `dashboard/` import direction is forbidden** — `agents/shared/nodes.py` imports from `core.data`. Never import from `dashboard` in any `agents/` file. This violates the one-way dependency rule (dashboard depends on agents/core, not the reverse).
+- **Lazy DB init** — `_init_db()` is no longer called at import time. It runs lazily on first `_db_write`/`_db_read`/`_db_write_multi` call via `_ensure_db()`. Importing `agents/shared/nodes.py` no longer creates SQLite tables. Importing `dashboard/controller.py` does not create a `Portfolio` until `start_controller()` is called explicitly. Importing `agents/simple.py` or `agents/multi.py` compiles a LangGraph graph at module level (for LangGraph Studio compatibility).
+- **RSI computed in `core/indicators.py`** — a single canonical `rsi()` function. Do not re-implement RSI elsewhere.
+- **`_db_write()` / `_db_read()` centralize all SQLite access** — never open raw `sqlite3.connect()` in agent nodes. Use `_db_write()` / `_db_write_multi()` for writes and `_db_read()` for reads from `agents/shared/nodes.py`. These handle WAL, retries, context managers, sim/live DB selection, and logging.
+- **Token budget resets daily** — `_maybe_reset_token_counter()` is called at the start of each `_llm()` invocation and resets `_token_counter` at midnight.
+- **All LLM specialist votes validated by Pydantic** — `technician_node`, `analyst_node`, `risk_manager_node`, `macro_watcher_node` and `arbitrate_node` all pass raw LLM JSON through their respective `validate_*_vote()` / `validate_decision()` functions from `agents/shared/schemas.py`.
 
 ## Code conventions
 
 - All CSS inline as Python dicts — no external stylesheets
-- Design tokens defined at top of `app.py` (BG_DEEP, GREEN, RED, etc.) — reuse them everywhere
+- Design tokens defined in `dashboard/server.py` (BG_DEEP, GREEN, RED, etc.) — reuse them everywhere
 - Dash callbacks use pattern-matching IDs `{"type": ..., "index": ...}` for agent cards
 - Emotion system: `_emotion(total)` derives state from portfolio value ratio; `_EMOTIONS` dict maps to icon/color/quote
 - `_classify_v2()` returns `(badge_label, color)` for every log message type — extend it when adding new node types
+- All LLM outputs validated through Pydantic models in `agents/shared/schemas.py`
+- Structured logging via `logging.getLogger("apex7")` — do not use bare `print()` for operational logs

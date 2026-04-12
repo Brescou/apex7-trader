@@ -18,26 +18,37 @@ apex7-trader/
 │   └── shared/
 │       ├── __init__.py
 │       ├── state.py       ← AgentState, MultiAgentState TypedDicts
-│       └── nodes.py       ← shared nodes (load_memory, execute, etc.)
+│       ├── nodes.py       ← shared nodes, _db_write, _llm, sim engine
+│       └── schemas.py     ← Pydantic validation for LLM outputs
 ├── core/
 │   ├── __init__.py
 │   ├── data.py            ← Portfolio, LiveFeed
 │   ├── backtest.py        ← BacktestEngine, run_backtest
-│   └── registry.py       ← build_graph()
+│   ├── indicators.py      ← Shared RSI implementation
+│   └── registry.py        ← graph ID → builder map
 ├── dashboard/
 │   ├── __init__.py        ← create_app()
-│   ├── server.py          ← Dash() init + design tokens
-│   ├── layout.py          ← app.layout + UI helpers
+│   ├── server.py          ← Dash() init + design tokens + /health endpoint
+│   ├── controller.py      ← agent loop, portfolio state, postmortem thread
+│   ├── layout/            ← app.layout + UI helpers (split into sub-modules)
+│   │   ├── __init__.py
+│   │   ├── helpers.py
+│   │   ├── emotions.py
+│   │   ├── classify.py
+│   │   ├── live_tab.py
+│   │   ├── terminal_tab.py
+│   │   ├── analytics_tab.py
+│   │   └── main.py
 │   └── callbacks/
 │       ├── __init__.py    ← imports all callback modules
 │       ├── live.py
 │       ├── analytics.py
 │       ├── backtest_tab.py
-│       ├── terminal.py
-│       ├── history.py
-│       └── heatmap.py
+│       ├── leaderboard_tab.py
+│       ├── heatmap.py
+│       ├── agents.py
+│       └── terminal.py
 ├── docs/
-│   ├── CLAUDE.md
 │   ├── ARCHITECTURE.md  (this file)
 │   ├── CHANGELOG.md
 │   └── README.md
@@ -54,9 +65,10 @@ apex7-trader/
 
 ```
 main.py
-  └── dashboard (create_app)
-        ├── dashboard.server (Dash app, design tokens)
-        ├── dashboard.layout (UI helpers, app.layout)
+  └── dashboard (create_app → start_controller → layout → callbacks)
+        ├── dashboard.server (Dash app, design tokens, /health endpoint)
+        ├── dashboard.controller (agent loop thread, portfolio init)
+        ├── dashboard.layout (UI helpers, app.layout — split into sub-modules)
         └── dashboard.callbacks.* (all @app.callback)
               ├── core.data (Portfolio)
               ├── core.backtest (run_backtest)
@@ -155,14 +167,14 @@ Static base weights:
 Risk veto: `risk_score > 8` → BUY penalized ×0.15.
 Macro filter: `regime == "risk-off"` → BUY dampened ×0.5.
 
-**Dynamic weights** (`_compute_dynamic_weights` in `agent_multi.py`):
+**Dynamic weights** (`_compute_dynamic_weights` in `agents/multi.py`):
 - Blends static weights (70%) with accuracy-based weights (30%) derived from the last 50 scored `agent_memory` votes per agent
 - Result is cached for 10 minutes; recomputed lazily on the next `arbitrate_node` call after expiry
 - Falls back to static weights if `agent_memory` has insufficient data
 
 ## StateGraph — Nodes & Edges
 
-### Simple graph (`agent.py`)
+### Simple graph (`agents/simple.py`)
 
 | Node | Incoming | Outgoing |
 |------|----------|----------|
@@ -175,7 +187,7 @@ Macro filter: `regime == "risk-off"` → BUY dampened ×0.5.
 | `save_memory` | `execute` | END |
 | `skip` | `risk_check` | END |
 
-### Multi-agent graph (`agent_multi.py`)
+### Multi-agent graph (`agents/multi.py`)
 
 | Node | Incoming | Outgoing |
 |------|----------|----------|
@@ -253,8 +265,8 @@ CREATE TABLE postmortem (
 
 ## Daily Postmortem
 
-`run_daily_postmortem(portfolio, db_path)` in `agent_multi.py`:
-- Triggered by a dedicated background thread (`apex7-postmortem`, daemon) started in `app.py`
+`run_daily_postmortem(portfolio, db_path)` in `agents/multi.py`:
+- Triggered by a dedicated background thread (`apex7-postmortem`, daemon) started in `dashboard/controller.py`
 - Runs at `POSTMORTEM_HOUR` (default 22:00) once per calendar day
 - Scans `portfolio.trade_history` for SELL trades since midnight
 - For each SELL, finds the matching BUY, computes P&L % and holding duration in hours
@@ -416,9 +428,11 @@ Wired into `Portfolio.fetch_prices()` when `USE_LIVEFEED=True`. If `LiveFeed.fet
 ## Concurrency Model
 
 - Dash callback thread: reads `_state["portfolio"]` — no mutations
-- Agent loop thread (`apex7-agent`, daemon): mutates Portfolio via `buy()`, `sell()`, `record_value()`
+- Agent loop thread (`apex7-agent`, daemon): mutates Portfolio via `buy()`, `sell()`, `record_value()` — launched by `start_controller()` in `dashboard/controller.py`
 - Postmortem thread (`apex7-postmortem`, daemon): calls `run_daily_postmortem()` once per day — reads `portfolio.trade_history`, writes to SQLite
 - All Portfolio mutations use `with self._lock` (RLock)
+- SQLite writes go through `_db_write()` in `agents/shared/nodes.py` — handles WAL mode, retries (3 attempts with backoff), and structured logging
+- Sim and live use separate databases (`trades_sim.db` / `trades.db`) via `_get_db_path()`
 - `_ctrl` dict (pause/step) and `_state` dict are mutated by both threads — not lock-protected (acceptable: only booleans and references)
 - Graph switch and reset: agent thread is killed (portfolio.is_dead = True), new Portfolio + thread created
 
@@ -450,8 +464,7 @@ push / PR to master
         │     ├── uv python install 3.12
         │     ├── uv sync
         │     ├── ruff check . --select E,F,W --ignore E501
-        │     ├── uv run python tests/test_smoke.py   (SIMULATION_MODE=true)
-        │     └── uv run python tests/test_terminal.py
+        │     └── pytest tests/ -v --tb=short   (SIMULATION_MODE=true)
         │
         └── job: lint (ubuntu-latest)
               ├── uv sync

@@ -4,6 +4,60 @@
 
 No uncommitted changes.
 
+## [2026-04-12] — Remediation Sprint (Full)
+
+### Phase 1 — Critical fixes
+
+#### Changed
+- `agents/shared/nodes.py`: replaced all `except Exception: pass` on SQLite writes with `_db_write()` helper (retry × 3 with backoff + structured logging)
+- `agents/shared/nodes.py`: `_init_db()` now sets `PRAGMA journal_mode=WAL` and `PRAGMA busy_timeout=5000`
+- `agents/shared/nodes.py`: Anthropic clients use `httpx.Timeout(60s, connect=10s)` — no more unbounded API calls
+- `agents/shared/nodes.py`: `_llm()` rewritten with daily token budget cap (500k tokens) and circuit breaker (3 consecutive failures → 5-minute pause)
+- `agents/shared/nodes.py`: `analyze_node` now validates LLM output through `DecisionOutput` Pydantic model
+- `agents/multi.py`: all 8 `try/except Exception: pass` SQLite blocks replaced by `_db_write()` / `_record_vote()` calls
+- Root `CLAUDE.md`: fully rewritten to match actual repo structure (was referencing deleted files like `agent.py`, `app.py`, `data.py` at root)
+
+#### Added
+- `agents/shared/schemas.py`: Pydantic validation models for LLM outputs (`DecisionOutput`, `TechVote`, `AnalystVote`, `RiskVote`, `MacroVote`) + `validate_decision()` helper
+
+#### Removed
+- `docs/CLAUDE.md` (merged into root CLAUDE.md to avoid desynchronization)
+
+### Phase 2 — Structural improvements
+
+#### Changed
+- `dashboard/layout.py` → `dashboard/layout/` package: split 2786-line monolith into 7 sub-modules (`helpers.py`, `emotions.py`, `classify.py`, `live_tab.py`, `terminal_tab.py`, `analytics_tab.py`, `main.py`)
+- `agents/multi.py`: extracted `_build_vote()` and `_record_vote()` helpers — eliminated ~400 lines of sim/live code duplication across 8 specialist nodes
+- Tests migrated to pytest: `conftest.py` with `sim_mode`, `portfolio`, `tmp_db` fixtures; backward-compatible legacy runners preserved
+- `pyproject.toml`: removed Black and Ruff exclusion lists — all files now linted and formatted
+- `.github/workflows/ci.yml`: updated to use `pytest tests/ -v --tb=short` and full-scope `ruff check .`
+- `agents/shared/nodes.py`, `core/backtest.py`, `market_data.py`: local RSI implementations replaced by thin wrappers around `core.indicators.rsi()`
+- `dashboard/controller.py`: `print()` calls replaced by `logging.getLogger("apex7.controller")`
+- `core/data.py`: `Portfolio.log()` now uses structured logging
+- `main.py`: configured `logging.basicConfig` with timestamp format
+
+#### Added
+- `core/indicators.py`: canonical `rsi()` implementation — single source of truth for all RSI computations
+- `agents/shared/nodes.py`: `_new_trace_id()` / `_get_trace_id()` for per-cycle trace correlation
+- `tests/conftest.py`: shared pytest fixtures
+- pytest + pytest-cov added to dev dependencies
+
+### Phase 3 — Production hardening
+
+#### Changed
+- `agents/shared/nodes.py`: sim and live modes use separate databases (`trades_sim.db` / `trades.db`) via `_get_db_path()`
+- `agents/simple.py`, `agents/multi.py`: module-level graph compilation wrapped in `try/except` for safer imports
+- `dashboard/controller.py`: Portfolio + agent thread creation moved to `start_controller()` — no side effects on import
+- `dashboard/__init__.py`: `create_app()` calls `start_controller()` explicitly
+
+#### Added
+- `dashboard/server.py`: `/health` endpoint returning `{status, agent_alive, cycle, simulation}`
+- `tests/test_integration.py`: 7 integration tests with deterministic LLM mocks (BUY/HOLD flows, schema validation, RSI, db_write, sim toggle)
+- `.gitignore`: `trades_sim.db`
+
+#### Removed
+- `agents_migration_plan.md`, `dashboard_migration_plan.md` (temporary planning files)
+
 ## [2026-03-18] — Sprint Designer Terminal Polish
 
 ### Changed
