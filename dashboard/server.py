@@ -74,9 +74,8 @@ app.index_string = """<!DOCTYPE html>
     @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
     @keyframes glow-g { 0%,100%{box-shadow:0 0 4px #10b981,0 0 10px #10b981} 50%{box-shadow:0 0 8px #10b981,0 0 20px #10b981,0 0 30px #10b98133} }
     @keyframes glow-y { 0%,100%{box-shadow:0 0 4px #f59e0b,0 0 10px #f59e0b} 50%{box-shadow:0 0 8px #f59e0b,0 0 20px #f59e0b} }
-    @keyframes glow-r { 0%,100%{box-shadow:0 0 4px #ef4444,0 0 12px #ef4444} 50%{box-shadow:0 0 9px #ef4444,0 0 24px #ef4444} }
-
-    .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+    @keyframes glow-o { 0%,100%{box-shadow:0 0 4px #f97316,0 0 10px #f97316} 50%{box-shadow:0 0 8px #f97316,0 0 20px #f97316,0 0 28px #f9731633} }
+    .dot-degraded { background:#f97316; animation:glow-o 1.1s ease-in-out infinite; }
     .dot-alive    { background:#10b981; animation:glow-g 2s ease-in-out infinite; }
     .dot-thinking { background:#f59e0b; animation:glow-y 0.8s ease-in-out infinite; }
     .dot-dead     { background:#ef4444; animation:glow-r 0.45s ease-in-out infinite; }

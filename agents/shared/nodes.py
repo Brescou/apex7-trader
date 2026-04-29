@@ -12,6 +12,7 @@ import uuid as _uuid_mod
 from contextlib import closing
 from datetime import datetime, date
 from pathlib import Path
+from typing import Any
 
 import anthropic
 import httpx
@@ -257,6 +258,35 @@ _circuit_breaker: dict = {"consecutive_failures": 0, "paused_until": 0.0}
 _CIRCUIT_BREAKER_THRESHOLD = 3
 _CIRCUIT_BREAKER_PAUSE = 300  # 5 minutes
 
+_degradation_status: dict[str, Any] = {"active": False, "reason": None}
+_degradation_lock = threading.Lock()
+
+
+def get_llm_degradation_status() -> dict[str, Any]:
+    """Return a copy of the LLM degradation flag (token budget / circuit breaker).
+
+    Thread-safe; safe to call from the dashboard callback thread.
+    """
+    with _degradation_lock:
+        return {
+            "active": bool(_degradation_status["active"]),
+            "reason": _degradation_status["reason"],
+        }
+
+
+def _set_llm_degradation(reason: str) -> None:
+    """Mark LLM as degraded (empty response path)."""
+    with _degradation_lock:
+        _degradation_status["active"] = True
+        _degradation_status["reason"] = reason
+
+
+def _clear_llm_degradation() -> None:
+    """Clear degradation after a successful API response."""
+    with _degradation_lock:
+        _degradation_status["active"] = False
+        _degradation_status["reason"] = None
+
 
 def _retry_after_seconds(exc: anthropic.RateLimitError) -> float:
     """Parse ``Retry-After`` (seconds); fall back to standard pause on missing/invalid."""
@@ -300,6 +330,7 @@ def _llm(
             logger.critical(
                 "Daily token budget exceeded (%d tokens) — skipping LLM call", total_tokens
             )
+            _set_llm_degradation("token_budget")
             return ""
 
     # Circuit breaker check
@@ -310,6 +341,7 @@ def _llm(
                 "Circuit breaker OPEN — skipping LLM call (resumes in %.0fs)",
                 _circuit_breaker["paused_until"] - now,
             )
+            _set_llm_degradation("circuit_breaker")
             return ""
         _circuit_breaker["consecutive_failures"] = 0
         logger.info("Circuit breaker CLOSED — resuming LLM calls")
@@ -345,7 +377,7 @@ def _llm(
                 kwargs["messages"] = msgs
             else:
                 break
-        # Success — reset circuit breaker
+        # Success — reset circuit breaker (degradation cleared after resp check)
         _circuit_breaker["consecutive_failures"] = 0
     except KeyboardInterrupt:
         raise
@@ -366,6 +398,7 @@ def _llm(
                 _CIRCUIT_BREAKER_THRESHOLD,
                 wait_s,
             )
+        _set_llm_degradation("circuit_breaker")
         return ""
     except (anthropic.APIStatusError, anthropic.APITimeoutError, httpx.TimeoutException) as e:
         _circuit_breaker["consecutive_failures"] += 1
@@ -385,10 +418,13 @@ def _llm(
                 _CIRCUIT_BREAKER_THRESHOLD,
                 e,
             )
+        _set_llm_degradation("circuit_breaker")
         return ""
 
     if resp is None:
+        _set_llm_degradation("circuit_breaker")
         return ""
+    _clear_llm_degradation()
     return next((b.text for b in resp.content if hasattr(b, "text") and b.text), "")
 
 

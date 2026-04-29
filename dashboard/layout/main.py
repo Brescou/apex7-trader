@@ -68,6 +68,10 @@ def setup_layout() -> None:
                         [
                             html.Div(id="status-dot", className="dot dot-alive"),
                             html.Div(
+                                id="llm-degradation-banner",
+                                style={"minWidth": "0", "maxWidth": "320px", "overflow": "hidden"},
+                            ),
+                            html.Div(
                                 [
                                     html.Span(
                                         "APEX-7 // SURVIVAL TRADER",

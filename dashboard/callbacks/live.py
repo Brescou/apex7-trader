@@ -4,7 +4,12 @@ import time
 
 from dash import Input, Output, State, ctx, html, no_update, MATCH
 
-from agents.shared.nodes import _db_read, get_simulation_mode, set_simulation_mode
+from agents.shared.nodes import (
+    _db_read,
+    get_llm_degradation_status,
+    get_simulation_mode,
+    set_simulation_mode,
+)
 from config import INITIAL_BALANCE
 from core.data import Portfolio
 from core.registry import get_graph_info
@@ -42,6 +47,11 @@ from dashboard.server import (
     YELLOW,
     app,
 )
+
+_LLM_DEGRADATION_LABELS = {
+    "circuit_breaker": "circuit breaker",
+    "token_budget": "token budget",
+}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -184,6 +194,7 @@ def _switch_graph(graph_id: str) -> dict:
         Output("page-bg", "style"),
         Output("top-bar", "style"),
         Output("status-dot", "className"),
+        Output("llm-degradation-banner", "children"),
         Output("round-num", "children"),
         Output("btn-pause", "className"),
         Output("sec-portfolio", "children"),
@@ -216,7 +227,7 @@ def _switch_graph(graph_id: str) -> dict:
 )
 def _refresh(_, store, active_tab, graph_store):
     if active_tab != "live":
-        return [no_update] * 24
+        return [no_update] * 25
     with _controller_rw_lock:
         p = _state["portfolio"]
         _graph_id_cur = (graph_store or {}).get("graph_id", _state.get("graph_id", "simple"))
@@ -227,6 +238,9 @@ def _refresh(_, store, active_tab, graph_store):
     pnl = total - INITIAL_BALANCE
     pnl_pct = (pnl / INITIAL_BALANCE) * 100
     dead = p.is_dead
+    degradation = get_llm_degradation_status()
+    is_sim_mode = get_simulation_mode()
+    llm_degraded_ui = bool(degradation.get("active")) and not is_sim_mode and not dead
     paused = store.get("paused", False)
     peak = p.peak_value
     dd = ((peak - total) / peak * 100) if peak > 0 else 0.0
@@ -255,13 +269,32 @@ def _refresh(_, store, active_tab, graph_store):
         "transition": "border-color 1s ease",
     }
 
-    # Status dot
+    # Status dot (+ LLM degradation when live — Finding 2.4)
     if dead:
         dot_cls = "dot dot-dead"
+    elif llm_degraded_ui:
+        dot_cls = "dot dot-degraded"
     elif _thinking(p):
         dot_cls = "dot dot-thinking"
     else:
         dot_cls = "dot dot-alive"
+
+    if llm_degraded_ui:
+        reason_key = degradation.get("reason") or "unknown"
+        reason_label = _LLM_DEGRADATION_LABELS.get(str(reason_key), str(reason_key))
+        llm_banner = html.Span(
+            f"⚠ LLM blocked: {reason_label}",
+            style={
+                "fontSize": "9px",
+                "color": ORANGE,
+                "letterSpacing": "0.06em",
+                "whiteSpace": "nowrap",
+                "textOverflow": "ellipsis",
+                "overflow": "hidden",
+            },
+        )
+    else:
+        llm_banner = html.Span()
 
     pause_cls = "cbtn cbtn-pause on" if paused else "cbtn cbtn-pause"
 
@@ -791,6 +824,7 @@ def _refresh(_, store, active_tab, graph_store):
         page_style,
         topbar_style,
         dot_cls,
+        llm_banner,
         str(cyc) if cyc else "—",
         pause_cls,
         sec_portfolio,
