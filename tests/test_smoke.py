@@ -162,11 +162,16 @@ def test_backtest_run():
 
 
 def test_sqlite_schema():
+    """Schema check — uses lazy DB init so a clean clone passes (Finding 5.1)."""
     import sqlite3
     from pathlib import Path
 
+    from agents.shared.nodes import _ensure_db
+
+    _ensure_db()
+
     db_path = Path(__file__).parent.parent / "trades.db"
-    assert db_path.exists(), f"trades.db not found at {db_path}"
+    assert db_path.is_file(), f"trades.db not created at {db_path}"
 
     con = sqlite3.connect(db_path)
     cursor = con.execute("SELECT name FROM sqlite_master WHERE type='table'")
