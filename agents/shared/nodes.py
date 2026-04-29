@@ -1084,7 +1084,7 @@ def _route_analyze(state: AgentState) -> str:
 
 
 def _route_risk(state) -> str:
-    return "execute" if (state.get("decision") or {}).get("_risk_passed", True) else "skip"
+    return "execute" if (state.get("decision") or {}).get("_risk_passed", False) else "skip"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
