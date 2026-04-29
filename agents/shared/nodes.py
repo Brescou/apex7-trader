@@ -924,22 +924,36 @@ def make_execute_node(portfolio: Portfolio):
         for sl_sym, sl_pos in list(portfolio.positions.items()):
             sl_price = prices.get(sl_sym, 0.0)
             sl_avg = sl_pos.get("avg_price", sl_pos.get("avg_cost", 0))
-            if sl_avg > 0 and sl_price > 1.0:
-                sl_pct = (sl_price - sl_avg) / sl_avg
-                if sl_pct < -STOP_LOSS_PCT:
-                    sl_slip = 1 + random.uniform(-0.001, 0.001)
-                    portfolio.sell(sl_sym, 100, sl_price * sl_slip)
-                    logs.append(
-                        _entry(
-                            f"STOP-LOSS triggered: {sl_sym} @ ${sl_price:.2f} (loss: {sl_pct:.1%})",
-                            "warning",
-                        )
-                    )
-            else:
+            if sl_avg <= 0:
+                continue
+            if sl_price <= 0:
                 logs.append(
                     _entry(
                         f"Skipping stop-loss check for {sl_sym}: invalid price "
                         f"sl_price={sl_price}, sl_avg={sl_avg}",
+                        "warning",
+                    )
+                )
+                continue
+            # Sub-dollar legitimate positions: allow SL when basis and quote are both cheap.
+            penny_pair = sl_avg <= 1.0 and sl_price <= 1.0
+            plausible_quote = sl_price > 1.0 or penny_pair
+            if not plausible_quote:
+                logs.append(
+                    _entry(
+                        f"Skipping stop-loss check for {sl_sym}: invalid price "
+                        f"sl_price={sl_price}, sl_avg={sl_avg}",
+                        "warning",
+                    )
+                )
+                continue
+            sl_pct = (sl_price - sl_avg) / sl_avg
+            if sl_pct < -STOP_LOSS_PCT:
+                sl_slip = 1 + random.uniform(-0.001, 0.001)
+                portfolio.sell(sl_sym, 100, sl_price * sl_slip)
+                logs.append(
+                    _entry(
+                        f"STOP-LOSS triggered: {sl_sym} @ ${sl_price:.2f} (loss: {sl_pct:.1%})",
                         "warning",
                     )
                 )
