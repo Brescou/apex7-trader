@@ -17,6 +17,7 @@ from typing import Any
 
 import anthropic
 import httpx
+import pandas as pd
 import yfinance as yf
 
 try:
@@ -592,12 +593,20 @@ def _seed_live_price_history() -> None:
         return
     for sym in WATCHLIST:
         try:
-            df = yf.download(sym, period="1mo", interval="1d", progress=False, auto_adjust=False)
+            df = yf.download(
+                sym,
+                period="1mo",
+                interval="1d",
+                progress=False,
+                auto_adjust=True,
+            )
             if df is None or len(df) == 0:
                 logger.warning("No OHLC data to seed for %s", sym)
                 continue
-            col = df["Close"] if "Close" in df.columns else df.iloc[:, -1]
-            closes = [float(x) for x in col.dropna().tolist()]
+            if isinstance(df.columns, pd.MultiIndex):
+                df = df.copy()
+                df.columns = df.columns.get_level_values(0)
+            closes = [float(x) for x in df["Close"].dropna().tolist()]
             if not closes:
                 continue
             _live_price_history[sym] = closes[-60:]
