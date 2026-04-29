@@ -17,7 +17,7 @@ uv run python agents/simple.py
 # Launch LangGraph Studio (visual graph debugger)
 uv run langgraph dev
 
-# Run regression smoke tests (9 tests, no pytest)
+# Run regression smoke tests (11 tests, legacy runner: assert+print; or pytest: uv run pytest tests/test_smoke.py -q)
 uv run python tests/test_smoke.py
 
 # Run terminal/market data tests (7 tests, no pytest)
@@ -28,6 +28,8 @@ uv run ruff check . --select E,F,W --ignore E501
 
 # Format check
 uv run black --check .
+
+# CI: .github/workflows/ci.yml — job "lint" = black --check only; job "test" = ruff + pytest + coverage
 
 # Run all pre-commit hooks
 uv run pre-commit run --all-files
@@ -43,7 +45,7 @@ apex7-trader/
 ├── leaderboard.py
 ├── pyproject.toml
 ├── langgraph.json
-├── README.md
+├── README.md             ← symlink → docs/README.md (tracked: docs/README.md)
 ├── agents/
 │   ├── __init__.py
 │   ├── simple.py          ← simple graph (was agent.py)
@@ -157,7 +159,7 @@ Nodes shared between both graphs: `load_memory`, `fetch_data`, `risk_check`, `ex
 - `claude-sonnet-4-5` — `analyze_node`, `analyst_node`, `arbitrate_node` (complex reasoning + web search)
 - `claude-haiku-4-5-20251001` — `load_memory_node` (pattern extraction), `save_memory_node` (lesson generation), `technician_node`, `risk_manager_node`, `macro_watcher_node`, `supervisor_node`
 
-The `_llm()` helper in `agents/shared/nodes.py` handles the agentic web-search tool loop (up to 8 iterations) using Claude's `web_search_20250305` tool directly via the Anthropic SDK. It includes a daily token budget cap and circuit breaker (3 consecutive failures → 5-minute pause).
+The `_llm()` helper in `agents/shared/nodes.py` handles the agentic web-search tool loop (up to 8 iterations) using Claude's `web_search_20250305` tool directly via the Anthropic SDK. It includes a daily token budget cap and circuit breaker (3 consecutive failures → 5-minute pause). On `anthropic.RateLimitError`, the breaker opens immediately so later `_llm()` calls respect `Retry-After` / pause.
 
 ### Simulation mode
 
@@ -250,6 +252,10 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 
 ## Known pitfalls
 
+- **CI jobs** — `.github/workflows/ci.yml`: job `lint` runs `uv run black --check .` only; job `test` runs ruff + pytest + coverage. Failing `lint` on push: reproduce with `uv run black --check --diff .`.
+- **`README.md`** — root `README.md` is a symlink to `docs/README.md`; commit `docs/README.md` when updating user-facing README.
+- **`_init_db()` test DB path** — if `_get_db_path()` is not the repo `trades.db` / `trades_sim.db` (e.g. `tmp_db` monkeypatch), `_init_db()` initializes only that file — avoids writing project DBs during tests.
+- **GitHub MCP** — typically no Actions run logs; debug CI with the same `uv run` commands locally.
 - **yfinance MultiIndex** — depuis yfinance 0.2.38+, `yf.download()` peut retourner un DataFrame en colonnes MultiIndex. Toujours passer `auto_adjust=True` ou aplatir avec `df.columns = df.columns.get_level_values(0)` avant d’accéder à `df["Close"]` (voir `_seed_live_price_history`).
 - **`_seed_live_price_history` bloque `fetch_data_node`** — au premier cycle live, le téléchargement ~1 mois par symbole prend ~2–5 s chacun. Le seed est protégé par `_live_price_history_lock` pour éviter un double seed en fan-out (multi-agent).
 - **No `assets/` directory** — all CSS is inlined in `dashboard/server.py`'s `index_string`. Do not create an `assets/` folder expecting Dash to pick it up automatically.
