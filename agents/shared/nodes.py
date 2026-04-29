@@ -27,7 +27,6 @@ except ImportError:
 
 from config import (
     ANTHROPIC_API_KEY,
-    DEATH_THRESHOLD,
     INITIAL_BALANCE,
     MAX_ALLOC_PCT,
     MAX_POSITIONS,
@@ -41,6 +40,7 @@ from config import (
 from core.data import Portfolio
 from agents.shared.state import AgentState
 from core.indicators import rsi as _rsi
+from agents.shared.prompts import ANALYZE_SYSTEM_PROMPT, PROMPT_VERSION
 from agents.shared.schemas import validate_decision
 
 logger = logging.getLogger("apex7")
@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS trades (
     portfolio_value_after REAL,
     lesson                TEXT,
     trace_id              TEXT,
-    source                TEXT DEFAULT 'live'
+    source                TEXT DEFAULT 'live',
+    prompt_version        TEXT
 );
 CREATE TABLE IF NOT EXISTS patterns (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,6 +137,11 @@ def _init_db() -> None:
                 pass
             try:
                 con.execute("ALTER TABLE trades ADD COLUMN trace_id TEXT")
+                con.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                con.execute("ALTER TABLE trades ADD COLUMN prompt_version TEXT")
                 con.commit()
             except sqlite3.OperationalError:
                 pass
@@ -762,7 +768,7 @@ def load_memory_node(state: AgentState) -> dict:
 
     rows = _db_read(
         "SELECT timestamp,symbol,action,price,amount_usd,shares,"
-        "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source "
+        "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source,prompt_version "
         "FROM trades ORDER BY timestamp DESC LIMIT 20"
     )
 
@@ -780,6 +786,7 @@ def load_memory_node(state: AgentState) -> dict:
         "lesson",
         "trace_id",
         "source",
+        "prompt_version",
     )
     past_trades = [dict(zip(cols, row)) for row in rows]
 
@@ -896,13 +903,7 @@ def analyze_node(state: AgentState) -> dict:
         "\n".join(f"  • {p}" for p in state["known_patterns"]) or "  Aucun pattern enregistré"
     )
 
-    system = (
-        "Tu es APEX-7, un trading agent IA en survival mode. "
-        f"Budget initial : ${INITIAL_BALANCE}. Tu meurs si portfolio < ${DEATH_THRESHOLD}. "
-        "Personnalité : trader Wall Street, brutal, factuel, sans sentiment. "
-        "Utilise web_search pour collecter de l'intel avant de décider. "
-        "Retourne UNIQUEMENT du JSON valide, rien avant ni après."
-    )
+    system = ANALYZE_SYSTEM_PROMPT
     user = f"""CYCLE #{state['round']} | MODE : {mode} | RESEARCH ITER : {it}
 
 PORTFOLIO
@@ -1194,8 +1195,9 @@ def make_save_memory_node(portfolio: Portfolio):
                 (
                     "INSERT INTO trades "
                     "(timestamp,symbol,action,price,amount_usd,shares,"
-                    "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source,"
+                    "prompt_version) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         _ts(),
                         symbol,
@@ -1210,6 +1212,7 @@ def make_save_memory_node(portfolio: Portfolio):
                         lesson,
                         _get_trace_id(),
                         source,
+                        PROMPT_VERSION,
                     ),
                 ),
                 (

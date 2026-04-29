@@ -32,6 +32,13 @@ from agents.shared.nodes import (
     skip_node,
     sonnet,
 )
+from agents.shared.prompts import (
+    ANALYST_SYSTEM_PROMPT,
+    ARBITRATE_SYSTEM_PROMPT,
+    MACRO_WATCHER_SYSTEM_PROMPT,
+    RISK_MANAGER_SYSTEM_PROMPT,
+    TECHNICIAN_SYSTEM_PROMPT,
+)
 from agents.shared.schemas import (
     validate_analyst_vote,
     validate_decision,
@@ -482,12 +489,7 @@ def technician_node(state: MultiAgentState) -> dict:
         for sym, p in pos.items()
     }
 
-    system = (
-        "Tu es un trader quantitatif expert en analyse technique. "
-        "Tu ne regardes QUE les prix, volumes et indicateurs techniques. "
-        "Tu ignores les news et le macro. Tu es méthodique, précis, factuel. "
-        "Retourne UNIQUEMENT du JSON valide."
-    )
+    system = TECHNICIAN_SYSTEM_PROMPT
     if recent_lessons:
         system += "\nTes erreurs récentes :\n" + "\n".join(
             f"  • {lesson}" for lesson in recent_lessons
@@ -548,13 +550,7 @@ def analyst_node(state: MultiAgentState) -> dict:
     )
     recent_lessons = [r[0] for r in _rows if r[0]]
 
-    system = (
-        "Tu es un analyste financier fondamental senior. "
-        "Tu analyses les catalyseurs, earnings, actualités, sentiment de marché. "
-        "Tu ignores les indicateurs techniques. "
-        "Tu penses en termes de valeur intrinsèque et de catalyseurs. "
-        "Retourne UNIQUEMENT du JSON valide."
-    )
+    system = ANALYST_SYSTEM_PROMPT
     if recent_lessons:
         system += "\nTes erreurs récentes :\n" + "\n".join(
             f"  • {lesson}" for lesson in recent_lessons
@@ -631,12 +627,7 @@ def risk_manager_node(state: MultiAgentState) -> dict:
     kelly_f = (win_rate_est * avg_win_est - (1 - win_rate_est) * avg_loss_est) / avg_win_est
     kelly_alloc = max(0, min(kelly_f * 100, MAX_ALLOC_PCT))
 
-    system = (
-        "Tu es un risk manager strict. Ton seul job : évaluer le risque et recommander le sizing. "
-        "Tu ne donnes JAMAIS d'opinion sur la direction du marché. "
-        "Tu calcules, tu mesures, tu protèges le capital. "
-        "Retourne UNIQUEMENT du JSON valide."
-    )
+    system = RISK_MANAGER_SYSTEM_PROMPT
     if recent_lessons:
         system += "\nTes erreurs récentes :\n" + "\n".join(
             f"  • {lesson}" for lesson in recent_lessons
@@ -711,12 +702,7 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
 
     avg_sent = sum(sentiment.values()) / max(len(sentiment), 1)
 
-    system = (
-        "Tu es un macro strategist. Tu analyses le régime de marché global : "
-        "VIX implicite, taux, sentiment agrégé, rotation sectorielle. "
-        "Tu ignores les actions individuelles. Tu regardes le tableau global. "
-        "Retourne UNIQUEMENT du JSON valide."
-    )
+    system = MACRO_WATCHER_SYSTEM_PROMPT
     if recent_lessons:
         system += "\nTes erreurs récentes :\n" + "\n".join(
             f"  • {lesson}" for lesson in recent_lessons
@@ -851,11 +837,7 @@ def arbitrate_node(state: MultiAgentState) -> dict:
             f"HOLD={action_scores['HOLD']:.2f}. Risk {risk_score:.0f}/10. {regime}."
         )
     else:
-        system_arb = (
-            "Tu es APEX-7, superviseur d'une équipe de 4 traders. "
-            "Arbitre leurs votes et justifie la décision finale. "
-            "Sois direct et factuel. Retourne UNIQUEMENT du JSON valide."
-        )
+        system_arb = ARBITRATE_SYSTEM_PROMPT
         user_arb = (
             f"ARBITRATION — Cycle #{state['round']}\n\n"
             f"VOTES:\n{votes_summary}\n\n"
