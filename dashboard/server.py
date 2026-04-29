@@ -135,11 +135,13 @@ def _health():
         portfolio = _state.get("portfolio")
         cycle = _ctrl.get("cycle", 0)
         sim = _ctrl.get("sim_mode", False)
+        consecutive_holds = _state.get("consecutive_holds", 0)
     alive = not portfolio.is_dead if portfolio else False
     body = {
         "status": "ok" if alive else "dead",
         "agent_alive": alive,
         "cycle": cycle,
         "simulation": sim,
+        "consecutive_holds": consecutive_holds,
     }
     return body, (200 if alive else 503)

@@ -5,7 +5,7 @@ import threading
 import time
 from datetime import datetime
 
-from agents.shared.nodes import _new_trace_id, get_simulation_mode
+from agents.shared.nodes import _new_trace_id, get_consecutive_hold_cycles, get_simulation_mode
 from agents.multi import run_daily_postmortem
 from config import AGENT_GRAPH, AGENT_INTERVAL, POSTMORTEM_HOUR
 from core.data import Portfolio
@@ -23,6 +23,7 @@ _state: dict = {
     "last_votes": [],
     "last_arb": {},
     "thinking": False,
+    "consecutive_holds": 0,
 }
 _controller_rw_lock = threading.Lock()
 
@@ -92,6 +93,7 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
             result = graph.invoke(initial)
             with _controller_rw_lock:
                 _state["thinking"] = False
+                _state["consecutive_holds"] = get_consecutive_hold_cycles()
                 if is_multi:
                     _state["last_votes"] = result.get("agent_votes", [])
                     _state["last_arb"] = result.get("arbitration", {}) or {}

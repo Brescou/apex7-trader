@@ -288,6 +288,36 @@ def _clear_llm_degradation() -> None:
         _degradation_status["reason"] = None
 
 
+# ── HOLD stagnation (Finding 3.5) ──────────────────────────────────────────────
+
+_consecutive_holds = 0
+_hold_stagnation_lock = threading.Lock()
+
+
+def get_consecutive_hold_cycles() -> int:
+    """Return the count of consecutive cycles whose final decision action was HOLD."""
+    with _hold_stagnation_lock:
+        return _consecutive_holds
+
+
+def _record_hold_stagnation(final_action: str) -> None:
+    """Increment on HOLD, reset on BUY/SELL; warn after 10 consecutive HOLD cycles."""
+    global _consecutive_holds
+    action_u = (final_action or "HOLD").upper()
+    with _hold_stagnation_lock:
+        if action_u == "HOLD":
+            _consecutive_holds += 1
+            n = _consecutive_holds
+        else:
+            _consecutive_holds = 0
+            n = 0
+    if action_u == "HOLD" and n >= 10:
+        logger.warning(
+            "HOLD stagnation: %d consecutive HOLD cycles — consider pausing agent",
+            n,
+        )
+
+
 def _retry_after_seconds(exc: anthropic.RateLimitError) -> float:
     """Parse ``Retry-After`` (seconds); fall back to standard pause on missing/invalid."""
     try:
@@ -1125,6 +1155,7 @@ def make_save_memory_node(portfolio: Portfolio):
     def save_memory_node(state: AgentState) -> dict:
         decision = state.get("decision") or {}
         action = decision.get("action", "HOLD").upper()
+        _record_hold_stagnation(action)
         logs = [_entry("save_memory: persisting...")]
 
         if action == "HOLD":
@@ -1201,6 +1232,8 @@ def make_save_memory_node(portfolio: Portfolio):
 
 def skip_node(state: AgentState) -> dict:
     decision = state.get("decision") or {}
+    action = decision.get("action", "HOLD").upper()
+    _record_hold_stagnation(action)
     reason = decision.get("_risk_reason") or "trade rejected by risk_check"
     return {"log": [_entry(f"skip: {reason}", "warning")]}
 
