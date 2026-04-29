@@ -72,13 +72,18 @@ class Portfolio:
             self.last_prices = prices
         return prices
 
+    def _total_value_unlocked(self, prices: dict[str, float] | None) -> float:
+        """Return cash + mark-to-market positions. Caller must hold ``self._lock``."""
+
+        p = prices if prices is not None else self.last_prices
+        positions_value = sum(
+            pos["shares"] * p.get(sym, pos["avg_price"]) for sym, pos in self.positions.items()
+        )
+        return self.cash + positions_value
+
     def total_value(self, prices: dict[str, float] | None = None) -> float:
         with self._lock:
-            p = prices if prices is not None else self.last_prices
-            positions_value = sum(
-                pos["shares"] * p.get(sym, pos["avg_price"]) for sym, pos in self.positions.items()
-            )
-            return self.cash + positions_value
+            return self._total_value_unlocked(prices)
 
     def buy(self, symbol: str, amount_usd: float, price: float) -> dict:
         with self._lock:
@@ -142,16 +147,16 @@ class Portfolio:
 
     def record_value(self, prices: dict[str, float]):
         with self._lock:
-            val = self.total_value(prices)
+            val = self._total_value_unlocked(prices)
             self.value_history.append({"time": datetime.now().isoformat(), "value": val})
             if val > self.peak_value:
                 self.peak_value = val
 
     def check_death(self, prices: dict[str, float]) -> bool:
-        val = self.total_value(prices)
         with self._lock:
+            val = self._total_value_unlocked(prices)
             self.is_dead = val < DEATH_THRESHOLD
-        return self.is_dead
+            return self.is_dead
 
     def log(self, message: str, level: str = "info"):
         entry = {"time": datetime.now().isoformat(), "message": message, "level": level}
