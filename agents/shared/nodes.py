@@ -192,15 +192,24 @@ def _db_write_multi(queries: list[tuple[str, tuple]], *, retries: int = 3) -> bo
     return False
 
 
-def _db_read(query: str, params: tuple = ()) -> list:
-    """Centralized SQLite read — uses correct sim/live DB, context-managed."""
+def _db_read(query: str, params: tuple = (), *, retries: int = 3) -> list:
+    """Centralized SQLite read — sim/live path, WAL from ``_init_db``, busy_timeout, retries."""
     _ensure_db()
-    try:
-        with closing(sqlite3.connect(_get_db_path(), timeout=5)) as con:
-            return con.execute(query, params).fetchall()
-    except Exception as e:
-        logger.error("SQLite read failed: %s (query=%s)", e, query[:80])
-        return []
+    for attempt in range(retries):
+        try:
+            with closing(sqlite3.connect(_get_db_path(), timeout=5)) as con:
+                con.execute("PRAGMA busy_timeout=5000")
+                return con.execute(query, params).fetchall()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e) and attempt < retries - 1:
+                time.sleep(0.1 * (attempt + 1))
+                continue
+            logger.error("SQLite read failed: %s (query=%s)", e, query[:80])
+            return []
+        except Exception as e:
+            logger.error("SQLite read failed: %s (query=%s)", e, query[:80])
+            return []
+    return []
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

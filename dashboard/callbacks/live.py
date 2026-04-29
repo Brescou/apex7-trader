@@ -1,11 +1,10 @@
 """APEX-7 — Live tab callbacks + tab routing."""
 
-import sqlite3
 import time
 
 from dash import Input, Output, State, ctx, html, no_update, MATCH
 
-from agents.shared.nodes import get_simulation_mode, set_simulation_mode
+from agents.shared.nodes import _db_read, get_simulation_mode, set_simulation_mode
 from config import INITIAL_BALANCE
 from core.data import Portfolio
 from core.registry import get_graph_info
@@ -29,7 +28,6 @@ from dashboard.layout import (
     _thinking,
 )
 from dashboard.server import (
-    DB_PATH,
     BG_CARD,
     BG_DEEP,
     BLUE,
@@ -726,16 +724,11 @@ def _refresh(_, store, active_tab, graph_store):
             ("risk_manager", "RISK", ORANGE),
             ("macro_watcher", "MACRO", PURPLE),
         ]
-        try:
-            _con = sqlite3.connect(DB_PATH)
-            _tr_rows = _con.execute(
-                "SELECT agent_name, was_correct FROM agent_memory "
-                "WHERE agent_name IN ('technician','analyst','risk_manager','macro_watcher') "
-                "ORDER BY timestamp DESC LIMIT 80"
-            ).fetchall()
-            _con.close()
-        except Exception:
-            _tr_rows = []
+        _tr_rows = _db_read(
+            "SELECT agent_name, was_correct FROM agent_memory "
+            "WHERE agent_name IN ('technician','analyst','risk_manager','macro_watcher') "
+            "ORDER BY timestamp DESC LIMIT 80"
+        )
         _tr_by_agent: dict = {}
         for _an, _wc in _tr_rows:
             _tr_by_agent.setdefault(_an, []).append(_wc)

@@ -1,18 +1,16 @@
 """APEX-7 — UI helpers: cards, sparklines, DB loaders, agent card builders."""
 
-import sqlite3
-
 import plotly.graph_objects as go
 from dash import dcc, html
 
 from core.data import Portfolio
+from agents.shared.nodes import _db_read
 from dashboard.layout.classify import _classify_v2
 from dashboard.server import (
     BG_CARD,
     BG_HOVER,
     BLUE,
     BORDER,
-    DB_PATH,
     DEATH_THRESHOLD,
     FONT,
     GRAY,
@@ -306,82 +304,67 @@ def _make_sparkline_fig(data: list) -> go.Figure:
 
 
 def _load_agent_memory() -> list[dict]:
-    try:
-        con = sqlite3.connect(DB_PATH)
-        rows = con.execute(
-            "SELECT id,timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source "
-            "FROM agent_memory ORDER BY timestamp DESC LIMIT 1000"
-        ).fetchall()
-        con.close()
-        cols = (
-            "id",
-            "timestamp",
-            "agent_name",
-            "symbol",
-            "vote",
-            "confidence",
-            "was_correct",
-            "lesson",
-            "source",
-        )
-        return [dict(zip(cols, r)) for r in rows]
-    except Exception:
-        return []
+    rows = _db_read(
+        "SELECT id,timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source "
+        "FROM agent_memory ORDER BY timestamp DESC LIMIT 1000"
+    )
+    cols = (
+        "id",
+        "timestamp",
+        "agent_name",
+        "symbol",
+        "vote",
+        "confidence",
+        "was_correct",
+        "lesson",
+        "source",
+    )
+    return [dict(zip(cols, r)) for r in rows]
 
 
 def _load_postmortem() -> list[dict]:
-    try:
-        con = sqlite3.connect(DB_PATH)
-        rows = con.execute(
-            "SELECT id,timestamp,symbol,buy_price,sell_price,pnl_pct,holding_hours,"
-            "agents_correct,summary,source "
-            "FROM postmortem ORDER BY timestamp DESC LIMIT 100"
-        ).fetchall()
-        con.close()
-        cols = (
-            "id",
-            "timestamp",
-            "symbol",
-            "buy_price",
-            "sell_price",
-            "pnl_pct",
-            "holding_hours",
-            "agents_correct",
-            "summary",
-            "source",
-        )
-        return [dict(zip(cols, r)) for r in rows]
-    except Exception:
-        return []
+    rows = _db_read(
+        "SELECT id,timestamp,symbol,buy_price,sell_price,pnl_pct,holding_hours,"
+        "agents_correct,summary,source "
+        "FROM postmortem ORDER BY timestamp DESC LIMIT 100"
+    )
+    cols = (
+        "id",
+        "timestamp",
+        "symbol",
+        "buy_price",
+        "sell_price",
+        "pnl_pct",
+        "holding_hours",
+        "agents_correct",
+        "summary",
+        "source",
+    )
+    return [dict(zip(cols, r)) for r in rows]
 
 
 def _load_trades_db() -> list[dict]:
-    try:
-        con = sqlite3.connect(DB_PATH)
-        rows = con.execute(
-            "SELECT id,timestamp,symbol,action,price,amount_usd,shares,"
-            "reasoning,confidence,emotion,portfolio_value_after,lesson,source "
-            "FROM trades ORDER BY timestamp DESC LIMIT 500"
-        ).fetchall()
-        con.close()
-        cols = (
-            "id",
-            "timestamp",
-            "symbol",
-            "action",
-            "price",
-            "amount_usd",
-            "shares",
-            "reasoning",
-            "confidence",
-            "emotion",
-            "portfolio_value_after",
-            "lesson",
-            "source",
-        )
-        return [dict(zip(cols, r)) for r in rows]
-    except Exception:
-        return []
+    rows = _db_read(
+        "SELECT id,timestamp,symbol,action,price,amount_usd,shares,"
+        "reasoning,confidence,emotion,portfolio_value_after,lesson,source "
+        "FROM trades ORDER BY timestamp DESC LIMIT 500"
+    )
+    cols = (
+        "id",
+        "timestamp",
+        "symbol",
+        "action",
+        "price",
+        "amount_usd",
+        "shares",
+        "reasoning",
+        "confidence",
+        "emotion",
+        "portfolio_value_after",
+        "lesson",
+        "source",
+    )
+    return [dict(zip(cols, r)) for r in rows]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
