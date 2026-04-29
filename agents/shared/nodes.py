@@ -126,8 +126,19 @@ _db_initialized = False
 
 
 def _init_db() -> None:
-    """Create tables and set WAL mode for both live and sim databases."""
-    for db_file in [_DB_ROOT / "trades.db", _DB_ROOT / "trades_sim.db"]:
+    """Create tables and set WAL mode for live/sim DBs, or a single test path."""
+    primary = Path(_get_db_path())
+    project_live = _DB_ROOT / "trades.db"
+    project_sim = _DB_ROOT / "trades_sim.db"
+    try:
+        resolved_primary = primary.resolve()
+        project_paths = {project_live.resolve(), project_sim.resolve()}
+        db_files = [project_live, project_sim] if resolved_primary in project_paths else [primary]
+    except OSError:
+        db_files = (
+            [project_live, project_sim] if primary in {project_live, project_sim} else [primary]
+        )
+    for db_file in db_files:
         with closing(sqlite3.connect(db_file)) as con:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("PRAGMA busy_timeout=5000")
@@ -264,6 +275,7 @@ def _parse_json_obj(text: str) -> dict:
 # 1. _circuit_breaker_lock
 # 2. _token_counter_lock (RLock — re-entrant for nested budget checks)
 # 3. _degradation_lock (via _set_llm_degradation / get_llm_degradation_status)
+# 4. _live_price_history_lock (RSI seed flag + history; lowest contention)
 
 _token_counter: dict = {"input": 0, "output": 0, "max_daily": 500_000, "reset_date": ""}
 _token_counter_lock = threading.RLock()
@@ -584,45 +596,47 @@ _sim_price_history: dict[str, list[float]] = {}
 _live_price_history: dict[str, list[float]] = {}
 _live_price_history_seeded: bool = False
 _last_price_date: dict[str, str] = {}
+_live_price_history_lock = threading.Lock()
 
 
 def _seed_live_price_history() -> None:
     """One-time seed from ~1mo daily closes so RSI(14) is meaningful from cycle 1."""
     global _live_price_history_seeded
-    if _live_price_history_seeded:
-        return
-    for sym in WATCHLIST:
-        try:
-            df = yf.download(
-                sym,
-                period="1mo",
-                interval="1d",
-                progress=False,
-                auto_adjust=True,
-            )
-            if df is None or len(df) == 0:
-                logger.warning("No OHLC data to seed for %s", sym)
-                continue
-            if isinstance(df.columns, pd.MultiIndex):
-                df = df.copy()
-                df.columns = df.columns.get_level_values(0)
-            closes = [float(x) for x in df["Close"].dropna().tolist()]
-            if not closes:
-                continue
-            _live_price_history[sym] = closes[-60:]
-            logger.info(
-                "Seeded _live_price_history for %s with %d daily closes",
-                sym,
-                len(_live_price_history[sym]),
-            )
-            idx = df.index[-1]
-            if hasattr(idx, "date"):
-                _last_price_date[sym] = idx.date().isoformat()
-            else:
-                _last_price_date[sym] = str(idx)[:10]
-        except Exception as e:
-            logger.warning("Seed failed for %s: %s", sym, e)
-    _live_price_history_seeded = True
+    with _live_price_history_lock:
+        if _live_price_history_seeded:
+            return
+        for sym in WATCHLIST:
+            try:
+                df = yf.download(
+                    sym,
+                    period="1mo",
+                    interval="1d",
+                    progress=False,
+                    auto_adjust=True,
+                )
+                if df is None or len(df) == 0:
+                    logger.warning("No OHLC data to seed for %s", sym)
+                    continue
+                if isinstance(df.columns, pd.MultiIndex):
+                    df = df.copy()
+                    df.columns = df.columns.get_level_values(0)
+                closes = [float(x) for x in df["Close"].dropna().tolist()]
+                if not closes:
+                    continue
+                _live_price_history[sym] = closes[-60:]
+                logger.info(
+                    "Seeded _live_price_history for %s with %d daily closes",
+                    sym,
+                    len(_live_price_history[sym]),
+                )
+                idx = df.index[-1]
+                if hasattr(idx, "date"):
+                    _last_price_date[sym] = idx.date().isoformat()
+                else:
+                    _last_price_date[sym] = str(idx)[:10]
+            except Exception as e:
+                logger.warning("Seed failed for %s: %s", sym, e)
+        _live_price_history_seeded = True
 
 
 def _record_live_prices_for_rsi(prices: dict[str, float]) -> None:

@@ -49,25 +49,12 @@ def portfolio():
 @pytest.fixture
 def tmp_db(tmp_path, monkeypatch):
     """Route SQLite to a temp file (no writes to project ``trades*.db``)."""
-    import sqlite3
-
     db = tmp_path / "test.db"
     monkeypatch.setattr("agents.shared.nodes._get_db_path", lambda: str(db))
 
-    from agents.shared.nodes import _SCHEMA
+    import agents.shared.nodes as _nodes
 
-    with sqlite3.connect(db) as con:
-        con.execute("PRAGMA journal_mode=WAL")
-        con.execute("PRAGMA busy_timeout=5000")
-        con.executescript(_SCHEMA)
-        for stmt in (
-            "ALTER TABLE trades ADD COLUMN source TEXT DEFAULT 'live'",
-            "ALTER TABLE trades ADD COLUMN trace_id TEXT",
-            "ALTER TABLE trades ADD COLUMN prompt_version TEXT",
-        ):
-            try:
-                con.execute(stmt)
-            except sqlite3.OperationalError:
-                pass
-        con.commit()
+    _nodes._db_initialized = False
+    _nodes._ensure_db()
     yield db
+    _nodes._db_initialized = False
