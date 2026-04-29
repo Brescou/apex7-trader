@@ -133,9 +133,11 @@ def _health():
     from dashboard.controller import _ctrl, _state
 
     portfolio = _state.get("portfolio")
-    return {
-        "status": "ok",
-        "agent_alive": not portfolio.is_dead if portfolio else False,
+    alive = not portfolio.is_dead if portfolio else False
+    body = {
+        "status": "ok" if alive else "dead",
+        "agent_alive": alive,
         "cycle": _ctrl.get("cycle", 0),
         "simulation": _ctrl.get("sim_mode", False),
     }
+    return body, (200 if alive else 503)
