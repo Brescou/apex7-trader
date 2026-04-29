@@ -124,7 +124,8 @@ All specialist votes are validated through **Pydantic models** (`TechVote`, `Ana
 ```
 ┌──────────────────────────────────────────────────┐
 │  trades.db (live) / trades_sim.db (simulation)    │
-│  tables: trades, patterns, agent_memory, postmortem│
+│  tables: trades, patterns, agent_memory, postmortem │
+│  (trades: trace_id, prompt_version, source)        │
 │  WAL mode + busy_timeout=5000ms                   │
 │  All access via _db_write() / _db_read()          │
 └──────────────────────────────────────────────────┘
@@ -154,7 +155,7 @@ The compiled graph is also exposed to **LangGraph Studio** via `langgraph.json` 
 
 This keeps the expensive model where reasoning quality matters and the cheap model for boilerplate LLM work.
 
-**API safety**: a circuit breaker pauses calls after 3 consecutive failures (5 min cooldown). A daily token budget cap (500K tokens) prevents runaway costs. The counter resets at midnight.
+**API safety**: a circuit breaker pauses calls after repeated failures (including opening immediately on HTTP 429 with `Retry-After`; 5 min cooldown after generic failures). A daily token budget cap (500K tokens) prevents runaway costs. The counter resets at midnight.
 
 ### Web search as a native tool
 
@@ -224,6 +225,9 @@ apex7-trader/
 ├── leaderboard.py                  # Benchmarks 4 allocation strategies
 ├── langgraph.json                  # LangGraph Studio config
 ├── pyproject.toml                  # Dependencies (uv) + black/ruff/pytest config
+├── Dockerfile                      # Multi-stage image (uv, python 3.12, port 8050)
+├── .dockerignore
+├── CLAUDE.md                       # Maintainer / agent context (detailed pitfalls)
 │
 ├── agents/                         # Agent graphs and shared logic
 │   ├── simple.py                   # Simple graph (1 LLM agent)
@@ -231,6 +235,7 @@ apex7-trader/
 │   └── shared/
 │       ├── state.py                # AgentState, MultiAgentState TypedDicts
 │       ├── nodes.py                # Shared nodes, DB helpers, sim engine, _llm()
+│       ├── prompts.py              # Versioned system prompts (PROMPT_VERSION)
 │       └── schemas.py              # Pydantic validation for all LLM outputs
 │
 ├── core/                           # Domain logic (no UI, no agents)
@@ -262,15 +267,21 @@ apex7-trader/
 │
 ├── docs/
 │   ├── ARCHITECTURE.md
-│   └── CHANGELOG.md
+│   ├── CHANGELOG.md
+│   └── README.md                   # Docs index / extras
 │
-├── tests/
-│   ├── conftest.py                 # Pytest fixtures (sim_mode, portfolio, tmp_db)
-│   ├── test_smoke.py               # 9 regression smoke tests
-│   ├── test_integration.py         # 14 integration tests (LLM mocks, schema validation)
-│   └── test_terminal.py            # 7 market data tests
+├── tests/                          # ~80 pytest tests (see CI)
+│   ├── conftest.py                 # sim_mode, portfolio, tmp_db (isolated SQLite)
+│   ├── test_smoke.py               # Import/graph/backtest/smoke (legacy runner still supported)
+│   ├── test_integration.py         # Graph flows, schemas, DB helpers, token reset
+│   ├── test_terminal.py            # market_data.py (macro, watchlist, news, screener…)
+│   ├── test_layout_helpers.py      # classify, registry, layout/controller wiring
+│   ├── test_circuit_breaker.py     # LLM circuit breaker + rate-limit behavior
+│   ├── test_stoploss.py            # execute_node stop-loss guards
+│   ├── test_portfolio.py           # Portfolio.sell() validation
+│   └── test_misc_coverage.py       # Leaderboard, RSI seed mocks
 │
-├── .github/workflows/ci.yml        # CI: ruff + black + pytest
+├── .github/workflows/ci.yml        # CI: job test (ruff + pytest + coverage) + job lint (black)
 ├── .pre-commit-config.yaml          # ruff + black + standard hooks
 ├── .env                             # API keys (not committed)
 ├── trades.db                        # Live SQLite (auto-created, not committed)
@@ -333,8 +344,8 @@ POSTMORTEM_HOUR = 22        # hour (0-23) at which daily postmortem runs
 # Start the dashboard + agent
 uv run python main.py
 
-# Run all tests (30 tests)
-uv run pytest tests/ -v
+# Run all tests (full suite; coverage optional — matches CI job "test")
+uv run pytest tests/ -v --tb=short
 
 # Run smoke tests only (legacy runner)
 uv run python tests/test_smoke.py
@@ -344,6 +355,10 @@ uv run ruff check . --select E,F,W --ignore E501
 
 # Format check
 uv run black --check .
+
+# Optional: container (see Dockerfile)
+# docker build -t apex7:latest .
+# docker run --rm -e ANTHROPIC_API_KEY=... -p 8050:8050 apex7:latest
 ```
 
 Open **http://localhost:8050** in your browser.
@@ -411,7 +426,7 @@ Two-column layout:
 
 ### ANALYTICS tab
 
-Loads from `trades.db` on render (auto-refreshes every 30s or on manual refresh).
+Loads trade history via the same DB path as the agent (`trades.db` / `trades_sim.db` depending on mode). Auto-refreshes every 30s or on manual refresh.
 
 - **KPI row** — Win Rate, Avg P&L, Best/Worst Trade, Total Trades, Avg Confidence, Favourite Ticker, Sim/Live ratio
 - **Charts (2x2)** — P&L by ticker (bar), Action distribution (donut), Confidence over time (line), Trades by hour (bar)
@@ -436,11 +451,11 @@ Output: ranked table (winner highlighted in green) + comparative returns bar cha
 ### HEATMAP tab
 
 Per-symbol performance matrix showing returns and trade frequency across the watchlist.
-Data sourced from `trades.db`.
+Data sourced from the active SQLite DB (live vs simulation).
 
 ### AGENTS tab
 
-Per-agent comparison table loaded from `agent_memory` in `trades.db`:
+Per-agent comparison table loaded from `agent_memory` in the active SQLite DB:
 - Accuracy rate (correct votes / total votes)
 - Average confidence
 - Win rate per agent
@@ -533,7 +548,7 @@ Simulation mode will auto-seed prices for it. Live mode will fetch via yfinance.
 
 ### Change the agent personality
 
-The system prompt is in `analyze_node` in `agents/shared/nodes.py`. Edit the `system` string to change how the agent reasons, its risk appetite, or its output format.
+Main system prompt text for the simple graph’s analyze step lives in `agents/shared/prompts.py` (`ANALYZE_SYSTEM_PROMPT`, versioned with `PROMPT_VERSION`). Multi-agent prompts remain in `agents/multi.py` as today.
 
 ### Adjust simulation parameters at runtime
 
