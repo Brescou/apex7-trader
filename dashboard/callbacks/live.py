@@ -1,8 +1,7 @@
 """APEX-7 — Live tab callbacks + tab routing."""
 
-import time
-
 from dash import Input, Output, State, ctx, html, no_update, MATCH
+from dash.exceptions import PreventUpdate
 
 from agents.shared.nodes import (
     _db_read,
@@ -153,12 +152,13 @@ def _controls(_, __, ___, store):
         with _controller_rw_lock:
             old = _state["portfolio"]
         old.is_dead = True
-        time.sleep(0.15)
         p = Portfolio()
         with _controller_rw_lock:
             _state["portfolio"] = p
             _state["last_votes"] = []
             _state["last_arb"] = {}
+            _state["last_error"] = None
+            _state["_death_refresh_done"] = False
             _state["thread"] = _launch(p, _state.get("graph_id", "simple"))
             _ctrl["paused"] = False
         store["paused"] = False
@@ -176,12 +176,13 @@ def _switch_graph(graph_id: str) -> dict:
         _state["graph_id"] = graph_id
         old = _state["portfolio"]
     old.is_dead = True
-    time.sleep(0.2)
     p = Portfolio()
     with _controller_rw_lock:
         _state["portfolio"] = p
         _state["last_votes"] = []
         _state["last_arb"] = {}
+        _state["last_error"] = None
+        _state["_death_refresh_done"] = False
         _ctrl["paused"] = False
         _state["thread"] = _launch(p, graph_id)
     info = get_graph_info(graph_id)
@@ -195,6 +196,7 @@ def _switch_graph(graph_id: str) -> dict:
         Output("top-bar", "style"),
         Output("status-dot", "className"),
         Output("llm-degradation-banner", "children"),
+        Output("agent-error-banner", "children"),
         Output("round-num", "children"),
         Output("btn-pause", "className"),
         Output("sec-portfolio", "children"),
@@ -227,12 +229,18 @@ def _switch_graph(graph_id: str) -> dict:
 )
 def _refresh(_, store, active_tab, graph_store):
     if active_tab != "live":
-        return [no_update] * 25
+        return [no_update] * 26
     with _controller_rw_lock:
         p = _state["portfolio"]
         _graph_id_cur = (graph_store or {}).get("graph_id", _state.get("graph_id", "simple"))
         votes = _state.get("last_votes", [])
         arb = _state.get("last_arb", {})
+        paused_ctrl = _ctrl.get("paused", False)
+        death_done = _state.get("_death_refresh_done", False)
+        last_err = _state.get("last_error")
+
+    if p is not None and p.is_dead and not paused_ctrl and death_done:
+        raise PreventUpdate
     prices = p.last_prices
     total = p.total_value(prices)
     pnl = total - INITIAL_BALANCE
@@ -295,6 +303,22 @@ def _refresh(_, store, active_tab, graph_store):
         )
     else:
         llm_banner = html.Span()
+
+    if last_err:
+        agent_err_banner = html.Span(
+            "⚠ Agent error",
+            title=str(last_err)[:800],
+            style={
+                "fontSize": "9px",
+                "color": RED,
+                "letterSpacing": "0.06em",
+                "whiteSpace": "nowrap",
+                "textOverflow": "ellipsis",
+                "overflow": "hidden",
+            },
+        )
+    else:
+        agent_err_banner = html.Span()
 
     pause_cls = "cbtn cbtn-pause on" if paused else "cbtn cbtn-pause"
 
@@ -820,11 +844,18 @@ def _refresh(_, store, active_tab, graph_store):
     else:
         live_track = html.Div()
 
+    with _controller_rw_lock:
+        if dead:
+            _state["_death_refresh_done"] = True
+        else:
+            _state["_death_refresh_done"] = False
+
     return (
         page_style,
         topbar_style,
         dot_cls,
         llm_banner,
+        agent_err_banner,
         str(cyc) if cyc else "—",
         pause_cls,
         sec_portfolio,

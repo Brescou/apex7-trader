@@ -24,6 +24,8 @@ _state: dict = {
     "last_arb": {},
     "thinking": False,
     "consecutive_holds": 0,
+    "last_error": None,
+    "_death_refresh_done": False,
 }
 _controller_rw_lock = threading.Lock()
 
@@ -56,6 +58,8 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
         logger.info("[%s] === CYCLE %d START ===", trace_id, cycle)
         p.log(f"=== CYCLE {cycle} START ===")
         try:
+            with _controller_rw_lock:
+                _state["last_error"] = None
             initial: dict = {
                 "balance": p.cash,
                 "positions": dict(p.positions),
@@ -104,6 +108,8 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
                 p.log("DEATH CONDITION MET", "critical")
                 break
         except Exception as e:
+            with _controller_rw_lock:
+                _state["last_error"] = str(e)
             p.log(f"Cycle error: {e}", "error")
             p.log(traceback.format_exc(), "error")
         if p.is_dead:

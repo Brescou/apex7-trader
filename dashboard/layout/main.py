@@ -72,6 +72,10 @@ def setup_layout() -> None:
                                 style={"minWidth": "0", "maxWidth": "320px", "overflow": "hidden"},
                             ),
                             html.Div(
+                                id="agent-error-banner",
+                                style={"minWidth": "0", "maxWidth": "280px", "overflow": "hidden"},
+                            ),
+                            html.Div(
                                 [
                                     html.Span(
                                         "APEX-7 // SURVIVAL TRADER",
