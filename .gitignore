@@ -18,7 +18,6 @@ wheels/
 .langgraph_api/
 
 # Lock files    (for package managers)
-uv.lock
 poetry.lock
 
 # Other
@@ -26,7 +25,9 @@ poetry.lock
 .idea/
 .pytest_cache/
 .ruff_cache/
-.vscode/
+.coverage
+coverage.xml
+htmlcov/
 .env
 .env.local
 .env.development.local

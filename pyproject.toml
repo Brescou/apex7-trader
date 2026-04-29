@@ -1,7 +1,7 @@
 [project]
 name = "apex7-trader"
 version = "0.1.0"
-description = "Add your description here"
+description = "Multi-agent LLM trading dashboard built with LangGraph, Dash, and Claude"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

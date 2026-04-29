@@ -13,6 +13,8 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
+          enable-cache: true
+          cache-dependency-path: uv.lock
       - name: Set up Python
         run: uv python install 3.12
       - name: Install dependencies
@@ -22,16 +24,19 @@ jobs:
       - name: Run tests
         env:
           SIMULATION_MODE: "true"
-          ANTHROPIC_API_KEY: "sk-dummy-for-ci"
           PORTFOLIO_SAVE_ENABLED: "false"
           USE_LIVEFEED: "false"
-        run: uv run pytest tests/ -v --tb=short
+        run: uv run pytest tests/ -v --tb=short --cov=. --cov-report=xml --cov-fail-under=50
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-dependency-path: uv.lock
       - name: Install dependencies
         run: uv sync
       - name: Check formatting (black)
