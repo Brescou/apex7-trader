@@ -26,7 +26,7 @@ jobs:
           SIMULATION_MODE: "true"
           PORTFOLIO_SAVE_ENABLED: "false"
           USE_LIVEFEED: "false"
-        run: uv run pytest tests/ -v --tb=short --cov=. --cov-report=xml --cov-fail-under=50
+        run: uv run pytest tests/ -v --tb=short --cov=. --cov-report=xml --cov-fail-under=52
   lint:
     runs-on: ubuntu-latest
     steps:
