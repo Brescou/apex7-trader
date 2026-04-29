@@ -9,7 +9,7 @@ from agents.shared.nodes import get_simulation_mode, set_simulation_mode
 from config import INITIAL_BALANCE
 from core.data import Portfolio
 from core.registry import get_graph_info
-from dashboard.controller import _ctrl, _launch, _state
+from dashboard.controller import _controller_rw_lock, _ctrl, _launch, _state
 from dashboard.layout import (
     _EMOTIONS,
     _analyst_body_children,
@@ -135,20 +135,24 @@ def _controls(_, __, ___, store):
     triggered = ctx.triggered_id
     if triggered == "btn-pause":
         new = not store.get("paused", False)
-        _ctrl["paused"] = new
+        with _controller_rw_lock:
+            _ctrl["paused"] = new
         store["paused"] = new
     elif triggered == "btn-step":
-        _ctrl["step"] = True
+        with _controller_rw_lock:
+            _ctrl["step"] = True
     elif triggered == "btn-reset":
-        old = _state["portfolio"]
+        with _controller_rw_lock:
+            old = _state["portfolio"]
         old.is_dead = True
         time.sleep(0.15)
         p = Portfolio()
-        _state["portfolio"] = p
-        _state["last_votes"] = []
-        _state["last_arb"] = {}
-        _state["thread"] = _launch(p, _state.get("graph_id", "simple"))
-        _ctrl["paused"] = False
+        with _controller_rw_lock:
+            _state["portfolio"] = p
+            _state["last_votes"] = []
+            _state["last_arb"] = {}
+            _state["thread"] = _launch(p, _state.get("graph_id", "simple"))
+            _ctrl["paused"] = False
         store["paused"] = False
     return store
 
@@ -160,16 +164,18 @@ def _controls(_, __, ___, store):
 )
 def _switch_graph(graph_id: str) -> dict:
     """Switch the active graph, restart portfolio and agent thread."""
-    _state["graph_id"] = graph_id
-    old = _state["portfolio"]
+    with _controller_rw_lock:
+        _state["graph_id"] = graph_id
+        old = _state["portfolio"]
     old.is_dead = True
     time.sleep(0.2)
     p = Portfolio()
-    _state["portfolio"] = p
-    _state["last_votes"] = []
-    _state["last_arb"] = {}
-    _ctrl["paused"] = False
-    _state["thread"] = _launch(p, graph_id)
+    with _controller_rw_lock:
+        _state["portfolio"] = p
+        _state["last_votes"] = []
+        _state["last_arb"] = {}
+        _ctrl["paused"] = False
+        _state["thread"] = _launch(p, graph_id)
     info = get_graph_info(graph_id)
     p.log(f"Graph switched to {info['label']}")
     return {"graph_id": graph_id}
@@ -213,7 +219,11 @@ def _switch_graph(graph_id: str) -> dict:
 def _refresh(_, store, active_tab, graph_store):
     if active_tab != "live":
         return [no_update] * 24
-    p = _state["portfolio"]
+    with _controller_rw_lock:
+        p = _state["portfolio"]
+        _graph_id_cur = (graph_store or {}).get("graph_id", _state.get("graph_id", "simple"))
+        votes = _state.get("last_votes", [])
+        arb = _state.get("last_arb", {})
     prices = p.last_prices
     total = p.total_value(prices)
     pnl = total - INITIAL_BALANCE
@@ -258,7 +268,6 @@ def _refresh(_, store, active_tab, graph_store):
     pause_cls = "cbtn cbtn-pause on" if paused else "cbtn cbtn-pause"
 
     # Determine graph mode (needed for cards visibility in both alive/dead states)
-    _graph_id_cur = (graph_store or {}).get("graph_id", _state.get("graph_id", "simple"))
     is_multi = _graph_id_cur == "multi"
 
     # ── DEATH STATE ──────────────────────────────────────────────────────────
@@ -606,8 +615,6 @@ def _refresh(_, store, active_tab, graph_store):
     ]
 
     # ── AGENT CARDS (multi-agent mode) ───────────────────────────────────────
-    votes = _state.get("last_votes", [])
-    arb = _state.get("last_arb", {})
     is_sim = get_simulation_mode()
     vote_map = {v.get("agent", ""): v for v in votes}
 

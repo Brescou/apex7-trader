@@ -130,14 +130,17 @@ app.index_string = """<!DOCTYPE html>
 @server.route("/health")
 def _health():
     """Health check endpoint for monitoring."""
-    from dashboard.controller import _ctrl, _state
+    from dashboard.controller import _controller_rw_lock, _ctrl, _state
 
-    portfolio = _state.get("portfolio")
+    with _controller_rw_lock:
+        portfolio = _state.get("portfolio")
+        cycle = _ctrl.get("cycle", 0)
+        sim = _ctrl.get("sim_mode", False)
     alive = not portfolio.is_dead if portfolio else False
     body = {
         "status": "ok" if alive else "dead",
         "agent_alive": alive,
-        "cycle": _ctrl.get("cycle", 0),
-        "simulation": _ctrl.get("sim_mode", False),
+        "cycle": cycle,
+        "simulation": sim,
     }
     return body, (200 if alive else 503)

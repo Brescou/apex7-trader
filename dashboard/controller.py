@@ -24,6 +24,7 @@ _state: dict = {
     "last_arb": {},
     "thinking": False,
 }
+_controller_rw_lock = threading.Lock()
 
 
 def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
@@ -34,14 +35,22 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
     is_multi = graph_id == "multi"
 
     while not p.is_dead:
-        while _ctrl["paused"] and not _ctrl["step"] and not p.is_dead:
+        while True:
+            with _controller_rw_lock:
+                paused = _ctrl["paused"]
+                step = _ctrl["step"]
+            if p.is_dead:
+                break
+            if not (paused and not step):
+                break
             time.sleep(0.3)
         if p.is_dead:
             break
-        _ctrl["step"] = False
         cycle += 1
-        _ctrl["cycle"] = cycle
-        _ctrl["sim_mode"] = get_simulation_mode()
+        with _controller_rw_lock:
+            _ctrl["step"] = False
+            _ctrl["cycle"] = cycle
+            _ctrl["sim_mode"] = get_simulation_mode()
         trace_id = _new_trace_id()
         logger.info("[%s] === CYCLE %d START ===", trace_id, cycle)
         p.log(f"=== CYCLE {cycle} START ===")
@@ -78,14 +87,16 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
                         "arbitration": None,
                     }
                 )
-            _state["thinking"] = True
+            with _controller_rw_lock:
+                _state["thinking"] = True
             result = graph.invoke(initial)
-            _state["thinking"] = False
+            with _controller_rw_lock:
+                _state["thinking"] = False
+                if is_multi:
+                    _state["last_votes"] = result.get("agent_votes", [])
+                    _state["last_arb"] = result.get("arbitration", {}) or {}
             for entry in result.get("log", []):
                 p.log(entry["message"], entry.get("level", "info"))
-            if is_multi:
-                _state["last_votes"] = result.get("agent_votes", [])
-                _state["last_arb"] = result.get("arbitration", {}) or {}
             if not result.get("alive", True):
                 p.is_dead = True
                 p.log("DEATH CONDITION MET", "critical")
@@ -100,7 +111,10 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
         p.log(f"=== CYCLE {cycle} DONE — sleeping {sleep_s}s ===")
         elapsed = 0.0
         while elapsed < sleep_s and not p.is_dead:
-            if _ctrl["paused"] and not _ctrl["step"]:
+            with _controller_rw_lock:
+                paused = _ctrl["paused"]
+                step = _ctrl["step"]
+            if paused and not step:
                 time.sleep(0.3)
             else:
                 time.sleep(1.0)
@@ -129,11 +143,13 @@ def start_controller() -> None:
     with _controller_lock:
         if _controller_started:
             return
-        _state["portfolio"] = Portfolio()
-        _state["thread"] = _launch(_state["portfolio"], _state["graph_id"])
+        with _controller_rw_lock:
+            _state["portfolio"] = Portfolio()
+            port = _state["portfolio"]
+            _state["thread"] = _launch(port, _state["graph_id"])
         threading.Thread(
             target=_postmortem_loop,
-            args=(_state["portfolio"],),
+            args=(port,),
             daemon=True,
             name="apex7-postmortem",
         ).start()
