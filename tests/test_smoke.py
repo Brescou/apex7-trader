@@ -212,6 +212,14 @@ def test_app_import():
     assert a is not None, "create_app() returned None"
 
 
+def test_main_entrypoint_module():
+    """Import ``main`` so entrypoint wiring is covered (CI coverage threshold)."""
+    import importlib
+
+    main_mod = importlib.import_module("main")
+    assert main_mod.app is not None
+
+
 def test_rsi_unified_backtest_and_live():
     """RSI list vs Series; compute_indicators matches scalar rsi on full series."""
     import pandas as pd
@@ -276,6 +284,7 @@ if __name__ == "__main__":
         ("test_rsi_unified_backtest_and_live", test_rsi_unified_backtest_and_live),
         ("test_sqlite_schema", test_sqlite_schema),
         ("test_app_import", test_app_import),
+        ("test_main_entrypoint_module", test_main_entrypoint_module),
     ]
 
     for name, fn in tests:

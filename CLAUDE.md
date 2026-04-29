@@ -122,7 +122,7 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `config.py` | All constants, loaded from `.env` |
 | `market_data.py` | Standalone market data — fetch_macro, fetch_watchlist_prices, fetch_news, run_screener, fetch_sparkline, fetch_comparison |
 | `langgraph.json` | LangGraph Studio config — exposes both compiled graphs |
-| `tests/test_smoke.py` | 9 regression smoke tests — no pytest, assert+print, exit 0/1 |
+| `tests/test_smoke.py` | 11 regression smoke tests — no pytest, assert+print, exit 0/1 |
 | `tests/test_terminal.py` | 7 market data tests (sparkline, comparison, screener, cache) |
 | `tests/test_integration.py` | pytest integration tests with mocked LLM (sim mode) |
 
