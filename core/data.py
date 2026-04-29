@@ -122,10 +122,18 @@ class Portfolio:
             if px <= 0 or math.isnan(px):
                 logger.warning("Rejecting sell %s at invalid price %s", symbol, price)
                 return {"success": False, "error": f"invalid price: {price}"}
+            try:
+                sp = float(sell_pct)
+            except (TypeError, ValueError):
+                logger.warning("Rejecting sell %s: invalid sell_pct=%s", symbol, sell_pct)
+                return {"success": False, "error": f"invalid sell_pct: {sell_pct}"}
+            if math.isnan(sp) or not (0 < sp <= 100):
+                logger.warning("Rejecting sell %s: invalid sell_pct=%s", symbol, sell_pct)
+                return {"success": False, "error": f"invalid sell_pct: {sell_pct}"}
+            sell_pct = sp
             if symbol not in self.positions:
                 return {"success": False, "error": "No position"}
             pos = self.positions[symbol]
-            sell_pct = min(max(sell_pct, 0), 100)
             shares = pos["shares"] * (sell_pct / 100)
             amount = shares * px
             self.cash += amount

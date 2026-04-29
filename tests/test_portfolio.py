@@ -42,3 +42,17 @@ def test_sell_normal_price() -> None:
     assert r["success"] is True
     assert "AAPL" not in p.positions
     assert not math.isnan(p.cash)
+
+
+def test_sell_rejects_zero_pct() -> None:
+    p = _p_with_aapl()
+    r = p.sell("AAPL", 0, 150.0)
+    assert r["success"] is False
+    assert "AAPL" in p.positions
+
+
+def test_sell_rejects_pct_over_100() -> None:
+    p = _p_with_aapl()
+    r = p.sell("AAPL", 100.5, 150.0)
+    assert r["success"] is False
+    assert "AAPL" in p.positions
