@@ -12,7 +12,7 @@ from agents.shared.nodes import (
 from config import INITIAL_BALANCE
 from core.data import Portfolio
 from core.registry import get_graph_info
-from dashboard.controller import _controller_rw_lock, _ctrl, _launch, _state
+from dashboard.controller import _controller_lock, _ctrl, _launch, _state
 from dashboard.layout import (
     _EMOTIONS,
     _analyst_body_children,
@@ -142,18 +142,20 @@ def _controls(_, __, ___, store):
     triggered = ctx.triggered_id
     if triggered == "btn-pause":
         new = not store.get("paused", False)
-        with _controller_rw_lock:
+        with _controller_lock:
             _ctrl["paused"] = new
         store["paused"] = new
     elif triggered == "btn-step":
-        with _controller_rw_lock:
+        with _controller_lock:
             _ctrl["step"] = True
     elif triggered == "btn-reset":
-        with _controller_rw_lock:
-            old = _state["portfolio"]
-        old.is_dead = True
+        with _controller_lock:
+            po = _state.get("portfolio")
+        if po is None:
+            raise PreventUpdate
+        po.is_dead = True
         p = Portfolio()
-        with _controller_rw_lock:
+        with _controller_lock:
             _state["portfolio"] = p
             _state["last_votes"] = []
             _state["last_arb"] = {}
@@ -172,12 +174,13 @@ def _controls(_, __, ___, store):
 )
 def _switch_graph(graph_id: str) -> dict:
     """Switch the active graph, restart portfolio and agent thread."""
-    with _controller_rw_lock:
+    with _controller_lock:
         _state["graph_id"] = graph_id
-        old = _state["portfolio"]
-    old.is_dead = True
+        old = _state.get("portfolio")
+    if old is not None:
+        old.is_dead = True
     p = Portfolio()
-    with _controller_rw_lock:
+    with _controller_lock:
         _state["portfolio"] = p
         _state["last_votes"] = []
         _state["last_arb"] = {}
@@ -230,7 +233,7 @@ def _switch_graph(graph_id: str) -> dict:
 def _refresh(_, store, active_tab, graph_store):
     if active_tab != "live":
         return [no_update] * 26
-    with _controller_rw_lock:
+    with _controller_lock:
         p = _state["portfolio"]
         _graph_id_cur = (graph_store or {}).get("graph_id", _state.get("graph_id", "simple"))
         votes = _state.get("last_votes", [])
@@ -241,6 +244,9 @@ def _refresh(_, store, active_tab, graph_store):
 
     if p is not None and p.is_dead and not paused_ctrl and death_done:
         raise PreventUpdate
+    # NOTE: ``p.last_prices`` read is atomic under CPython GIL (dict reference swap).
+    # Not wrapped in ``_controller_lock`` during the multi-output callback; worst case
+    # is one stale price frame per cycle.
     prices = p.last_prices
     total = p.total_value(prices)
     pnl = total - INITIAL_BALANCE
@@ -844,7 +850,7 @@ def _refresh(_, store, active_tab, graph_store):
     else:
         live_track = html.Div()
 
-    with _controller_rw_lock:
+    with _controller_lock:
         if dead:
             _state["_death_refresh_done"] = True
         else:

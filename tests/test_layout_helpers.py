@@ -88,17 +88,17 @@ def test_cycle_parses_from_agent_log() -> None:
 
 def test_thinking_reflects_controller_state() -> None:
     """``_thinking`` mirrors ``_state['thinking']`` (used by status dot)."""
-    from dashboard.controller import _controller_rw_lock, _state
+    from dashboard.controller import _controller_lock, _state
 
     p = Portfolio()
     prev = _state.get("thinking", False)
     try:
-        with _controller_rw_lock:
+        with _controller_lock:
             _state["thinking"] = True
         assert _thinking(p) is True
-        with _controller_rw_lock:
+        with _controller_lock:
             _state["thinking"] = False
         assert _thinking(p) is False
     finally:
-        with _controller_rw_lock:
+        with _controller_lock:
             _state["thinking"] = prev

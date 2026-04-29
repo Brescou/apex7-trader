@@ -266,13 +266,14 @@ def test_rsi_canonical():
     assert 30.0 < result < 70.0, f"Mixed prices RSI should be near 50, got {result}"
 
 
-def test_db_write_helper():
+def test_db_write_helper(tmp_db):
     """Test that _db_write handles operations correctly via the trades schema."""
     import sqlite3
 
     from agents.shared.nodes import _db_write, _get_db_path
 
     db_path = _get_db_path()
+    assert str(tmp_db) == str(db_path)
 
     success = _db_write(
         "INSERT INTO patterns (timestamp, pattern) VALUES (?,?)",
@@ -292,7 +293,7 @@ def test_db_write_helper():
     )
 
 
-def test_db_read_helper():
+def test_db_read_helper(tmp_db):
     """Test that _db_read returns results correctly."""
     from agents.shared.nodes import _db_read, _db_write
 
@@ -308,7 +309,7 @@ def test_db_read_helper():
     _db_write("DELETE FROM patterns WHERE pattern=?", ("__test_read__",))
 
 
-def test_ensure_db_idempotent():
+def test_ensure_db_idempotent(tmp_db):
     """Test that _ensure_db can be called multiple times safely."""
     from agents.shared.nodes import _ensure_db
 

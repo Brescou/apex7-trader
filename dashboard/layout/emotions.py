@@ -1,7 +1,7 @@
 """APEX-7 — Emotion system for agent state display."""
 
 from core.data import Portfolio
-from dashboard.controller import _controller_rw_lock, _state
+from dashboard.controller import _controller_lock, _state
 from dashboard.server import (
     BLUE,
     GRAY,
@@ -40,7 +40,7 @@ def _emotion(total: float) -> str:
 
 
 def _thinking(p: Portfolio) -> bool:
-    with _controller_rw_lock:
+    with _controller_lock:
         return _state.get("thinking", False)
 
 

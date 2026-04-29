@@ -129,9 +129,9 @@ app.index_string = """<!DOCTYPE html>
 @server.route("/health")
 def _health():
     """Health check endpoint for monitoring."""
-    from dashboard.controller import _controller_rw_lock, _ctrl, _state
+    from dashboard.controller import _controller_lock, _ctrl, _state
 
-    with _controller_rw_lock:
+    with _controller_lock:
         portfolio = _state.get("portfolio")
         cycle = _ctrl.get("cycle", 0)
         sim = _ctrl.get("sim_mode", False)

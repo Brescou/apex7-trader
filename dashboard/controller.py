@@ -27,7 +27,9 @@ _state: dict = {
     "last_error": None,
     "_death_refresh_done": False,
 }
-_controller_rw_lock = threading.Lock()
+# Single RLock for controller dicts — re-entrant so nested ``with`` in callbacks is safe.
+_controller_lock = threading.RLock()
+_controller_started = False
 
 
 def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
@@ -39,7 +41,7 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
 
     while not p.is_dead:
         while True:
-            with _controller_rw_lock:
+            with _controller_lock:
                 paused = _ctrl["paused"]
                 step = _ctrl["step"]
             if p.is_dead:
@@ -50,7 +52,7 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
         if p.is_dead:
             break
         cycle += 1
-        with _controller_rw_lock:
+        with _controller_lock:
             _ctrl["step"] = False
             _ctrl["cycle"] = cycle
             _ctrl["sim_mode"] = get_simulation_mode()
@@ -58,7 +60,7 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
         logger.info("[%s] === CYCLE %d START ===", trace_id, cycle)
         p.log(f"=== CYCLE {cycle} START ===")
         try:
-            with _controller_rw_lock:
+            with _controller_lock:
                 _state["last_error"] = None
             initial: dict = {
                 "balance": p.cash,
@@ -92,10 +94,10 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
                         "arbitration": None,
                     }
                 )
-            with _controller_rw_lock:
+            with _controller_lock:
                 _state["thinking"] = True
             result = graph.invoke(initial)
-            with _controller_rw_lock:
+            with _controller_lock:
                 _state["thinking"] = False
                 _state["consecutive_holds"] = get_consecutive_hold_cycles()
                 if is_multi:
@@ -108,7 +110,7 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
                 p.log("DEATH CONDITION MET", "critical")
                 break
         except Exception as e:
-            with _controller_rw_lock:
+            with _controller_lock:
                 _state["last_error"] = str(e)
             p.log(f"Cycle error: {e}", "error")
             p.log(traceback.format_exc(), "error")
@@ -119,7 +121,7 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
         p.log(f"=== CYCLE {cycle} DONE — sleeping {sleep_s}s ===")
         elapsed = 0.0
         while elapsed < sleep_s and not p.is_dead:
-            with _controller_rw_lock:
+            with _controller_lock:
                 paused = _ctrl["paused"]
                 step = _ctrl["step"]
             if paused and not step:
@@ -137,8 +139,6 @@ def _launch(p: Portfolio, graph_id: str = "simple") -> threading.Thread:
 
 # ── Postmortem thread ─────────────────────────────────────────────────────────
 _last_postmortem_date = None
-_controller_lock = threading.Lock()
-_controller_started = False
 
 
 def start_controller() -> None:
@@ -151,10 +151,9 @@ def start_controller() -> None:
     with _controller_lock:
         if _controller_started:
             return
-        with _controller_rw_lock:
-            _state["portfolio"] = Portfolio()
-            port = _state["portfolio"]
-            _state["thread"] = _launch(port, _state["graph_id"])
+        _state["portfolio"] = Portfolio()
+        port = _state["portfolio"]
+        _state["thread"] = _launch(port, _state["graph_id"])
         threading.Thread(
             target=_postmortem_loop,
             args=(port,),

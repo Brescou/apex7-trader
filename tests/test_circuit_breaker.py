@@ -113,6 +113,29 @@ def test_rate_limit_respects_retry_after():
     assert nodes._circuit_breaker["paused_until"] == pytest.approx(fixed_now + 30.0)
 
 
+def test_first_429_blocks_subsequent_calls():
+    """First 429 forces full threshold; next call is blocked until pause elapses."""
+    client = MagicMock()
+    client.messages.create.side_effect = _rate_limit_error("30")
+    t0 = 10_000.0
+    with patch("agents.shared.nodes.time.time", return_value=t0):
+        assert _llm(client, "claude", [{"role": "user", "content": "x"}]) == ""
+
+    assert nodes._circuit_breaker["consecutive_failures"] == nodes._CIRCUIT_BREAKER_THRESHOLD
+
+    with patch("agents.shared.nodes.time.time", return_value=t0 + 5.0):
+        assert _llm(client, "claude", [{"role": "user", "content": "x"}]) == ""
+
+    assert client.messages.create.call_count == 1
+
+    client.messages.create.side_effect = None
+    client.messages.create.return_value = _success_response("ok")
+    with patch("agents.shared.nodes.time.time", return_value=t0 + 31.0):
+        assert _llm(client, "claude", [{"role": "user", "content": "x"}]) == "ok"
+
+    assert client.messages.create.call_count == 2
+
+
 def test_keyboard_interrupt_not_caught():
     """``KeyboardInterrupt`` must propagate (not swallowed by generic handlers)."""
     client = MagicMock()

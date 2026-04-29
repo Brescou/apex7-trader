@@ -441,8 +441,7 @@ Wired into `Portfolio.fetch_prices()` when `USE_LIVEFEED=True`. If `LiveFeed.fet
 - All Portfolio mutations use `with self._lock` (RLock)
 - SQLite writes go through `_db_write()` in `agents/shared/nodes.py` — handles WAL mode, retries (3 attempts with backoff), and structured logging
 - Sim and live use separate databases (`trades_sim.db` / `trades.db`) via `_get_db_path()`
-- `_ctrl` and `_state` in `dashboard/controller.py` are protected by `_controller_rw_lock` (`threading.Lock`) — all mutations and critical reads of these dicts are wrapped in `with _controller_rw_lock` (or nested under the same `RLock` after the controller refactor; see that file for the current single-lock pattern).
-- **Lock ordering (controller):** always acquire `_controller_lock` (start-up / one-shot) before `_controller_rw_lock` if both are ever needed in the same call path — **never the reverse** (prevents deadlock with `start_controller` and thread spawn).
+- `_ctrl` and `_state` in `dashboard/controller.py` share one **`threading.RLock()`** (`_controller_lock`) — all mutations and reads use `with _controller_lock`.
 - Graph switch and reset: agent thread is stopped (`portfolio.is_dead = True`), new Portfolio + thread created
 
 ## market_data.py — Standalone Market Data Module

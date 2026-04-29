@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import math
 import random
 import re
 import sqlite3
@@ -258,9 +259,15 @@ def _parse_json_obj(text: str) -> dict:
 
 # ── API safety ────────────────────────────────────────────────────────────────
 
+# Lock ordering (always acquire in this order to prevent deadlocks):
+# 1. _circuit_breaker_lock
+# 2. _token_counter_lock (RLock — re-entrant for nested budget checks)
+# 3. _degradation_lock (via _set_llm_degradation / get_llm_degradation_status)
+
 _token_counter: dict = {"input": 0, "output": 0, "max_daily": 500_000, "reset_date": ""}
-_token_counter_lock = threading.Lock()
+_token_counter_lock = threading.RLock()
 _circuit_breaker: dict = {"consecutive_failures": 0, "paused_until": 0.0}
+_circuit_breaker_lock = threading.Lock()
 _CIRCUIT_BREAKER_THRESHOLD = 3
 _CIRCUIT_BREAKER_PAUSE = 300  # 5 minutes
 
@@ -345,7 +352,10 @@ def _reset_token_counter_if_new_day() -> None:
 
 
 def _maybe_reset_token_counter() -> None:
-    """Reset the daily token counter at midnight (thread-safe)."""
+    """Reset the daily token counter at midnight.
+
+    Safe under nested ``_token_counter_lock`` (same thread) thanks to ``RLock``.
+    """
     with _token_counter_lock:
         _reset_token_counter_if_new_day()
 
@@ -371,16 +381,17 @@ def _llm(
 
     # Circuit breaker check
     now = time.time()
-    if _circuit_breaker["consecutive_failures"] >= _CIRCUIT_BREAKER_THRESHOLD:
-        if now < _circuit_breaker["paused_until"]:
-            logger.warning(
-                "Circuit breaker OPEN — skipping LLM call (resumes in %.0fs)",
-                _circuit_breaker["paused_until"] - now,
-            )
-            _set_llm_degradation("circuit_breaker")
-            return ""
-        _circuit_breaker["consecutive_failures"] = 0
-        logger.info("Circuit breaker CLOSED — resuming LLM calls")
+    with _circuit_breaker_lock:
+        if _circuit_breaker["consecutive_failures"] >= _CIRCUIT_BREAKER_THRESHOLD:
+            if now < _circuit_breaker["paused_until"]:
+                logger.warning(
+                    "Circuit breaker OPEN — skipping LLM call (resumes in %.0fs)",
+                    _circuit_breaker["paused_until"] - now,
+                )
+                _set_llm_degradation("circuit_breaker")
+                return ""
+            _circuit_breaker["consecutive_failures"] = 0
+            logger.info("Circuit breaker CLOSED — resuming LLM calls")
 
     tools = [{"type": "web_search_20250305", "name": "web_search"}] if web_search else []
     msgs = list(messages)
@@ -414,33 +425,28 @@ def _llm(
             else:
                 break
         # Success — reset circuit breaker (degradation cleared after resp check)
-        _circuit_breaker["consecutive_failures"] = 0
+        with _circuit_breaker_lock:
+            _circuit_breaker["consecutive_failures"] = 0
     except KeyboardInterrupt:
         raise
     except anthropic.RateLimitError as e:
         wait_s = _retry_after_seconds(e)
-        _circuit_breaker["consecutive_failures"] += 1
-        _circuit_breaker["paused_until"] = time.time() + wait_s
-        n = _circuit_breaker["consecutive_failures"]
+        with _circuit_breaker_lock:
+            _circuit_breaker["paused_until"] = time.time() + wait_s
+            _circuit_breaker["consecutive_failures"] = _CIRCUIT_BREAKER_THRESHOLD
         logger.warning(
-            "Rate-limited — pausing %.0fs (%d/%d consecutive)",
+            "Rate-limited — circuit breaker forced open for %.0fs",
             wait_s,
-            n,
-            _CIRCUIT_BREAKER_THRESHOLD,
         )
-        if n >= _CIRCUIT_BREAKER_THRESHOLD:
-            logger.error(
-                "Circuit breaker OPEN after %d rate limits — paused %.0fs",
-                _CIRCUIT_BREAKER_THRESHOLD,
-                wait_s,
-            )
         _set_llm_degradation("circuit_breaker")
         return ""
     except (anthropic.APIStatusError, anthropic.APITimeoutError, httpx.TimeoutException) as e:
-        _circuit_breaker["consecutive_failures"] += 1
-        n = _circuit_breaker["consecutive_failures"]
+        with _circuit_breaker_lock:
+            _circuit_breaker["consecutive_failures"] += 1
+            n = _circuit_breaker["consecutive_failures"]
+            if n >= _CIRCUIT_BREAKER_THRESHOLD:
+                _circuit_breaker["paused_until"] = time.time() + _CIRCUIT_BREAKER_PAUSE
         if n >= _CIRCUIT_BREAKER_THRESHOLD:
-            _circuit_breaker["paused_until"] = time.time() + _CIRCUIT_BREAKER_PAUSE
             logger.error(
                 "Circuit breaker OPEN after %d failures — pausing for %ds: %s",
                 _CIRCUIT_BREAKER_THRESHOLD,
@@ -575,20 +581,62 @@ _sim_price_history: dict[str, list[float]] = {}
 
 # Per-symbol live closes for RSI (multi-agent technician); filled in fetch_data_node (live path)
 _live_price_history: dict[str, list[float]] = {}
+_live_price_history_seeded: bool = False
+_last_price_date: dict[str, str] = {}
+
+
+def _seed_live_price_history() -> None:
+    """One-time seed from ~1mo daily closes so RSI(14) is meaningful from cycle 1."""
+    global _live_price_history_seeded
+    if _live_price_history_seeded:
+        return
+    for sym in WATCHLIST:
+        try:
+            df = yf.download(sym, period="1mo", interval="1d", progress=False, auto_adjust=False)
+            if df is None or len(df) == 0:
+                logger.warning("No OHLC data to seed for %s", sym)
+                continue
+            col = df["Close"] if "Close" in df.columns else df.iloc[:, -1]
+            closes = [float(x) for x in col.dropna().tolist()]
+            if not closes:
+                continue
+            _live_price_history[sym] = closes[-60:]
+            logger.info(
+                "Seeded _live_price_history for %s with %d daily closes",
+                sym,
+                len(_live_price_history[sym]),
+            )
+            idx = df.index[-1]
+            if hasattr(idx, "date"):
+                _last_price_date[sym] = idx.date().isoformat()
+            else:
+                _last_price_date[sym] = str(idx)[:10]
+        except Exception as e:
+            logger.warning("Seed failed for %s: %s", sym, e)
+    _live_price_history_seeded = True
 
 
 def _record_live_prices_for_rsi(prices: dict[str, float]) -> None:
-    """Append current closes for live RSI; keep last 100 bars per symbol."""
+    """Append at most one close per symbol per calendar day; cap at 60 bars."""
+    if not _live_price_history_seeded:
+        _seed_live_price_history()
+    today = date.today().isoformat()
     for sym in WATCHLIST:
         if sym not in prices:
             continue
-        p = prices[sym]
-        if p is None or p <= 0:
+        try:
+            pf = float(prices[sym])
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(pf) or pf <= 0:
+            continue
+        if _last_price_date.get(sym) == today:
             continue
         hist = _live_price_history.setdefault(sym, [])
-        hist.append(float(p))
-        if len(hist) > 100:
-            _live_price_history[sym] = hist[-100:]
+        hist.append(pf)
+        _last_price_date[sym] = today
+        if len(hist) > 60:
+            _live_price_history[sym] = hist[-60:]
 
 
 def _sim_step_prices(current: dict[str, float]) -> dict[str, float]:
@@ -1069,36 +1117,47 @@ def make_execute_node(portfolio: Portfolio):
         for sl_sym, sl_pos in list(portfolio.positions.items()):
             sl_price = prices.get(sl_sym, 0.0)
             sl_avg = sl_pos.get("avg_price", sl_pos.get("avg_cost", 0))
-            if sl_avg <= 0:
+            try:
+                savg = float(sl_avg)
+            except (TypeError, ValueError):
                 continue
-            if sl_price <= 0:
-                logs.append(
-                    _entry(
-                        f"Skipping stop-loss check for {sl_sym}: invalid price "
-                        f"sl_price={sl_price}, sl_avg={sl_avg}",
-                        "warning",
-                    )
+            if math.isnan(savg) or savg <= 0:
+                continue
+            try:
+                sp = float(sl_price)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Skipping stop-loss for %s: invalid price %s",
+                    sl_sym,
+                    sl_price,
+                )
+                continue
+            if math.isnan(sp) or sp <= 0:
+                logger.warning(
+                    "Skipping stop-loss for %s: invalid price %s",
+                    sl_sym,
+                    sl_price,
                 )
                 continue
             # Sub-dollar legitimate positions: allow SL when basis and quote are both cheap.
-            penny_pair = sl_avg <= 1.0 and sl_price <= 1.0
-            plausible_quote = sl_price > 1.0 or penny_pair
+            penny_pair = savg <= 1.0 and sp <= 1.0
+            plausible_quote = sp > 1.0 or penny_pair
             if not plausible_quote:
                 logs.append(
                     _entry(
                         f"Skipping stop-loss check for {sl_sym}: invalid price "
-                        f"sl_price={sl_price}, sl_avg={sl_avg}",
+                        f"sl_price={sp}, sl_avg={savg}",
                         "warning",
                     )
                 )
                 continue
-            sl_pct = (sl_price - sl_avg) / sl_avg
+            sl_pct = (sp - savg) / savg
             if sl_pct < -STOP_LOSS_PCT:
                 sl_slip = 1 + random.uniform(-0.001, 0.001)
-                portfolio.sell(sl_sym, 100, sl_price * sl_slip)
+                portfolio.sell(sl_sym, 100, sp * sl_slip)
                 logs.append(
                     _entry(
-                        f"STOP-LOSS triggered: {sl_sym} @ ${sl_price:.2f} (loss: {sl_pct:.1%})",
+                        f"STOP-LOSS triggered: {sl_sym} @ ${sp:.2f} (loss: {sl_pct:.1%})",
                         "warning",
                     )
                 )

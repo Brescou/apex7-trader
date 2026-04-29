@@ -91,6 +91,8 @@ apex7-trader/
     ├── test_circuit_breaker.py
     ├── test_integration.py
     ├── test_layout_helpers.py
+    ├── test_misc_coverage.py
+    ├── test_portfolio.py
     ├── test_smoke.py
     ├── test_stoploss.py
     ├── test_terminal.py

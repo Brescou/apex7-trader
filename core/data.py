@@ -6,6 +6,7 @@ The root-level data.py remains for backward compatibility during migration.
 
 import json
 import logging
+import math
 import os
 import threading
 from datetime import datetime
@@ -113,12 +114,20 @@ class Portfolio:
 
     def sell(self, symbol: str, sell_pct: float, price: float) -> dict:
         with self._lock:
+            try:
+                px = float(price)
+            except (TypeError, ValueError):
+                logger.warning("Rejecting sell %s at invalid price %s", symbol, price)
+                return {"success": False, "error": f"invalid price: {price}"}
+            if px <= 0 or math.isnan(px):
+                logger.warning("Rejecting sell %s at invalid price %s", symbol, price)
+                return {"success": False, "error": f"invalid price: {price}"}
             if symbol not in self.positions:
                 return {"success": False, "error": "No position"}
             pos = self.positions[symbol]
             sell_pct = min(max(sell_pct, 0), 100)
             shares = pos["shares"] * (sell_pct / 100)
-            amount = shares * price
+            amount = shares * px
             self.cash += amount
             if sell_pct >= 100:
                 del self.positions[symbol]
@@ -129,7 +138,7 @@ class Portfolio:
                 "action": "SELL",
                 "symbol": symbol,
                 "shares": round(shares, 6),
-                "price": round(price, 2),
+                "price": round(px, 2),
                 "amount": round(amount, 2),
             }
             self.trade_history.append(trade)

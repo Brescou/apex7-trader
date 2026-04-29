@@ -35,18 +35,20 @@ def _hold_state(prices: dict[str, float]) -> dict:
     }
 
 
-def test_stoploss_ignores_zero_price():
+def test_stoploss_ignores_zero_price(caplog):
     """Quote at 0 must not trigger a destructive stop-loss (Finding 3.1)."""
+    import logging
+
     p = _portfolio_aapl_10_at_150()
     execute = make_execute_node(p)
-    out = execute(_hold_state({"AAPL": 0.0}))
+    with caplog.at_level(logging.WARNING):
+        out = execute(_hold_state({"AAPL": 0.0}))
 
     assert out["alive"] is True
     assert "AAPL" in p.positions
     assert p.positions["AAPL"]["shares"] == 10.0
     assert p.positions["AAPL"]["avg_price"] == 150.0
-    messages = " ".join(e["message"] for e in out["log"])
-    assert "Skipping stop-loss check for AAPL" in messages
+    assert "Skipping stop-loss for AAPL" in caplog.text
 
 
 def test_stoploss_triggers_on_real_drop():
@@ -62,14 +64,17 @@ def test_stoploss_triggers_on_real_drop():
     assert any("STOP-LOSS triggered" in e.get("message", "") for e in out["log"])
 
 
-def test_stoploss_ignores_nan():
-    """NaN quote must not crash; position should remain (invalid quote skipped)."""
+def test_stoploss_ignores_nan(caplog):
+    """NaN quote must hit the guard (not the penny-stock branch)."""
+    import logging
+
     p = _portfolio_aapl_10_at_150()
     execute = make_execute_node(p)
-
-    out = execute(_hold_state({"AAPL": float("nan")}))
+    with caplog.at_level(logging.WARNING):
+        out = execute(_hold_state({"AAPL": float("nan")}))
 
     assert out["alive"] is True
     assert "AAPL" in p.positions
     assert p.positions["AAPL"]["shares"] == 10.0
     assert not any(math.isnan(x) for x in (p.cash, p.positions["AAPL"]["shares"]))
+    assert "Skipping stop-loss for AAPL" in caplog.text

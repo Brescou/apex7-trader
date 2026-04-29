@@ -1,7 +1,6 @@
 """Shared pytest fixtures for APEX-7 tests."""
 
 import os
-import sqlite3
 
 import pytest
 
@@ -48,40 +47,27 @@ def portfolio():
 
 
 @pytest.fixture
-def tmp_db(tmp_path):
-    """Create a temporary SQLite database with the APEX-7 schema."""
-    db_path = tmp_path / "test_trades.db"
-    con = sqlite3.connect(db_path)
-    con.execute("PRAGMA journal_mode=WAL")
-    con.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT, symbol TEXT, action TEXT,
-            price REAL, amount_usd REAL, shares REAL,
-            reasoning TEXT, confidence REAL, emotion TEXT,
-            portfolio_value_after REAL, lesson TEXT,
-            trace_id TEXT,
-            source TEXT DEFAULT 'live'
-        );
-        CREATE TABLE IF NOT EXISTS patterns (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT, pattern TEXT
-        );
-        CREATE TABLE IF NOT EXISTS agent_memory (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT, agent_name TEXT, symbol TEXT,
-            vote TEXT, confidence REAL, was_correct INTEGER,
-            lesson TEXT, source TEXT DEFAULT 'simulation'
-        );
-        CREATE TABLE IF NOT EXISTS postmortem (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT, symbol TEXT, buy_price REAL,
-            sell_price REAL, pnl_pct REAL, holding_hours REAL,
-            agents_correct TEXT, summary TEXT,
-            source TEXT DEFAULT 'simulation'
-        );
-        """
-    )
-    con.close()
-    yield db_path
+def tmp_db(tmp_path, monkeypatch):
+    """Route SQLite to a temp file (no writes to project ``trades*.db``)."""
+    import sqlite3
+
+    db = tmp_path / "test.db"
+    monkeypatch.setattr("agents.shared.nodes._get_db_path", lambda: str(db))
+
+    from agents.shared.nodes import _SCHEMA
+
+    with sqlite3.connect(db) as con:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA busy_timeout=5000")
+        con.executescript(_SCHEMA)
+        for stmt in (
+            "ALTER TABLE trades ADD COLUMN source TEXT DEFAULT 'live'",
+            "ALTER TABLE trades ADD COLUMN trace_id TEXT",
+            "ALTER TABLE trades ADD COLUMN prompt_version TEXT",
+        ):
+            try:
+                con.execute(stmt)
+            except sqlite3.OperationalError:
+                pass
+        con.commit()
+    yield db
