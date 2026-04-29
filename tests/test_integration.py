@@ -230,6 +230,8 @@ def test_macro_vote_validation():
 
 def test_rsi_canonical():
     """Test that the canonical RSI implementation returns expected values."""
+    import pandas as pd
+
     from core.indicators import rsi
 
     assert rsi([]) == 50.0
@@ -237,6 +239,7 @@ def test_rsi_canonical():
 
     prices_up = [100.0 + i for i in range(20)]
     assert rsi(prices_up) == 100.0
+    assert rsi(pd.Series(prices_up)) == rsi(prices_up)
 
     prices_down = [100.0 - i for i in range(20)]
     assert rsi(prices_down) == 0.0

@@ -1,17 +1,34 @@
 """core.indicators — shared technical indicators for APEX-7.
 
-Single canonical RSI implementation used by agents, backtest, and market_data.
+Single canonical RSI implementation used across agents, backtest, and market_data.
 """
 
 
-def rsi(prices: list[float], period: int = 14) -> float:
-    """Compute Wilder RSI from a list of closing prices.
+def _coerce_prices(prices: object) -> list[float]:
+    """Normalize ``list``, ``tuple``, pandas ``Series``, or ndarray-like to ``list[float]``."""
+    if prices is None:
+        return []
+    if isinstance(prices, (str, bytes)):
+        raise TypeError("prices must be a numeric sequence")
+    if isinstance(prices, list):
+        return [float(x) for x in prices]
+    if hasattr(prices, "tolist"):
+        return [float(x) for x in prices.tolist()]
+    return [float(x) for x in prices]
 
-    Returns 50.0 if insufficient data (fewer than period + 1 prices).
+
+def rsi(prices: object, period: int = 14) -> float:
+    """Compute RSI from closing prices (same formula as live agents).
+
+    Accepts ``list[float]``, ``tuple``, pandas ``Series``, or any sequence with ``tolist``.
+
+    Uses the last ``period + 1`` closes; averages gains/losses over ``period`` steps.
+    Returns ``50.0`` if fewer than ``period + 1`` prices (insufficient data).
     """
-    if len(prices) < period + 1:
+    seq = _coerce_prices(prices)
+    if len(seq) < period + 1:
         return 50.0
-    window = prices[-(period + 1) :]
+    window = seq[-(period + 1) :]
     gains: list[float] = []
     losses: list[float] = []
     for i in range(1, len(window)):

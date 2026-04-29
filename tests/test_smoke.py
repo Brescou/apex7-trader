@@ -185,6 +185,32 @@ def test_app_import():
     assert a is not None, "create_app() returned None"
 
 
+def test_rsi_unified_backtest_and_live():
+    """RSI list vs Series; compute_indicators matches scalar rsi on full series."""
+    import pandas as pd
+
+    from core.backtest import compute_indicators
+    from core.indicators import rsi
+
+    closes = [100.0 + i * 0.5 for i in range(30)]
+    assert abs(rsi(closes) - rsi(pd.Series(closes))) < 1e-9
+
+    df = pd.DataFrame(
+        {
+            "Open": closes,
+            "High": closes,
+            "Low": closes,
+            "Close": closes,
+            "Volume": [1_000_000] * len(closes),
+        }
+    )
+    out = compute_indicators(df)
+    last = float(out["RSI_14"].iloc[-1])
+    assert (
+        abs(last - rsi(closes)) < 1e-9
+    ), f"compute_indicators RSI {last} vs rsi(closes) {rsi(closes)}"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Legacy runner (for backward compat with `uv run python tests/test_smoke.py`)
 
@@ -220,6 +246,7 @@ if __name__ == "__main__":
         ("test_multi_graph_build", test_multi_graph_build),
         ("test_simulation_cycle", test_simulation_cycle),
         ("test_backtest_run", test_backtest_run),
+        ("test_rsi_unified_backtest_and_live", test_rsi_unified_backtest_and_live),
         ("test_sqlite_schema", test_sqlite_schema),
         ("test_app_import", test_app_import),
     ]

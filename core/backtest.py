@@ -204,16 +204,8 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.copy()
     close = df["Close"]
-
-    delta = close.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    alpha = 1.0 / 14
-    avg_gain = gain.ewm(alpha=alpha, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=alpha, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, float("nan"))
-    df["RSI_14"] = 100.0 - (100.0 / (1.0 + rs))
-    df["RSI_14"] = df["RSI_14"].fillna(50.0)
+    close_list = [float(x) for x in close]
+    df["RSI_14"] = [rsi(close_list[: i + 1]) for i in range(len(close_list))]
 
     df["MA_20"] = close.rolling(20).mean()
     df["MA_50"] = close.rolling(50).mean()
@@ -322,7 +314,7 @@ def run_backtest(
         }
 
     for idx, row in df.iterrows():
-        rsi = row.get("RSI_14", 50.0)
+        rsi_val = row.get("RSI_14", 50.0)
         price = float(row["Close"])
         if price <= 0:
             continue
@@ -345,16 +337,16 @@ def run_backtest(
                 position_shares = 0.0
                 position_price = 0.0
 
-        buy_signal = rsi < 30
-        sell_signal = rsi > 70
+        buy_signal = rsi_val < 30
+        sell_signal = rsi_val > 70
 
         if strategy == "multi":
-            tech_buy = rsi < 28
-            anlst_buy = rsi < 32
+            tech_buy = rsi_val < 28
+            anlst_buy = rsi_val < 32
             buy_signal = tech_buy and anlst_buy
 
-            tech_sell = rsi > 72
-            anlst_sell = rsi > 68
+            tech_sell = rsi_val > 72
+            anlst_sell = rsi_val > 68
             sell_signal = tech_sell and anlst_sell
 
         if buy_signal and not in_position and cash > 1:
