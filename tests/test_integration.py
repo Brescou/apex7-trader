@@ -317,18 +317,23 @@ def test_ensure_db_idempotent():
 
 
 def test_simulation_mode_toggle():
-    """Test that simulation mode can be toggled."""
+    """Test that simulation mode can be toggled.
+
+    Mocks ``_write_env_var`` so toggling does not mutate the developer's ``.env``
+    (Finding 5.2).
+    """
     from agents.shared.nodes import get_simulation_mode, set_simulation_mode
 
     original = get_simulation_mode()
-    try:
-        set_simulation_mode(True)
-        assert get_simulation_mode() is True
+    with patch("agents.shared.nodes._write_env_var"):
+        try:
+            set_simulation_mode(True)
+            assert get_simulation_mode() is True
 
-        set_simulation_mode(False)
-        assert get_simulation_mode() is False
-    finally:
-        set_simulation_mode(original)
+            set_simulation_mode(False)
+            assert get_simulation_mode() is False
+        finally:
+            set_simulation_mode(original)
 
 
 def test_token_counter_daily_reset():
