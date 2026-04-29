@@ -1106,7 +1106,11 @@ def _route_analyze(state: AgentState) -> str:
 
 
 def _route_risk(state) -> str:
-    return "execute" if (state.get("decision") or {}).get("_risk_passed", False) else "skip"
+    decision = state.get("decision") or {}
+    if "_risk_passed" not in decision:
+        logger.warning("risk_check_node did not set _risk_passed — defaulting to skip")
+    passed = decision.get("_risk_passed", False)
+    return "execute" if passed else "skip"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
