@@ -252,6 +252,17 @@ _CIRCUIT_BREAKER_THRESHOLD = 3
 _CIRCUIT_BREAKER_PAUSE = 300  # 5 minutes
 
 
+def _retry_after_seconds(exc: anthropic.RateLimitError) -> float:
+    """Parse ``Retry-After`` (seconds); fall back to standard pause on missing/invalid."""
+    try:
+        hdr = exc.response.headers.get("retry-after") or exc.response.headers.get("Retry-After")
+        if hdr is not None and str(hdr).strip() != "":
+            return max(float(str(hdr).strip()), 1.0)
+    except (TypeError, ValueError, AttributeError):
+        pass
+    return float(_CIRCUIT_BREAKER_PAUSE)
+
+
 def _reset_token_counter_if_new_day() -> None:
     """Reset daily token counts at date change. Caller must hold ``_token_counter_lock``."""
     today = date.today().isoformat()
@@ -330,9 +341,30 @@ def _llm(
                 break
         # Success — reset circuit breaker
         _circuit_breaker["consecutive_failures"] = 0
-    except Exception as e:
+    except KeyboardInterrupt:
+        raise
+    except anthropic.RateLimitError as e:
+        wait_s = _retry_after_seconds(e)
         _circuit_breaker["consecutive_failures"] += 1
-        if _circuit_breaker["consecutive_failures"] >= _CIRCUIT_BREAKER_THRESHOLD:
+        _circuit_breaker["paused_until"] = time.time() + wait_s
+        n = _circuit_breaker["consecutive_failures"]
+        logger.warning(
+            "Rate-limited — pausing %.0fs (%d/%d consecutive)",
+            wait_s,
+            n,
+            _CIRCUIT_BREAKER_THRESHOLD,
+        )
+        if n >= _CIRCUIT_BREAKER_THRESHOLD:
+            logger.error(
+                "Circuit breaker OPEN after %d rate limits — paused %.0fs",
+                _CIRCUIT_BREAKER_THRESHOLD,
+                wait_s,
+            )
+        return ""
+    except (anthropic.APIStatusError, anthropic.APITimeoutError, httpx.TimeoutException) as e:
+        _circuit_breaker["consecutive_failures"] += 1
+        n = _circuit_breaker["consecutive_failures"]
+        if n >= _CIRCUIT_BREAKER_THRESHOLD:
             _circuit_breaker["paused_until"] = time.time() + _CIRCUIT_BREAKER_PAUSE
             logger.error(
                 "Circuit breaker OPEN after %d failures — pausing for %ds: %s",
@@ -342,8 +374,8 @@ def _llm(
             )
         else:
             logger.error(
-                "LLM call failed (%d/%d): %s",
-                _circuit_breaker["consecutive_failures"],
+                "API error — failure %d/%d: %s",
+                n,
                 _CIRCUIT_BREAKER_THRESHOLD,
                 e,
             )
