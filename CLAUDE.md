@@ -63,7 +63,15 @@ apex7-trader/
 │   ├── __init__.py        ← create_app()
 │   ├── server.py          ← Dash() init + design tokens
 │   ├── controller.py      ← agent loop, portfolio state, postmortem thread
-│   ├── layout.py          ← app.layout + UI helpers
+│   ├── layout/            ← app.layout + UI helpers (package; was layout.py)
+│   │   ├── __init__.py
+│   │   ├── main.py        ← setup_layout(), assigns app.layout
+│   │   ├── live_tab.py
+│   │   ├── analytics_tab.py
+│   │   ├── terminal_tab.py
+│   │   ├── helpers.py
+│   │   ├── classify.py
+│   │   └── emotions.py
 │   └── callbacks/
 │       ├── __init__.py    ← imports all callback modules
 │       ├── live.py        ← live tab + tab routing
@@ -78,8 +86,10 @@ apex7-trader/
 │   ├── CHANGELOG.md
 │   └── README.md
 └── tests/
+    ├── conftest.py
     ├── test_smoke.py
-    └── test_terminal.py
+    ├── test_terminal.py
+    └── test_integration.py
 ```
 
 **File ownership:**
@@ -98,7 +108,7 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 |------|------|
 | `main.py` | Entrypoint — calls `create_app().run()` |
 | `dashboard/controller.py` | Agent loop thread, portfolio init, postmortem thread |
-| `dashboard/layout.py` | Dash layout + UI helpers |
+| `dashboard/layout/` | Dash layout package — `main.py` sets `app.layout`; tab modules + helpers |
 | `dashboard/callbacks/` | All `@app.callback` handlers (7 modules) |
 | `agents/simple.py` | Simple graph: LangGraph nodes, simulation engine, `start_agent()` |
 | `agents/multi.py` | Multi-agent graph: 4 specialized agents + arbitration node + `run_daily_postmortem()` |
@@ -114,6 +124,7 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `langgraph.json` | LangGraph Studio config — exposes both compiled graphs |
 | `tests/test_smoke.py` | 9 regression smoke tests — no pytest, assert+print, exit 0/1 |
 | `tests/test_terminal.py` | 7 market data tests (sparkline, comparison, screener, cache) |
+| `tests/test_integration.py` | pytest integration tests with mocked LLM (sim mode) |
 
 ### Concurrency model
 
@@ -253,7 +264,13 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`agents/` → `dashboard/` import direction is forbidden** — `agents/shared/nodes.py` imports from `core.data`. Never import from `dashboard` in any `agents/` file. This violates the one-way dependency rule (dashboard depends on agents/core, not the reverse).
 - **Lazy DB init** — `_init_db()` is no longer called at import time. It runs lazily on first `_db_write`/`_db_read`/`_db_write_multi` call via `_ensure_db()`. Importing `agents/shared/nodes.py` no longer creates SQLite tables. Importing `dashboard/controller.py` does not create a `Portfolio` until `start_controller()` is called explicitly. Importing `agents/simple.py` or `agents/multi.py` compiles a LangGraph graph at module level (for LangGraph Studio compatibility).
 - **RSI computed in `core/indicators.py`** — a single canonical `rsi()` function. Do not re-implement RSI elsewhere.
-- **`_db_write()` / `_db_read()` centralize all SQLite access** — never open raw `sqlite3.connect()` in agent nodes. Use `_db_write()` / `_db_write_multi()` for writes and `_db_read()` for reads from `agents/shared/nodes.py`. These handle WAL, retries, context managers, sim/live DB selection, and logging.
+- **`_db_write()` / `_db_read()` centralize all SQLite access** — never open raw `sqlite3.connect()` anywhere — not in agent nodes, not in `dashboard/layout/helpers.py`, not in `dashboard/callbacks/`. Always use `_db_write()` or `_db_read()` from `agents.shared.nodes`.
+- **Live mode `technician_node` RSI** — In live mode, `technician_node` RSI inputs are always 50.0 (insufficient data) because `_sim_price_history` is only populated in simulation mode. This is a known correctness bug — see Finding 4.5 in the v2 audit.
+- **`_route_risk` fail-closed** — `_route_risk` defaults `_risk_passed` to `False` (fail-closed). If `risk_check_node` fails to write `_risk_passed`, the graph skips execution instead of proceeding.
+- **`/health` returns HTTP 200 even when the agent is dead** — `dashboard/server.py` always returns 200 with `agent_alive` in the body. Monitoring systems must parse JSON to detect death. Should return 503 when `portfolio.is_dead`.
+- **Zero-price stop-loss triggers silent liquidation** — `execute_node` stop-loss logic in `nodes.py` does not guard against `sl_price = 0.0` (yfinance timeout fallback). If prices dict contains 0.0, `sl_pct = -1.0` and `portfolio.sell()` executes at zero, destroying capital silently. Guard: `if sl_avg > 0 and sl_price > 1.0`.
+- **Backtest RSI ≠ live RSI** — `core/backtest.py` `compute_indicators()` uses pandas EWM; `core/indicators.py` `rsi()` uses simple average. Same price series produces different RSI values. Backtest signals are not comparable to live signals. Always use `core.indicators.rsi()` for both.
+- **`test_sqlite_schema` fails on a clean clone** — `tests/test_smoke.py` asserts `trades.db` exists, but `_ensure_db()` is lazy and only runs on first write. The test must call `_ensure_db()` before asserting the schema.
 - **Token budget resets daily** — `_maybe_reset_token_counter()` is called at the start of each `_llm()` invocation and resets `_token_counter` at midnight.
 - **All LLM specialist votes validated by Pydantic** — `technician_node`, `analyst_node`, `risk_manager_node`, `macro_watcher_node` and `arbitrate_node` all pass raw LLM JSON through their respective `validate_*_vote()` / `validate_decision()` functions from `agents/shared/schemas.py`.
 
