@@ -234,7 +234,7 @@ def _refresh(_, store, active_tab, graph_store):
     if active_tab != "live":
         return [no_update] * 26
     with _controller_lock:
-        p = _state["portfolio"]
+        p = _state.get("portfolio")
         _graph_id_cur = (graph_store or {}).get("graph_id", _state.get("graph_id", "simple"))
         votes = _state.get("last_votes", [])
         arb = _state.get("last_arb", {})
@@ -242,6 +242,8 @@ def _refresh(_, store, active_tab, graph_store):
         death_done = _state.get("_death_refresh_done", False)
         last_err = _state.get("last_error")
 
+    if p is None:
+        raise PreventUpdate
     if p is not None and p.is_dead and not paused_ctrl and death_done:
         raise PreventUpdate
     # NOTE: ``p.last_prices`` read is atomic under CPython GIL (dict reference swap).
