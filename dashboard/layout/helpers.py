@@ -346,7 +346,7 @@ def _load_postmortem() -> list[dict]:
 def _load_trades_db() -> list[dict]:
     rows = _db_read(
         "SELECT id,timestamp,symbol,action,price,amount_usd,shares,"
-        "reasoning,confidence,emotion,portfolio_value_after,lesson,source "
+        "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source "
         "FROM trades ORDER BY timestamp DESC LIMIT 500"
     )
     cols = (
@@ -362,6 +362,7 @@ def _load_trades_db() -> list[dict]:
         "emotion",
         "portfolio_value_after",
         "lesson",
+        "trace_id",
         "source",
     )
     return [dict(zip(cols, r)) for r in rows]

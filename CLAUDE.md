@@ -207,7 +207,7 @@ g.add_edge("my_node", "risk_check")
 
 | Table | Description |
 |-------|-------------|
-| `trades` | One row per executed BUY/SELL trade (HOLD not persisted) |
+| `trades` | One row per executed BUY/SELL trade (HOLD not persisted); includes `trace_id` (agent cycle) and `source` |
 | `patterns` | Lessons extracted by Haiku after each trade |
 | `agent_memory` | One row per agent vote per cycle; `was_correct` updated by `arbitrate_node` |
 | `postmortem` | One row per closed trade (SELL); written by `run_daily_postmortem()` |
@@ -247,7 +247,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **No `assets/` directory** — all CSS is inlined in `dashboard/server.py`'s `index_string`. Do not create an `assets/` folder expecting Dash to pick it up automatically.
 - **`HOLD` trades not saved** — `save_memory_node` returns early on HOLD. Patterns table only contains BUY/SELL lessons.
 - **`avg_price` vs `avg_cost`** — both keys appear in `_portfolio_value()` due to backward compat (`pos.get("avg_price", pos.get("avg_cost", 0))`). New positions always use `avg_price`.
-- **`trades.db` soft migration** — on startup, `agents/shared/nodes.py` tries `ALTER TABLE trades ADD COLUMN source TEXT DEFAULT 'live'` and silently catches the error if the column exists. Do not remove this block.
+- **`trades.db` soft migration** — on startup, `agents/shared/nodes.py` tries `ALTER TABLE trades ADD COLUMN source …` and `ADD COLUMN trace_id …`, and silently catches `OperationalError` if columns exist. Do not remove these blocks.
 - **`research` in multi-graph goes directly to `risk_check`** — unlike the simple graph where `research` loops back to `analyze`. This is intentional.
 - **`LiveFeed` not wired into graph nodes** — `LiveFeed` is wired into `Portfolio.fetch_prices()` only; it is not a LangGraph node.
 - **`core/registry.py` description** — update the "4 Specialists" description string if a 5th specialist is added to `agents/multi.py`.

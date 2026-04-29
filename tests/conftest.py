@@ -61,6 +61,7 @@ def tmp_db(tmp_path):
             price REAL, amount_usd REAL, shares REAL,
             reasoning TEXT, confidence REAL, emotion TEXT,
             portfolio_value_after REAL, lesson TEXT,
+            trace_id TEXT,
             source TEXT DEFAULT 'live'
         );
         CREATE TABLE IF NOT EXISTS patterns (

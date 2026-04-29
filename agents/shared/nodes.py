@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS trades (
     emotion               TEXT,
     portfolio_value_after REAL,
     lesson                TEXT,
+    trace_id              TEXT,
     source                TEXT DEFAULT 'live'
 );
 CREATE TABLE IF NOT EXISTS patterns (
@@ -129,6 +130,11 @@ def _init_db() -> None:
             con.executescript(_SCHEMA)
             try:
                 con.execute("ALTER TABLE trades ADD COLUMN source TEXT DEFAULT 'live'")
+                con.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                con.execute("ALTER TABLE trades ADD COLUMN trace_id TEXT")
                 con.commit()
             except sqlite3.OperationalError:
                 pass
@@ -690,7 +696,7 @@ def load_memory_node(state: AgentState) -> dict:
 
     rows = _db_read(
         "SELECT timestamp,symbol,action,price,amount_usd,shares,"
-        "reasoning,confidence,emotion,portfolio_value_after,lesson "
+        "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source "
         "FROM trades ORDER BY timestamp DESC LIMIT 20"
     )
 
@@ -706,6 +712,8 @@ def load_memory_node(state: AgentState) -> dict:
         "emotion",
         "portfolio_value_after",
         "lesson",
+        "trace_id",
+        "source",
     )
     past_trades = [dict(zip(cols, row)) for row in rows]
 
@@ -1119,8 +1127,8 @@ def make_save_memory_node(portfolio: Portfolio):
                 (
                     "INSERT INTO trades "
                     "(timestamp,symbol,action,price,amount_usd,shares,"
-                    "reasoning,confidence,emotion,portfolio_value_after,lesson,source) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         _ts(),
                         symbol,
@@ -1133,6 +1141,7 @@ def make_save_memory_node(portfolio: Portfolio):
                         state["emotion"],
                         pv_after,
                         lesson,
+                        _get_trace_id(),
                         source,
                     ),
                 ),
