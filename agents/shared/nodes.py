@@ -237,18 +237,25 @@ def _parse_json_obj(text: str) -> dict:
 # ── API safety ────────────────────────────────────────────────────────────────
 
 _token_counter: dict = {"input": 0, "output": 0, "max_daily": 500_000, "reset_date": ""}
+_token_counter_lock = threading.Lock()
 _circuit_breaker: dict = {"consecutive_failures": 0, "paused_until": 0.0}
 _CIRCUIT_BREAKER_THRESHOLD = 3
 _CIRCUIT_BREAKER_PAUSE = 300  # 5 minutes
 
 
-def _maybe_reset_token_counter() -> None:
-    """Reset the daily token counter at midnight."""
+def _reset_token_counter_if_new_day() -> None:
+    """Reset daily token counts at date change. Caller must hold ``_token_counter_lock``."""
     today = date.today().isoformat()
     if _token_counter["reset_date"] != today:
         _token_counter["input"] = 0
         _token_counter["output"] = 0
         _token_counter["reset_date"] = today
+
+
+def _maybe_reset_token_counter() -> None:
+    """Reset the daily token counter at midnight (thread-safe)."""
+    with _token_counter_lock:
+        _reset_token_counter_if_new_day()
 
 
 def _llm(
@@ -260,7 +267,14 @@ def _llm(
     web_search: bool = False,
 ) -> str:
     """Single LLM call or agentic web-search loop with budget cap and circuit breaker."""
-    _maybe_reset_token_counter()
+    with _token_counter_lock:
+        _reset_token_counter_if_new_day()
+        total_tokens = _token_counter["input"] + _token_counter["output"]
+        if total_tokens > _token_counter["max_daily"]:
+            logger.critical(
+                "Daily token budget exceeded (%d tokens) — skipping LLM call", total_tokens
+            )
+            return ""
 
     # Circuit breaker check
     now = time.time()
@@ -273,12 +287,6 @@ def _llm(
             return ""
         _circuit_breaker["consecutive_failures"] = 0
         logger.info("Circuit breaker CLOSED — resuming LLM calls")
-
-    # Token budget check
-    total_tokens = _token_counter["input"] + _token_counter["output"]
-    if total_tokens > _token_counter["max_daily"]:
-        logger.critical("Daily token budget exceeded (%d tokens) — skipping LLM call", total_tokens)
-        return ""
 
     tools = [{"type": "web_search_20250305", "name": "web_search"}] if web_search else []
     msgs = list(messages)
@@ -294,8 +302,10 @@ def _llm(
             resp = client.messages.create(**kwargs)
             # Track token usage
             if hasattr(resp, "usage"):
-                _token_counter["input"] += resp.usage.input_tokens
-                _token_counter["output"] += resp.usage.output_tokens
+                with _token_counter_lock:
+                    _reset_token_counter_if_new_day()
+                    _token_counter["input"] += resp.usage.input_tokens
+                    _token_counter["output"] += resp.usage.output_tokens
             if resp.stop_reason == "end_turn" or not tools:
                 break
             if resp.stop_reason == "tool_use":
