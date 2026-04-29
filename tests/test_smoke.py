@@ -138,9 +138,31 @@ def test_simulation_cycle():
 
 
 def test_backtest_run():
+    import pandas as pd
+    from unittest.mock import patch
+
     from core.backtest import run_backtest
 
-    result = run_backtest("AAPL", period="1mo")
+    # Synthetic OHLCV (~20 rows) — avoids live Yahoo Finance (Finding 5.5).
+    n = 22
+    idx = pd.date_range("2025-01-01", periods=n, freq="D")
+    close_vals = [185.0 + 0.12 * i + 0.05 * (i % 7) for i in range(n)]
+    df_mock = pd.DataFrame(
+        {
+            "Open": [c - 0.25 for c in close_vals],
+            "High": [c + 0.35 for c in close_vals],
+            "Low": [c - 0.45 for c in close_vals],
+            "Close": close_vals,
+            "Volume": [1_100_000 + i * 500 for i in range(n)],
+        },
+        index=idx,
+    )
+
+    def _fake_download(*_args, **_kwargs):
+        return df_mock.copy()
+
+    with patch("core.backtest.yf.download", side_effect=_fake_download):
+        result = run_backtest("AAPL", period="1mo")
     required_keys = [
         "symbol",
         "final_value",
