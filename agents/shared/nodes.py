@@ -463,6 +463,23 @@ _SIM_THOUGHTS = {
 # Per-symbol simulated price history (for RSI computation)
 _sim_price_history: dict[str, list[float]] = {}
 
+# Per-symbol live closes for RSI (multi-agent technician); filled in fetch_data_node (live path)
+_live_price_history: dict[str, list[float]] = {}
+
+
+def _record_live_prices_for_rsi(prices: dict[str, float]) -> None:
+    """Append current closes for live RSI; keep last 100 bars per symbol."""
+    for sym in WATCHLIST:
+        if sym not in prices:
+            continue
+        p = prices[sym]
+        if p is None or p <= 0:
+            continue
+        hist = _live_price_history.setdefault(sym, [])
+        hist.append(float(p))
+        if len(hist) > 100:
+            _live_price_history[sym] = hist[-100:]
+
 
 def _sim_step_prices(current: dict[str, float]) -> dict[str, float]:
     """Random-walk one step for each symbol."""
@@ -716,6 +733,8 @@ def make_fetch_data_node(portfolio: Portfolio):
 
         flat = _is_flat(prices)
         _prev_prices.update(prices)
+
+        _record_live_prices_for_rsi(prices)
 
         logs.append(
             _entry(

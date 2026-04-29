@@ -14,6 +14,7 @@ from agents.shared.nodes import (
     _db_read,
     _db_write,
     _entry,
+    _live_price_history,
     _llm,
     _parse_json_obj,
     _portfolio_value,
@@ -467,7 +468,7 @@ def technician_node(state: MultiAgentState) -> dict:
     recent_lessons = [r[0] for r in _rows if r[0]]
 
     rsi_map = {
-        sym: _rsi(_sim_price_history.get(sym, [prices.get(sym, 100.0)]))
+        sym: _rsi(_live_price_history.get(sym, [prices.get(sym, 100.0)]))
         for sym in WATCHLIST
         if sym in prices
     }
