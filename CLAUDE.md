@@ -52,6 +52,7 @@ apex7-trader/
 │       ├── __init__.py
 │       ├── state.py       ← AgentState, MultiAgentState TypedDicts
 │       ├── nodes.py       ← shared nodes (load_memory, execute, etc.)
+│       ├── prompts.py     ← system prompts versionnés (PROMPT_VERSION)
 │       └── schemas.py     ← Pydantic validation for LLM outputs
 ├── core/
 │   ├── __init__.py
@@ -87,9 +88,12 @@ apex7-trader/
 │   └── README.md
 └── tests/
     ├── conftest.py
+    ├── test_circuit_breaker.py
+    ├── test_integration.py
+    ├── test_layout_helpers.py
     ├── test_smoke.py
+    ├── test_stoploss.py
     ├── test_terminal.py
-    └── test_integration.py
 ```
 
 **File ownership:**
@@ -265,13 +269,14 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **Lazy DB init** — `_init_db()` is no longer called at import time. It runs lazily on first `_db_write`/`_db_read`/`_db_write_multi` call via `_ensure_db()`. Importing `agents/shared/nodes.py` no longer creates SQLite tables. Importing `dashboard/controller.py` does not create a `Portfolio` until `start_controller()` is called explicitly. Importing `agents/simple.py` or `agents/multi.py` compiles a LangGraph graph at module level (for LangGraph Studio compatibility).
 - **RSI computed in `core/indicators.py`** — a single canonical `rsi()` function. Do not re-implement RSI elsewhere.
 - **`_db_write()` / `_db_read()` centralize all SQLite access** — never open raw `sqlite3.connect()` anywhere — not in agent nodes, not in `dashboard/layout/helpers.py`, not in `dashboard/callbacks/`. Always use `_db_write()` or `_db_read()` from `agents.shared.nodes` (dashboard loaders and track records use `_db_read()` so analytics match sim/live mode).
+- **\_live\_price\_history warm-up** — en live mode, le RSI retourne 50.0 (`insufficient data`) pendant les 14 premiers cycles (~7 min) si la série n’est pas encore prête. Le technician est aveugle pendant cette période (mitigation : seed daily + append par jour, sprint v3).
 - **Live mode `technician_node` RSI** — Live closes are appended in `fetch_data_node` (live path) to `_live_price_history` in `agents/shared/nodes.py` (last 100 per symbol). The multi-agent `technician_node` uses that series for RSI; simulation still uses `_sim_price_history` from `_sim_step_prices()`.
 - **`_route_risk` fail-closed** — `_route_risk` defaults `_risk_passed` to `False` (fail-closed). If `risk_check_node` fails to write `_risk_passed`, the graph skips execution instead of proceeding.
 - **`/health` and agent liveness** — `dashboard/server.py` returns HTTP **503** when `portfolio.is_dead` (or no portfolio), **200** when alive; JSON includes `status` (`ok` / `dead`) and `agent_alive`.
 - **Zero-price stop-loss** — `execute_node` runs SL only when `sl_avg > 0`, `sl_price > 0`, and the quote is plausible: `sl_price > 1.0`, or both cost basis and quote are ≤ $1 (penny stocks). Otherwise it skips SL and logs a warning (`Skipping stop-loss check…`) — avoids bogus ticks (e.g. yfinance 0 / stale sub-dollar quote vs a normal-cost basis) without spamming every cycle on legitimate sub-dollar names.
 - **Backtest vs live RSI** — `core/backtest.py` `compute_indicators()` uses `core.indicators.rsi()` for `RSI_14` (same function as agents). Do not reintroduce pandas EWM for RSI.
 - **`test_sqlite_schema` fails on a clean clone** — `tests/test_smoke.py` asserts `trades.db` exists, but `_ensure_db()` is lazy and only runs on first write. The test must call `_ensure_db()` before asserting the schema.
-- **Token budget resets daily** — `_maybe_reset_token_counter()` is called at the start of each `_llm()` invocation and resets `_token_counter` at midnight.
+- **Token budget resets daily** — `_maybe_reset_token_counter()` is called at the start of each `_llm()` invocation and resets `_token_counter` at midnight. **`_maybe_reset_token_counter()` acquiert `_token_counter_lock` lui-même** — ne jamais l’appeler depuis une section déjà verrouillée par `_token_counter_lock`, sinon deadlock.
 - **All LLM specialist votes validated by Pydantic** — `technician_node`, `analyst_node`, `risk_manager_node`, `macro_watcher_node` and `arbitrate_node` all pass raw LLM JSON through their respective `validate_*_vote()` / `validate_decision()` functions from `agents/shared/schemas.py`.
 
 ## Code conventions

@@ -19,6 +19,7 @@ apex7-trader/
 │       ├── __init__.py
 │       ├── state.py       ← AgentState, MultiAgentState TypedDicts
 │       ├── nodes.py       ← shared nodes, _db_write, _llm, sim engine
+│       ├── prompts.py     ← versioned system prompts (PROMPT_VERSION)
 │       └── schemas.py     ← Pydantic validation for LLM outputs
 ├── core/
 │   ├── __init__.py
@@ -53,8 +54,13 @@ apex7-trader/
 │   ├── CHANGELOG.md
 │   └── README.md
 ├── tests/
-│   ├── test_smoke.py    # 9 regression tests
-│   └── test_terminal.py # 7 market data tests
+│   ├── conftest.py
+│   ├── test_circuit_breaker.py
+│   ├── test_integration.py
+│   ├── test_layout_helpers.py
+│   ├── test_smoke.py
+│   ├── test_stoploss.py
+│   └── test_terminal.py
 ├── .github/
 │   └── workflows/
 │       └── ci.yml
@@ -223,6 +229,8 @@ CREATE TABLE trades (
     emotion               TEXT,
     portfolio_value_after REAL,
     lesson                TEXT,
+    trace_id              TEXT,
+    prompt_version        TEXT,
     source                TEXT DEFAULT 'live'
 );
 
@@ -433,8 +441,9 @@ Wired into `Portfolio.fetch_prices()` when `USE_LIVEFEED=True`. If `LiveFeed.fet
 - All Portfolio mutations use `with self._lock` (RLock)
 - SQLite writes go through `_db_write()` in `agents/shared/nodes.py` — handles WAL mode, retries (3 attempts with backoff), and structured logging
 - Sim and live use separate databases (`trades_sim.db` / `trades.db`) via `_get_db_path()`
-- `_ctrl` dict (pause/step) and `_state` dict are mutated by both threads — not lock-protected (acceptable: only booleans and references)
-- Graph switch and reset: agent thread is killed (portfolio.is_dead = True), new Portfolio + thread created
+- `_ctrl` and `_state` in `dashboard/controller.py` are protected by `_controller_rw_lock` (`threading.Lock`) — all mutations and critical reads of these dicts are wrapped in `with _controller_rw_lock` (or nested under the same `RLock` after the controller refactor; see that file for the current single-lock pattern).
+- **Lock ordering (controller):** always acquire `_controller_lock` (start-up / one-shot) before `_controller_rw_lock` if both are ever needed in the same call path — **never the reverse** (prevents deadlock with `start_controller` and thread spawn).
+- Graph switch and reset: agent thread is stopped (`portfolio.is_dead = True`), new Portfolio + thread created
 
 ## market_data.py — Standalone Market Data Module
 
