@@ -5,7 +5,12 @@ import threading
 import time
 from datetime import datetime
 
-from agents.shared.nodes import _new_trace_id, get_consecutive_hold_cycles, get_simulation_mode
+from agents.shared.nodes import (
+    _new_trace_id,
+    evaluate_pending_trades,
+    get_consecutive_hold_cycles,
+    get_simulation_mode,
+)
 from agents.multi import run_daily_postmortem
 from config import AGENT_INTERVAL, POSTMORTEM_HOUR
 from core.data import Portfolio
@@ -165,6 +170,18 @@ def _postmortem_loop(p: Portfolio) -> None:
         time.sleep(60)
         now = datetime.now()
         today = now.date()
+
+        # Resolve any due pending trade evaluations every minute — independent
+        # of the daily postmortem schedule. Skipped in simulation mode because
+        # ``evaluate_pending_trades`` calls real yfinance.
+        if not get_simulation_mode():
+            try:
+                done = evaluate_pending_trades(now)
+                if done:
+                    logger.info("evaluate_pending_trades: completed %d evaluation(s)", done)
+            except Exception as exc:
+                p.log(f"evaluate_pending_trades error: {exc}", "error")
+
         if now.hour == POSTMORTEM_HOUR and _last_postmortem_date != today:
             try:
                 run_daily_postmortem(p)
