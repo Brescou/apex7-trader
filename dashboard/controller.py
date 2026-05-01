@@ -7,7 +7,7 @@ from datetime import datetime
 
 from agents.shared.nodes import _new_trace_id, get_consecutive_hold_cycles, get_simulation_mode
 from agents.multi import run_daily_postmortem
-from config import AGENT_GRAPH, AGENT_INTERVAL, POSTMORTEM_HOUR
+from config import AGENT_INTERVAL, POSTMORTEM_HOUR
 from core.data import Portfolio
 from core.registry import get_graph
 
@@ -19,7 +19,6 @@ logger = logging.getLogger("apex7.controller")
 
 _ctrl: dict = {"paused": False, "step": False, "cycle": 0, "sim_mode": False}
 _state: dict = {
-    "graph_id": AGENT_GRAPH,
     "last_votes": [],
     "last_arb": {},
     "thinking": False,
@@ -32,12 +31,11 @@ _controller_lock = threading.RLock()
 _controller_started = False
 
 
-def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
+def _agent_loop(p: Portfolio) -> None:
     import traceback
 
-    graph = get_graph(graph_id, p)
+    graph = get_graph(p)
     cycle = 0
-    is_multi = graph_id == "multi"
 
     while not p.is_dead:
         while True:
@@ -81,28 +79,26 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
                 "alive": True,
                 "skip_research": False,
             }
-            if is_multi:
-                initial.update(
-                    {
-                        "supervisor_brief": "",
-                        "agent_role": "",
-                        "agent_votes": [],
-                        "tech_vote": None,
-                        "analyst_vote": None,
-                        "risk_vote": None,
-                        "macro_vote": None,
-                        "arbitration": None,
-                    }
-                )
+            initial.update(
+                {
+                    "supervisor_brief": "",
+                    "agent_role": "",
+                    "agent_votes": [],
+                    "tech_vote": None,
+                    "analyst_vote": None,
+                    "risk_vote": None,
+                    "macro_vote": None,
+                    "arbitration": None,
+                }
+            )
             with _controller_lock:
                 _state["thinking"] = True
             result = graph.invoke(initial)
             with _controller_lock:
                 _state["thinking"] = False
                 _state["consecutive_holds"] = get_consecutive_hold_cycles()
-                if is_multi:
-                    _state["last_votes"] = result.get("agent_votes", [])
-                    _state["last_arb"] = result.get("arbitration", {}) or {}
+                _state["last_votes"] = result.get("agent_votes", [])
+                _state["last_arb"] = result.get("arbitration", {}) or {}
             for entry in result.get("log", []):
                 p.log(entry["message"], entry.get("level", "info"))
             if not result.get("alive", True):
@@ -131,8 +127,8 @@ def _agent_loop(p: Portfolio, graph_id: str = "simple") -> None:
                 elapsed += 1.0
 
 
-def _launch(p: Portfolio, graph_id: str = "simple") -> threading.Thread:
-    t = threading.Thread(target=_agent_loop, args=(p, graph_id), daemon=True)
+def _launch(p: Portfolio) -> threading.Thread:
+    t = threading.Thread(target=_agent_loop, args=(p,), daemon=True)
     t.start()
     return t
 
@@ -153,7 +149,7 @@ def start_controller() -> None:
             return
         _state["portfolio"] = Portfolio()
         port = _state["portfolio"]
-        _state["thread"] = _launch(port, _state["graph_id"])
+        _state["thread"] = _launch(port)
         threading.Thread(
             target=_postmortem_loop,
             args=(port,),

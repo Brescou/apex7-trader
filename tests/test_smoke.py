@@ -56,26 +56,6 @@ def test_portfolio_multi_symbol(portfolio):
     assert len(portfolio.positions) == 2
 
 
-def test_simple_graph_build():
-    from agents.simple import build_graph as build_simple_graph
-    from core.data import Portfolio
-
-    g = build_simple_graph(Portfolio())
-    nodes = list(g.nodes)
-    expected = [
-        "load_memory",
-        "fetch_data",
-        "analyze",
-        "research",
-        "risk_check",
-        "execute",
-        "save_memory",
-        "skip",
-    ]
-    for node in expected:
-        assert node in nodes, f"Missing node '{node}' in simple graph. Got: {nodes}"
-
-
 def test_multi_graph_build():
     from agents.multi import build_multi_graph
     from core.data import Portfolio
@@ -101,14 +81,14 @@ def test_multi_graph_build():
 
 
 def test_simulation_cycle():
-    from agents.simple import build_graph as build_simple_graph
+    from agents.multi import build_multi_graph
     from agents.shared.nodes import _sim_mode
     from core.data import Portfolio
 
     _sim_mode["enabled"] = True
 
     p = Portfolio()
-    g = build_simple_graph(p)
+    g = build_multi_graph(p)
 
     initial = {
         "balance": p.cash,
@@ -128,6 +108,14 @@ def test_simulation_cycle():
         "log": [],
         "alive": True,
         "skip_research": False,
+        "supervisor_brief": "",
+        "agent_role": "",
+        "agent_votes": [],
+        "tech_vote": None,
+        "analyst_vote": None,
+        "risk_vote": None,
+        "macro_vote": None,
+        "arbitration": None,
     }
 
     result = g.invoke(initial)
@@ -277,7 +265,6 @@ if __name__ == "__main__":
         ("test_imports", test_imports),
         ("test_portfolio_basic", lambda: test_portfolio_basic(Portfolio())),
         ("test_portfolio_multi_symbol", lambda: test_portfolio_multi_symbol(Portfolio())),
-        ("test_simple_graph_build", test_simple_graph_build),
         ("test_multi_graph_build", test_multi_graph_build),
         ("test_simulation_cycle", test_simulation_cycle),
         ("test_backtest_run", test_backtest_run),

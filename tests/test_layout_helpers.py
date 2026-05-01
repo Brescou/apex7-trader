@@ -14,19 +14,19 @@ from dashboard.layout.classify import _classify_v2
 from dashboard.layout.emotions import _cycle, _emotion, _thinking
 
 
-def test_registry_graph_info_and_fallback() -> None:
-    """Unknown graph id falls back to simple metadata."""
-    multi = get_graph_info("multi")
-    assert "MULTI" in multi["label"]
-    assert get_graph_info("definitely_unknown") == get_graph_info("simple")
+def test_registry_graph_info() -> None:
+    """``get_graph_info`` exposes UI metadata for the multi-agent graph."""
+    info = get_graph_info()
+    assert "MULTI" in info["label"]
+    for key in ("description", "cost", "latency", "color"):
+        assert key in info
 
 
 def test_registry_get_graph_builds() -> None:
-    """Both graph builders return a compiled graph object."""
+    """``get_graph`` returns a compiled multi-agent graph."""
     p = Portfolio()
-    g1 = get_graph("simple", p)
-    g2 = get_graph("multi", p)
-    assert g1 is not None and g2 is not None
+    g = get_graph(p)
+    assert g is not None
 
 
 @pytest.mark.parametrize(

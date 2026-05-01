@@ -41,9 +41,7 @@ from config import (
 )
 from core.data import Portfolio
 from agents.shared.state import AgentState
-from core.indicators import rsi as _rsi
-from agents.shared.prompts import ANALYZE_SYSTEM_PROMPT, PROMPT_VERSION
-from agents.shared.schemas import validate_decision
+from agents.shared.prompts import PROMPT_VERSION
 
 logger = logging.getLogger("apex7")
 
@@ -712,83 +710,6 @@ def sim_fetch_data(state: AgentState, portfolio: Portfolio) -> dict:
     }
 
 
-def sim_analyze(state: AgentState) -> dict:
-    """Rule-based analyzer — no LLM, uses simulated RSI."""
-    logs = [_entry(f"[SIM] analyze: round={state['round']}")]
-
-    prices = state["prices"]
-    pv = _portfolio_value(state)
-
-    # Compute RSI per symbol and pick best candidate
-    rsi_map: dict[str, float] = {
-        sym: _rsi(_sim_price_history.get(sym, [prices[sym]])) for sym in WATCHLIST if sym in prices
-    }
-    logs.append(_entry(f"[SIM] RSI: {rsi_map}"))
-
-    # Choose action
-    oversold = {s: r for s, r in rsi_map.items() if r < 30}
-    overbought = {s: r for s, r in rsi_map.items() if r > 70 and s in state["positions"]}
-
-    if overbought:
-        sym = min(overbought, key=overbought.get)  # most overbought held pos
-        action = "SELL"
-        conf = 0.75
-        alloc = 0
-        sell_p = 100
-        rsi_v = rsi_map[sym]
-    elif oversold and len(state["positions"]) < MAX_POSITIONS:
-        sym = min(oversold, key=oversold.get)  # most oversold on watchlist
-        action = "BUY"
-        conf = 0.80
-        alloc = random.randint(15, MAX_ALLOC_PCT)
-        sell_p = 0
-        rsi_v = rsi_map[sym]
-    else:
-        sym = random.choice(WATCHLIST) if WATCHLIST else ""
-        action = "HOLD"
-        conf = 0.55
-        alloc = 0
-        sell_p = 0
-        rsi_v = rsi_map.get(sym, 50.0)
-
-    # Emotion from portfolio value
-    if pv < INITIAL_BALANCE * 0.7:
-        emotion = "PANIC"
-    elif pv < INITIAL_BALANCE * 0.9:
-        emotion = "NERVOUS"
-    elif pv > INITIAL_BALANCE * 1.3:
-        emotion = "EUPHORIC"
-    else:
-        emotion = random.choice(["CALM", "FOCUSED", "EXCITED"])
-
-    thoughts = _SIM_THOUGHTS.get(action, "Analyzing market conditions.")
-    reasoning = f"RSI={rsi_v:.1f} → {action}. " f"Portfolio ${pv:.2f} | {emotion}"
-
-    decision = {
-        "thoughts": thoughts,
-        "emotion": emotion,
-        "action": action,
-        "symbol": sym,
-        "allocation_pct": alloc,
-        "sell_pct": sell_p,
-        "reasoning": reasoning,
-        "confidence": conf,
-        "market_intel": f"Simulated RSI={rsi_v:.1f}",
-    }
-
-    skip = state["skip_research"] or (not state["positions"] and conf >= 0.60)
-    logs.append(_entry(f"[SIM] {action} {sym} conf={conf:.0%} emotion={emotion} RSI={rsi_v:.1f}"))
-
-    return {
-        "decision": decision,
-        "confidence": conf,
-        "emotion": emotion,
-        "thoughts": thoughts,
-        "skip_research": skip,
-        "log": logs,
-    }
-
-
 def sim_research(state: AgentState) -> dict:
     """In simulation mode, research is skipped — confidence forced to 0.75."""
     sym = (state.get("decision") or {}).get("symbol", "")
@@ -935,115 +856,6 @@ def make_fetch_data_node(portfolio: Portfolio):
         }
 
     return fetch_data_node
-
-
-def analyze_node(state: AgentState) -> dict:
-    if _sim_mode["enabled"]:
-        return sim_analyze(state)
-
-    it = state["research_iterations"]
-    logs = [_entry(f"analyze: round={state['round']} research_iter={it}")]
-
-    pv = _portfolio_value(state)
-    mode = (
-        "PANIC"
-        if pv < INITIAL_BALANCE * 0.5
-        else "GREED" if pv > INITIAL_BALANCE * 1.5 else "NORMAL"
-    )
-
-    positions_display = {
-        sym: {
-            "shares": round(pos["shares"], 4),
-            "avg_price": round(pos.get("avg_price", pos.get("avg_cost", 0)), 2),
-            "now": round(state["prices"].get(sym, 0), 2),
-            "pnl%": round(
-                (
-                    (
-                        state["prices"].get(sym, 1)
-                        / max(pos.get("avg_price", pos.get("avg_cost", 1)), 0.01)
-                    )
-                    - 1
-                )
-                * 100,
-                2,
-            ),
-        }
-        for sym, pos in state["positions"].items()
-    }
-    patterns_txt = (
-        "\n".join(f"  • {p}" for p in state["known_patterns"]) or "  Aucun pattern enregistré"
-    )
-
-    system = ANALYZE_SYSTEM_PROMPT
-    user = f"""CYCLE #{state['round']} | MODE : {mode} | RESEARCH ITER : {it}
-
-PORTFOLIO
-  Cash       : ${state['balance']:.2f}
-  Total Value: ${pv:.2f}
-  Positions  : {json.dumps(positions_display, indent=4)}
-
-WATCHLIST PRIX
-{json.dumps({s: f"${p:.2f}" for s, p in state['prices'].items()}, indent=2)}
-
-NEWS
-{state['news'] or 'Aucune news'}
-
-SENTIMENT  (-1=baissier → +1=haussier)
-{json.dumps(state['sentiment'], indent=2)}
-
-MÉMOIRE — PATTERNS CONNUS
-{patterns_txt}
-
-DERNIERS TRADES
-{json.dumps(state['past_trades'][:5], indent=2, default=str)}
-
-Retourne ce JSON (et RIEN d'autre) :
-{{
-  "thoughts":     "monologue interne 2-3 phrases",
-  "emotion":      "CALM|FOCUSED|EXCITED|NERVOUS|PANIC|EUPHORIC|DESPERATE",
-  "action":       "BUY|SELL|HOLD",
-  "symbol":       "TICKER ou null",
-  "allocation_pct": 10,
-  "sell_pct":     100,
-  "reasoning":    "thèse en 1-2 phrases",
-  "confidence":   0.75,
-  "market_intel": "insight clé issu de la recherche"
-}}"""
-
-    text = _llm(
-        sonnet,
-        SONNET_ID,
-        [{"role": "user", "content": user}],
-        system=system,
-        max_tokens=1024,
-        web_search=True,
-    )
-
-    decision = validate_decision(_parse_json_obj(text))
-    confidence = decision["confidence"]
-    emotion = decision["emotion"]
-    thoughts = decision["thoughts"]
-
-    # skip_research: no positions + conf ok, or flat market (already set in fetch_data)
-    skip = state["skip_research"] or (not state["positions"] and confidence >= 0.60)
-
-    logs.append(
-        _entry(
-            f"analyze: {decision.get('action')} {decision.get('symbol') or ''} "
-            f"conf={confidence:.0%} emotion={emotion} skip_research={skip}"
-        )
-    )
-    if thoughts:
-        logs.append(_entry(f"thoughts: {thoughts[:140]}"))
-
-    return {
-        "decision": decision,
-        "confidence": confidence,
-        "emotion": emotion,
-        "thoughts": thoughts,
-        "skip_research": skip,
-        "log": logs,
-    }
 
 
 def research_node(state: AgentState) -> dict:
@@ -1326,16 +1138,6 @@ def skip_node(state: AgentState) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 # ROUTING
 # ═══════════════════════════════════════════════════════════════════════════════
-
-
-def _route_analyze(state: AgentState) -> str:
-    if (
-        state.get("skip_research")
-        or state["confidence"] >= 0.70
-        or state["research_iterations"] >= 2
-    ):
-        return "risk_check"
-    return "research"
 
 
 def _route_risk(state) -> str:

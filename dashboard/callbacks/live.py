@@ -11,7 +11,6 @@ from agents.shared.nodes import (
 )
 from config import INITIAL_BALANCE
 from core.data import Portfolio
-from core.registry import get_graph_info
 from dashboard.controller import _controller_lock, _ctrl, _launch, _state
 from dashboard.layout import (
     _EMOTIONS,
@@ -161,36 +160,10 @@ def _controls(_, __, ___, store):
             _state["last_arb"] = {}
             _state["last_error"] = None
             _state["_death_refresh_done"] = False
-            _state["thread"] = _launch(p, _state.get("graph_id", "simple"))
+            _state["thread"] = _launch(p)
             _ctrl["paused"] = False
         store["paused"] = False
     return store
-
-
-@app.callback(
-    Output("graph-store", "data"),
-    Input("graph-selector", "value"),
-    prevent_initial_call=True,
-)
-def _switch_graph(graph_id: str) -> dict:
-    """Switch the active graph, restart portfolio and agent thread."""
-    with _controller_lock:
-        _state["graph_id"] = graph_id
-        old = _state.get("portfolio")
-    if old is not None:
-        old.is_dead = True
-    p = Portfolio()
-    with _controller_lock:
-        _state["portfolio"] = p
-        _state["last_votes"] = []
-        _state["last_arb"] = {}
-        _state["last_error"] = None
-        _state["_death_refresh_done"] = False
-        _ctrl["paused"] = False
-        _state["thread"] = _launch(p, graph_id)
-    info = get_graph_info(graph_id)
-    p.log(f"Graph switched to {info['label']}")
-    return {"graph_id": graph_id}
 
 
 @app.callback(
@@ -204,7 +177,6 @@ def _switch_graph(graph_id: str) -> dict:
         Output("btn-pause", "className"),
         Output("sec-portfolio", "children"),
         Output("sec-emotion", "children"),
-        Output("sec-graph", "children"),
         Output("sec-stats", "children"),
         Output("sec-positions", "children"),
         Output("chart-vals", "children"),
@@ -228,14 +200,13 @@ def _switch_graph(graph_id: str) -> dict:
         Output("live-track-records", "children"),
     ],
     [Input("tick", "n_intervals"), Input("ctrl-store", "data")],
-    [State("main-tabs", "value"), State("graph-store", "data")],
+    State("main-tabs", "value"),
 )
-def _refresh(_, store, active_tab, graph_store):
+def _refresh(_, store, active_tab):
     if active_tab != "live":
-        return [no_update] * 26
+        return [no_update] * 24
     with _controller_lock:
         p = _state.get("portfolio")
-        _graph_id_cur = (graph_store or {}).get("graph_id", _state.get("graph_id", "simple"))
         votes = _state.get("last_votes", [])
         arb = _state.get("last_arb", {})
         paused_ctrl = _ctrl.get("paused", False)
@@ -330,9 +301,6 @@ def _refresh(_, store, active_tab, graph_store):
 
     pause_cls = "cbtn cbtn-pause on" if paused else "cbtn cbtn-pause"
 
-    # Determine graph mode (needed for cards visibility in both alive/dead states)
-    is_multi = _graph_id_cur == "multi"
-
     # ── DEATH STATE ──────────────────────────────────────────────────────────
     if dead:
         sec_portfolio = html.Div(
@@ -379,7 +347,7 @@ def _refresh(_, store, active_tab, graph_store):
             ],
             style={"padding": "16px 14px"},
         )
-        sec_graph = sec_emotion = sec_stats = sec_positions = html.Div()
+        sec_emotion = sec_stats = sec_positions = html.Div()
 
     else:
         # ── PORTFOLIO VALUE ──
@@ -529,73 +497,6 @@ def _refresh(_, store, active_tab, graph_store):
             ]
         )
 
-        # ── GRAPH INFO PANEL ──
-        graph_id = _graph_id_cur
-        graph_info = get_graph_info(graph_id)
-        gc = graph_info["color"]
-
-        sec_graph = html.Div(
-            [
-                _section_label("ACTIVE GRAPH"),
-                html.Div(
-                    [
-                        html.Div(
-                            [
-                                html.Span(
-                                    graph_info["label"],
-                                    style={
-                                        "fontSize": "10px",
-                                        "fontWeight": "700",
-                                        "color": gc,
-                                        "letterSpacing": "0.06em",
-                                    },
-                                ),
-                                html.Div(
-                                    [
-                                        html.Span(
-                                            f"💰 {graph_info['cost']}",
-                                            style={
-                                                "fontSize": "8px",
-                                                "color": TEXT_DIM,
-                                                "background": f"{gc}18",
-                                                "padding": "1px 5px",
-                                                "borderRadius": "2px",
-                                                "marginRight": "4px",
-                                            },
-                                        ),
-                                        html.Span(
-                                            graph_info["latency"],
-                                            style={
-                                                "fontSize": "8px",
-                                                "color": TEXT_DIM,
-                                            },
-                                        ),
-                                    ],
-                                    style={"marginTop": "3px"},
-                                ),
-                                html.Div(
-                                    graph_info["description"],
-                                    style={
-                                        "fontSize": "9px",
-                                        "color": TEXT_DIM,
-                                        "fontStyle": "italic",
-                                        "marginTop": "4px",
-                                    },
-                                ),
-                            ]
-                        ),
-                    ],
-                    style={
-                        "background": BG_CARD,
-                        "border": f"1px solid {gc}33",
-                        "borderLeft": f"2px solid {gc}",
-                        "borderRadius": "3px",
-                        "padding": "8px 10px",
-                    },
-                ),
-            ]
-        )
-
         # ── METRICS ──
         dd_c = RED if dd > 20 else (YELLOW if dd > 10 else TEXT_DIM)
         sec_stats = html.Div(
@@ -694,7 +595,7 @@ def _refresh(_, store, active_tab, graph_store):
         )
     ]
 
-    if is_multi and votes:
+    if votes:
         tv = vote_map.get("technician", {})
         av = vote_map.get("analyst", {})
         rv = vote_map.get("risk_manager", {})
@@ -763,7 +664,7 @@ def _refresh(_, store, active_tab, graph_store):
         body_macro = _macro_body_children(mv) if mv else _WAITING
         card_arb = _build_arb_card(arb)
 
-    elif is_multi:
+    else:
         hdr_tech = _PLACEHOLDER_HDR
         hdr_anlst = _PLACEHOLDER_HDR
         hdr_risk = _PLACEHOLDER_HDR
@@ -771,86 +672,75 @@ def _refresh(_, store, active_tab, graph_store):
         body_tech = body_anlst = body_risk = body_macro = _WAITING
         card_arb = _build_arb_card({})
 
-    else:
-        hdr_tech = _PLACEHOLDER_HDR
-        hdr_anlst = _PLACEHOLDER_HDR
-        hdr_risk = _PLACEHOLDER_HDR
-        hdr_macro = _PLACEHOLDER_HDR
-        body_tech = body_anlst = body_risk = body_macro = []
-        card_arb = html.Div()
+    cards_style = {"padding": "0 14px 12px"}
 
-    cards_style = {"padding": "0 14px 12px"} if is_multi else {"display": "none"}
-
-    # ── LIVE TRACK RECORDS (multi mode only) ─────────────────────────────────
-    if is_multi:
-        _TRACK_AGENTS = [
-            ("technician", "TECH", BLUE),
-            ("analyst", "ANLST", GREEN),
-            ("risk_manager", "RISK", ORANGE),
-            ("macro_watcher", "MACRO", PURPLE),
-        ]
-        _tr_rows = _db_read(
-            "SELECT agent_name, was_correct FROM agent_memory "
-            "WHERE agent_name IN ('technician','analyst','risk_manager','macro_watcher') "
-            "ORDER BY timestamp DESC LIMIT 80"
-        )
-        _tr_by_agent: dict = {}
-        for _an, _wc in _tr_rows:
-            _tr_by_agent.setdefault(_an, []).append(_wc)
-        badge_items = []
-        for agent_key, agent_label, agent_color in _TRACK_AGENTS:
-            rows = _tr_by_agent.get(agent_key, [])[:20]
-            if rows:
-                correct = sum(1 for wc in rows if wc in (1, True))
-                wr = correct / len(rows) * 100
-            else:
-                wr = 0.0
-            wr_col = GREEN if wr >= 60 else (ORANGE if wr >= 40 else RED)
-            badge_items.append(
-                html.Span(
-                    [
-                        html.Span(
-                            agent_label,
-                            style={
-                                "fontSize": "9px",
-                                "fontWeight": "700",
-                                "color": agent_color,
-                                "marginRight": "3px",
-                            },
-                        ),
-                        html.Span(f"{wr:.0f}%", style={"fontSize": "9px", "color": wr_col}),
-                    ],
-                    style={
-                        "background": f"{agent_color}11",
-                        "border": f"1px solid {agent_color}33",
-                        "borderRadius": "2px",
-                        "padding": "2px 6px",
-                        "marginRight": "5px",
-                        "display": "inline-flex",
-                        "alignItems": "center",
-                    },
-                )
+    # ── LIVE TRACK RECORDS ───────────────────────────────────────────────────
+    _TRACK_AGENTS = [
+        ("technician", "TECH", BLUE),
+        ("analyst", "ANLST", GREEN),
+        ("risk_manager", "RISK", ORANGE),
+        ("macro_watcher", "MACRO", PURPLE),
+    ]
+    _tr_rows = _db_read(
+        "SELECT agent_name, was_correct FROM agent_memory "
+        "WHERE agent_name IN ('technician','analyst','risk_manager','macro_watcher') "
+        "ORDER BY timestamp DESC LIMIT 80"
+    )
+    _tr_by_agent: dict = {}
+    for _an, _wc in _tr_rows:
+        _tr_by_agent.setdefault(_an, []).append(_wc)
+    badge_items = []
+    for agent_key, agent_label, agent_color in _TRACK_AGENTS:
+        rows = _tr_by_agent.get(agent_key, [])[:20]
+        if rows:
+            correct = sum(1 for wc in rows if wc in (1, True))
+            wr = correct / len(rows) * 100
+        else:
+            wr = 0.0
+        wr_col = GREEN if wr >= 60 else (ORANGE if wr >= 40 else RED)
+        badge_items.append(
+            html.Span(
+                [
+                    html.Span(
+                        agent_label,
+                        style={
+                            "fontSize": "9px",
+                            "fontWeight": "700",
+                            "color": agent_color,
+                            "marginRight": "3px",
+                        },
+                    ),
+                    html.Span(f"{wr:.0f}%", style={"fontSize": "9px", "color": wr_col}),
+                ],
+                style={
+                    "background": f"{agent_color}11",
+                    "border": f"1px solid {agent_color}33",
+                    "borderRadius": "2px",
+                    "padding": "2px 6px",
+                    "marginRight": "5px",
+                    "display": "inline-flex",
+                    "alignItems": "center",
+                },
             )
-        live_track = html.Div(
-            [
-                html.Div(
-                    "TRACK RECORDS",
-                    style={
-                        "fontSize": "9px",
-                        "fontWeight": "700",
-                        "letterSpacing": "0.18em",
-                        "color": TEXT_DIM,
-                        "textTransform": "uppercase",
-                        "borderBottom": f"1px solid {BORDER}",
-                        "paddingBottom": "6px",
-                        "marginBottom": "8px",
-                    },
-                ),
-                html.Div(badge_items, style={"display": "flex", "flexWrap": "wrap", "gap": "2px"}),
-            ]
         )
-    else:
-        live_track = html.Div()
+    live_track = html.Div(
+        [
+            html.Div(
+                "TRACK RECORDS",
+                style={
+                    "fontSize": "9px",
+                    "fontWeight": "700",
+                    "letterSpacing": "0.18em",
+                    "color": TEXT_DIM,
+                    "textTransform": "uppercase",
+                    "borderBottom": f"1px solid {BORDER}",
+                    "paddingBottom": "6px",
+                    "marginBottom": "8px",
+                },
+            ),
+            html.Div(badge_items, style={"display": "flex", "flexWrap": "wrap", "gap": "2px"}),
+        ]
+    )
 
     with _controller_lock:
         if dead:
@@ -868,7 +758,6 @@ def _refresh(_, store, active_tab, graph_store):
         pause_cls,
         sec_portfolio,
         sec_emotion,
-        sec_graph,
         sec_stats,
         sec_positions,
         chart_vals,

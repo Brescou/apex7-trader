@@ -22,7 +22,6 @@ def _tab_live() -> html.Div:
                 [
                     html.Div(id="sec-portfolio", style={"padding": "16px 14px 0"}),
                     html.Div(id="sec-emotion", style={"padding": "0 14px 12px"}),
-                    html.Div(id="sec-graph", style={"padding": "0 14px 12px"}),
                     # ── AGENT CARDS PANEL (multi-agent mode) ─────────────────────
                     html.Div(
                         [

@@ -13,7 +13,6 @@ from dashboard.layout.analytics_tab import (
 from dashboard.layout.live_tab import _tab_live
 from dashboard.layout.terminal_tab import _tab_terminal
 from dashboard.server import (
-    AGENT_GRAPH,
     BG_CARD,
     BG_DEEP,
     BLUE,
@@ -22,7 +21,6 @@ from dashboard.server import (
     GRAY,
     GREEN,
     TEXT_DIM,
-    TEXT_MAIN,
     WATCHLIST,
     app,
 )
@@ -43,7 +41,6 @@ def setup_layout() -> None:
         children=[
             dcc.Store(id="ctrl-store", data={"paused": False}),
             dcc.Store(id="mode-store", data={"sim": get_simulation_mode()}),
-            dcc.Store(id="graph-store", data={"graph_id": AGENT_GRAPH}),
             dcc.Store(
                 id="agent-cards-state",
                 data={"tech": False, "analyst": False, "risk": False, "macro": False},
@@ -116,29 +113,6 @@ def setup_layout() -> None:
                     html.Div(id="mode-badge"),
                     html.Div(
                         [
-                            dcc.Dropdown(
-                                id="graph-selector",
-                                options=[
-                                    {"label": "⚡ SIMPLE", "value": "simple"},
-                                    {"label": "🧠 MULTI-AGENT", "value": "multi"},
-                                ],
-                                value=AGENT_GRAPH,
-                                clearable=False,
-                                style={
-                                    "width": "170px",
-                                    "fontSize": "11px",
-                                    "background": BG_CARD,
-                                    "color": TEXT_MAIN,
-                                    "fontFamily": FONT,
-                                },
-                            ),
-                            html.Div(
-                                style={
-                                    "width": "1px",
-                                    "height": "14px",
-                                    "background": BORDER,
-                                }
-                            ),
                             dcc.RadioItems(
                                 id="mode-radio",
                                 options=[

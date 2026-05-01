@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import dash
-from config import AGENT_GRAPH, DEATH_THRESHOLD, INITIAL_BALANCE, WATCHLIST  # noqa: F401
+from config import DEATH_THRESHOLD, INITIAL_BALANCE, WATCHLIST  # noqa: F401
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DESIGN TOKENS
