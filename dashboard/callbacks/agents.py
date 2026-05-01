@@ -1,11 +1,11 @@
 """APEX-7 — Agents tab callback."""
 
 import datetime as _dt
-import sqlite3
 
 import plotly.graph_objects as go
 from dash import Input, Output, State, dcc, html, no_update
 
+from dashboard.layout.helpers import _load_agent_memory, _load_postmortem
 from dashboard.server import (
     BG_CARD,
     BLUE,
@@ -16,7 +16,6 @@ from dashboard.server import (
     RED,
     TEXT_DIM,
     TEXT_MAIN,
-    DB_PATH,
     _rgba,
     app,
 )
@@ -31,44 +30,10 @@ from dashboard.server import (
 def _agents_refresh(_, __, active_tab):
     if active_tab != "agents":
         return no_update
-    try:
-        _con = sqlite3.connect(DB_PATH)
-        _mem_rows = _con.execute(
-            "SELECT id,timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source "
-            "FROM agent_memory ORDER BY timestamp DESC LIMIT 1000"
-        ).fetchall()
-        _post_rows = _con.execute(
-            "SELECT id,timestamp,symbol,buy_price,sell_price,pnl_pct,holding_hours,"
-            "agents_correct,summary,source FROM postmortem ORDER BY timestamp DESC LIMIT 100"
-        ).fetchall()
-        _con.close()
-    except Exception:
-        _mem_rows, _post_rows = [], []
-    _mem_cols = (
-        "id",
-        "timestamp",
-        "agent_name",
-        "symbol",
-        "vote",
-        "confidence",
-        "was_correct",
-        "lesson",
-        "source",
-    )
-    _post_cols = (
-        "id",
-        "timestamp",
-        "symbol",
-        "buy_price",
-        "sell_price",
-        "pnl_pct",
-        "holding_hours",
-        "agents_correct",
-        "summary",
-        "source",
-    )
-    mem = [dict(zip(_mem_cols, r)) for r in _mem_rows]
-    post = [dict(zip(_post_cols, r)) for r in _post_rows]
+    # ``_load_*`` go through ``_db_read``/``_get_db_path`` so this tab
+    # automatically follows the active mode (live/paper/sim).
+    mem = _load_agent_memory()
+    post = _load_postmortem()
 
     _AGENT_DEFS = [
         {"key": "technician", "label": "Technician", "badge": "TECH", "color": BLUE},

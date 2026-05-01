@@ -6,7 +6,9 @@ from dash.exceptions import PreventUpdate
 from agents.shared.nodes import (
     _db_read,
     get_llm_degradation_status,
+    get_runtime_mode,
     get_simulation_mode,
+    set_paper_mode,
     set_simulation_mode,
 )
 from config import INITIAL_BALANCE
@@ -52,6 +54,16 @@ _LLM_DEGRADATION_LABELS = {
 }
 
 
+def _mode_palette(mode: str) -> tuple[str, str, str]:
+    """Return ``(label, color, css_class)`` for a given runtime mode."""
+    mode = (mode or "live").lower()
+    if mode == "sim":
+        return "◈ SIMULATION", ORANGE, "badge-sim"
+    if mode == "paper":
+        return "◐ PAPER", BLUE, "badge-paper"
+    return "◉ LIVE", GREEN, ""
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # CALLBACKS — TAB ROUTING
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -88,9 +100,17 @@ def _show_tab(tab: str):
     prevent_initial_call=True,
 )
 def _toggle_mode(value: str) -> dict:
-    sim = value == "sim"
-    set_simulation_mode(sim)
-    return {"sim": sim}
+    """Switch between live / paper / sim. Mutually exclusive backend toggles."""
+    mode = (value or "live").lower()
+    if mode == "paper":
+        set_paper_mode(True)
+    elif mode == "sim":
+        set_simulation_mode(True)
+    else:
+        # Live: clear both flags.
+        set_paper_mode(False)
+        set_simulation_mode(False)
+    return {"mode": get_runtime_mode()}
 
 
 @app.callback(
@@ -99,36 +119,22 @@ def _toggle_mode(value: str) -> dict:
     Input("mode-store", "data"),
 )
 def _mode_badge(store: dict):
-    sim = store.get("sim", False)
-    if sim:
-        badge = html.Span(
-            "◈ SIMULATION",
-            style={
-                "fontSize": "10px",
-                "fontWeight": "700",
-                "letterSpacing": "0.12em",
-                "color": ORANGE,
-                "border": f"1px solid {ORANGE}44",
-                "padding": "3px 10px",
-                "borderRadius": "3px",
-                "background": f"{ORANGE}11",
-            },
-        )
-        return badge, "badge-sim"
+    mode = (store or {}).get("mode", get_runtime_mode())
+    label, color, css_class = _mode_palette(mode)
     badge = html.Span(
-        "◉ LIVE",
+        label,
         style={
             "fontSize": "10px",
             "fontWeight": "700",
             "letterSpacing": "0.12em",
-            "color": GREEN,
-            "border": f"1px solid {GREEN}44",
+            "color": color,
+            "border": f"1px solid {color}44",
             "padding": "3px 10px",
             "borderRadius": "3px",
-            "background": f"{GREEN}11",
+            "background": f"{color}11",
         },
     )
-    return badge, ""
+    return badge, css_class
 
 
 @app.callback(

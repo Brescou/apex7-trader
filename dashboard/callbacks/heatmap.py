@@ -1,12 +1,12 @@
 """APEX-7 — Heatmap tab callback."""
 
 import datetime as _dt
-import sqlite3
 from collections import defaultdict
 
 import plotly.graph_objects as go
 from dash import Input, Output, dcc, html
 
+from agents.shared.nodes import _db_read
 from config import WATCHLIST as _WL
 from dashboard.server import (
     BG_CARD,
@@ -17,7 +17,6 @@ from dashboard.server import (
     RED,
     TEXT_DIM,
     TEXT_MAIN,
-    DB_PATH,
     app,
 )
 
@@ -39,15 +38,10 @@ def _heatmap_refresh(_):
 
     now_str = _dt.datetime.now().strftime("%H:%M:%S")
 
-    try:
-        con = sqlite3.connect(DB_PATH)
-        rows = con.execute(
-            "SELECT timestamp, symbol, action, price, amount_usd FROM trades "
-            "WHERE action IN ('BUY','SELL') ORDER BY timestamp ASC"
-        ).fetchall()
-        con.close()
-    except Exception:
-        rows = []
+    rows = _db_read(
+        "SELECT timestamp, symbol, action, price, amount_usd FROM trades "
+        "WHERE action IN ('BUY','SELL') ORDER BY timestamp ASC"
+    )
 
     if not rows:
         empty = html.Div(

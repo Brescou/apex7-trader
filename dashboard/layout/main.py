@@ -2,7 +2,7 @@
 
 from dash import dcc, html
 
-from agents.shared.nodes import get_simulation_mode
+from agents.shared.nodes import get_runtime_mode
 from dashboard.layout.analytics_tab import (
     _tab_agents,
     _tab_analytics,
@@ -40,7 +40,7 @@ def setup_layout() -> None:
         },
         children=[
             dcc.Store(id="ctrl-store", data={"paused": False}),
-            dcc.Store(id="mode-store", data={"sim": get_simulation_mode()}),
+            dcc.Store(id="mode-store", data={"mode": get_runtime_mode()}),
             dcc.Store(
                 id="agent-cards-state",
                 data={"tech": False, "analyst": False, "risk": False, "macro": False},
@@ -116,15 +116,16 @@ def setup_layout() -> None:
                             dcc.RadioItems(
                                 id="mode-radio",
                                 options=[
-                                    {"label": " SIM", "value": "sim"},
                                     {"label": " LIVE", "value": "live"},
+                                    {"label": " PAPER", "value": "paper"},
+                                    {"label": " SIM", "value": "sim"},
                                 ],
-                                value="sim" if get_simulation_mode() else "live",
+                                value=get_runtime_mode(),
                                 inline=True,
                                 className="mode-radio",
                                 style={
                                     "display": "flex",
-                                    "gap": "6px",
+                                    "gap": "8px",
                                     "alignItems": "center",
                                     "fontSize": "10px",
                                     "fontWeight": "700",

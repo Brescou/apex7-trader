@@ -23,18 +23,20 @@ def _classify_v2(msg: str, level: str) -> tuple[str, str]:
         return "AI", PURPLE
     if msg.startswith("Analysis:"):
         return "INTEL", PURPLE
-    if msg.startswith("[SIM][TECH]") or msg.startswith("technician:"):
+    if msg.startswith(("[SIM][TECH]", "[PAPER][TECH]")) or msg.startswith("technician:"):
         return "TECH", BLUE
-    if msg.startswith("[SIM][ANLST]") or msg.startswith("analyst:"):
+    if msg.startswith(("[SIM][ANLST]", "[PAPER][ANLST]")) or msg.startswith("analyst:"):
         return "ANLST", "#06b6d4"
-    if msg.startswith("[SIM][RISK]") or msg.startswith("risk_manager:"):
+    if msg.startswith(("[SIM][RISK]", "[PAPER][RISK]")) or msg.startswith("risk_manager:"):
         return "RISK", RED
-    if msg.startswith("[SIM][MACRO]") or msg.startswith("macro_watcher:"):
+    if msg.startswith(("[SIM][MACRO]", "[PAPER][MACRO]")) or msg.startswith("macro_watcher:"):
         return "MACRO", YELLOW
     if msg.startswith("supervisor:"):
         return "SUPV", PURPLE
     if msg.startswith("arbitrate:"):
         return "ARBIT", GREEN
+    if msg.startswith("[PAPER]"):
+        return "PAPER", BLUE
     if msg.startswith("[SIM]"):
         return "SIM", ORANGE
     if msg.startswith("=== CYCLE"):

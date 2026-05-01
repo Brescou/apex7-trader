@@ -83,6 +83,9 @@ app.index_string = """<!DOCTYPE html>
     @keyframes sim-blink { 0%,100%{opacity:1;box-shadow:0 0 6px #f97316} 50%{opacity:.55;box-shadow:0 0 14px #f97316} }
     .badge-sim { animation:sim-blink 1.1s ease-in-out infinite; }
 
+    @keyframes paper-blink { 0%,100%{opacity:1;box-shadow:0 0 6px #3b82f6} 50%{opacity:.6;box-shadow:0 0 14px #3b82f6} }
+    .badge-paper { animation:paper-blink 1.4s ease-in-out infinite; }
+
     .mode-radio label { cursor:pointer; }
     .mode-radio input[type=radio] { display:none; }
 
@@ -129,18 +132,21 @@ app.index_string = """<!DOCTYPE html>
 @server.route("/health")
 def _health():
     """Health check endpoint for monitoring."""
+    from agents.shared.nodes import get_runtime_mode
     from dashboard.controller import _controller_lock, _ctrl, _state
 
     with _controller_lock:
         portfolio = _state.get("portfolio")
         cycle = _ctrl.get("cycle", 0)
         sim = _ctrl.get("sim_mode", False)
+        mode = _ctrl.get("mode") or get_runtime_mode()
         consecutive_holds = _state.get("consecutive_holds", 0)
     alive = not portfolio.is_dead if portfolio else False
     body = {
         "status": "ok" if alive else "dead",
         "agent_alive": alive,
         "cycle": cycle,
+        "mode": mode,
         "simulation": sim,
         "consecutive_holds": consecutive_holds,
     }
