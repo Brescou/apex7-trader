@@ -148,9 +148,71 @@ Risk veto: `risk_score > 8` → BUY penalized ×0.15.
 Macro filter: `regime == "risk-off"` → BUY dampened ×0.5.
 
 **Dynamic weights** (`_compute_dynamic_weights` in `agents/multi.py`):
-- Blends static weights (70%) with accuracy-based weights (30%) derived from the last 50 scored `agent_memory` votes per agent
-- Result is cached for 10 minutes; recomputed lazily on the next `arbitrate_node` call after expiry
-- Falls back to static weights if `agent_memory` has insufficient data
+- Blends static weights (70%) with accuracy-based weights (30%) derived from the last 50 evaluated `agent_memory` votes per agent (`was_correct IS NOT NULL`).
+- Result is cached for 10 minutes (`_WEIGHTS_CACHE_TTL_SEC`); recomputed lazily on the next `arbitrate_node` call after expiry.
+- Returns the static `WEIGHTS` dict verbatim when **no** agent has evaluated history yet, or per-agent when an agent has fewer than `_MIN_EVALUATED_VOTES` (5) evaluated votes.
+- Thread-safe via `_weights_lock` (threading.Lock) to prevent thundering-herd recomputation.
+
+## Partial exits — `sell_pct` from sizing
+
+`arbitrate_node` derives the SELL exit percentage from the risk manager's
+`sizing_recommendation`, mapped via `SIZING_TO_SELL_PCT`:
+
+| `sizing_recommendation` | `sell_pct` |
+|-------------------------|-----------:|
+| `FULL` | 100 |
+| `HALF` | 50 |
+| `QUARTER` | 25 |
+| `SKIP` | 0 |
+
+The technician may also propose its own `sell_pct`; the final value is
+`min(risk_pct, tech_pct)`. A `sell_pct` of 0 fails `risk_check_node`
+(`0 < sell_pct <= 100`) so the trade is skipped instead of executed.
+
+## Deferred `was_correct` evaluation
+
+`agent_memory.was_correct` is no longer set by `arbitrate_node` (which was
+tautological — it just measured consensus). The new pipeline:
+
+1. `save_memory_node` inserts a `pending_evaluations` row alongside the trade
+   (`evaluated=0`, `eval_after_date = entry_date + EVAL_HORIZON_CALENDAR_DAYS`,
+   default 7 calendar days ≈ 5 trading days).
+2. The postmortem thread calls `evaluate_pending_trades(now)` every 60 s
+   (skipped in SIM, runs in LIVE and PAPER).
+3. For each due row, `_fast_last_price(symbol)` queries `yfinance.Ticker.fast_info`.
+   The verdict for every `agent_memory` row sharing that `trace_id`:
+   - **BUY**: `was_correct=1` if price moved up by more than `EVAL_SIGNIFICANCE_PCT`
+     (1 %), `0` if it moved down by more than 1 %, `NULL` otherwise (inconclusive).
+   - **SELL**: symmetric.
+4. Pending rows are flagged `evaluated=1` even when inconclusive (anti-retry
+   loop). Only `_fast_last_price → None` keeps a row `evaluated=0` for a
+   later retry.
+
+## Runtime modes (LIVE / PAPER / SIM)
+
+Three mutually-exclusive modes — the active one is exposed as `_ctrl["mode"]`
+and on the `/health` endpoint:
+
+| Mode | Prices | Decisions | DB | Cycle | LLM cost |
+|------|--------|-----------|----|-------|----------|
+| `LIVE` | yfinance real-time | LLM (Sonnet + Haiku + web_search) | `trades.db` | `AGENT_INTERVAL` (30 s) | $$$ |
+| `PAPER` | yfinance real-time | Rule-based (`sim_*` nodes) — zero LLM | `trades_paper.db` | `AGENT_INTERVAL` (30 s) | 0 |
+| `SIM` | Random walk | Rule-based (`sim_*` nodes) | `trades_sim.db` | 3 s (fast) | 0 |
+
+Wiring (no separate graph builder — the same compiled graph is used in all
+three modes; the routing happens inside each node):
+
+- `_no_llm_mode()` returns `True` for SIM **or** PAPER. Every Anthropic call
+  site (`research_node`, `load_memory_node`, `save_memory_node`, the four
+  specialist nodes, `supervisor_node`, `arbitrate_node`, postmortem summary)
+  is gated by this helper and falls back to its `sim_*` rule-based variant.
+- `fetch_data_node` is the only node that distinguishes PAPER from SIM:
+  it uses the live yfinance branch in PAPER (and LIVE), and `sim_fetch_data`
+  in SIM only.
+- Toggles `set_simulation_mode()` / `set_paper_mode()` enforce mutual
+  exclusion and persist `SIMULATION_MODE` / `PAPER_MODE` to `.env`.
+- The Dash topbar exposes a 3-option radio (`mode-radio`) that calls
+  `_toggle_mode` and updates `mode-store`.
 
 ## StateGraph — Nodes & Edges
 
@@ -194,7 +256,8 @@ CREATE TABLE trades (
     lesson                TEXT,
     trace_id              TEXT,
     prompt_version        TEXT,
-    source                TEXT DEFAULT 'live'
+    source                TEXT DEFAULT 'live',  -- 'live' | 'paper' | 'simulation'
+    sell_pct              REAL                  -- NULL for BUY, 0–100 for SELL
 );
 
 CREATE TABLE patterns (
@@ -210,10 +273,24 @@ CREATE TABLE agent_memory (
     symbol       TEXT,
     vote         TEXT,
     confidence   REAL,
-    was_correct  INTEGER,
+    was_correct  INTEGER,        -- NULL until evaluate_pending_trades resolves it
     lesson       TEXT,
     source       TEXT DEFAULT 'simulation'
 );
+
+CREATE TABLE pending_evaluations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id        INTEGER NOT NULL,
+    trace_id        TEXT,
+    symbol          TEXT NOT NULL,
+    action          TEXT NOT NULL,
+    entry_price     REAL NOT NULL,
+    entry_date      TEXT NOT NULL,
+    eval_after_date TEXT NOT NULL,
+    evaluated       INTEGER DEFAULT 0
+);
+CREATE INDEX idx_pending_eval_due
+    ON pending_evaluations (evaluated, eval_after_date);
 
 CREATE TABLE postmortem (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -229,7 +306,7 @@ CREATE TABLE postmortem (
 );
 ```
 
-`source` values: `'live'` or `'simulation'`.
+`source` values: `'live'`, `'paper'`, or `'simulation'`.
 `HOLD` actions are not persisted to `trades` (save_memory_node skips HOLDs).
 `agent_memory.was_correct` is set by `arbitrate_node` after the final decision is known (NULL until then).
 `postmortem` rows are written once per SELL trade by `run_daily_postmortem()` at `POSTMORTEM_HOUR`.
@@ -242,7 +319,7 @@ CREATE TABLE postmortem (
 - Scans `portfolio.trade_history` for SELL trades since midnight
 - For each SELL, finds the matching BUY, computes P&L % and holding duration in hours
 - Queries `agent_memory` for agents that voted SELL correctly on that symbol
-- Generates a 2-sentence summary via Haiku (simulation: rule-based string)
+- Generates a 2-sentence summary via Haiku in LIVE; rule-based string in SIM/PAPER
 - Inserts one row into `postmortem` per trade
 
 ## Dash Dashboard
@@ -399,7 +476,7 @@ Wired into `Portfolio.fetch_prices()` when `USE_LIVEFEED=True`. If `LiveFeed.fet
 
 - Dash callback thread: reads `_state["portfolio"]` — no mutations
 - Agent loop thread (`apex7-agent`, daemon): mutates Portfolio via `buy()`, `sell()`, `record_value()` — launched by `start_controller()` in `dashboard/controller.py`
-- Postmortem thread (`apex7-postmortem`, daemon): calls `run_daily_postmortem()` once per day — reads `portfolio.trade_history`, writes to SQLite
+- Postmortem thread (`apex7-postmortem`, daemon): runs every 60 s; calls `evaluate_pending_trades(now)` to resolve due `was_correct` rows in LIVE/PAPER (skipped in SIM), and `run_daily_postmortem()` once per day at `POSTMORTEM_HOUR`. Reads `portfolio.trade_history`, writes to SQLite — no Portfolio mutations.
 - All Portfolio mutations use `with self._lock` (RLock)
 - SQLite writes go through `_db_write()` in `agents/shared/nodes.py` — handles WAL mode, retries (3 attempts with backoff), and structured logging
 - Sim and live use separate databases (`trades_sim.db` / `trades.db`) via `_get_db_path()`
@@ -448,7 +525,10 @@ Pre-commit hooks (`.pre-commit-config.yaml`): ruff (auto-fix) + black + trailing
 | Constant | Source | Default | Effect |
 |----------|--------|---------|--------|
 | `ANTHROPIC_API_KEY` | env | — | Required for live mode |
-| `SIMULATION_MODE` | env | `false` | Skip all network/LLM calls |
+| `SIMULATION_MODE` | env | `false` | Random-walk prices + rule-based decisions + `trades_sim.db` |
+| `PAPER_MODE` | env | `false` | Real prices + rule-based decisions + `trades_paper.db` (mutually exclusive with SIMULATION_MODE) |
+| `EVAL_HORIZON_DAYS` | hardcoded | `5` | Trading-day target for ``was_correct`` evaluation |
+| `EVAL_HORIZON_CALENDAR_DAYS` | hardcoded | `7` | Calendar-day approximation for `pending_evaluations.eval_after_date` |
 | `SIM_VOLATILITY` | env | `0.02` | Price random-walk std dev per step |
 | `SIM_DRIFT` | env | `0.0001` | Price drift per step |
 | `X_BEARER_TOKEN` | env | — | Twitter/X sentiment (optional) |

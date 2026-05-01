@@ -1,21 +1,68 @@
 # Changelog
 
-## [Unreleased]
+## [Unreleased] — Feature Sprint v1
 
-### Removed
+### Feature 1 — Decommission of the simple graph
+
+#### Removed
 - `agents/simple.py` — single-LLM graph decommissioned; multi-agent graph is now the only supported pipeline.
 - `AGENT_GRAPH` env var, `graph_id` plumbing, `graph-store` Dash store, `graph-selector` topbar dropdown, `_switch_graph` callback.
 - `analyze_node`, `sim_analyze`, `_route_analyze` and `ANALYZE_SYSTEM_PROMPT` (used only by the simple graph).
 - `core/registry.py`'s `GRAPHS` dict and dual-graph `get_graph(graph_id, p)` API.
 - Tests `test_simple_graph_build`, `test_simple_graph_buy_flow`, `test_simple_graph_hold_flow`.
 
-### Changed
+#### Changed
 - `core/registry.py`: now exposes a single `get_graph(portfolio)` and parameterless `get_graph_info()` returning `GRAPH_INFO`.
 - `dashboard/controller.py`: `_agent_loop(p)` and `_launch(p)` no longer take `graph_id`; `_state` no longer stores `graph_id`.
 - `dashboard/callbacks/live.py`: `_refresh` returns 24 outputs (was 26 — `sec-graph` panel and `graph-store` State removed); `is_multi` flag removed (always true).
 - `dashboard/layout/main.py` / `live_tab.py`: removed `graph-store`, `graph-selector` dropdown, and `sec-graph` div.
 - `langgraph.json`: single `apex7` entry pointing to `agents/multi.py:agent_multi_graph`.
-- `tests/test_smoke.py::test_simulation_cycle` migrated to `build_multi_graph` with full `MultiAgentState` init.
+
+### Feature 2 — Partial exits (`sell_pct` from sizing)
+
+#### Added
+- `agents/multi.py`: `SIZING_TO_SELL_PCT = {FULL: 100, HALF: 50, QUARTER: 25, SKIP: 0}`. `arbitrate_node` derives `final_sell_pct = min(risk_pct, tech_pct)` for SELL decisions.
+- New column `trades.sell_pct REAL` (NULL for BUY, 0–100 for SELL); soft-migrated via `ALTER TABLE` on existing DBs.
+- `tests/test_partial_exits.py` (6 tests): FULL/HALF/QUARTER/SKIP mapping, `min(risk, tech)`, SKIP blocked by `risk_check_node`, DB persistence.
+
+#### Changed
+- `Portfolio.sell()` already validated `0 < sell_pct <= 100` — partial exits go through unchanged.
+- `save_memory_node` / `load_memory_node`: INSERT and SELECT extended to carry `sell_pct`.
+
+### Feature 3 — Deferred `was_correct` (market outcome)
+
+#### Added
+- `pending_evaluations` SQLite table with `idx_pending_eval_due` index; populated by `save_memory_node` for every BUY/SELL trade.
+- `evaluate_pending_trades(now)` in `agents/shared/nodes.py`: pulls due rows, fetches the spot price via `_fast_last_price` (yfinance `fast_info`), updates `agent_memory.was_correct` for matching `trace_id`. 1 % significance threshold (`EVAL_SIGNIFICANCE_PCT`).
+- `_db_write_returning_id()` helper to capture `cursor.lastrowid` after INSERT.
+- `EVAL_HORIZON_DAYS` (5) / `EVAL_HORIZON_CALENDAR_DAYS` (7) in `config.py`.
+- `dashboard/controller.py` postmortem thread now calls `evaluate_pending_trades(now)` every 60 s (skipped in SIM).
+- `_compute_dynamic_weights`: graceful warm-up — pure static `WEIGHTS` while no agent has ≥ `_MIN_EVALUATED_VOTES` (5) evaluated votes; thread-safe via `_weights_lock`.
+- Dashboard: AGENTS tab shows EVAL `{N}/{M}` and STATUS `⏳ Calibrating` / `✓ Market-validated`; LIVE tab Track Records show `⏳ {N pending}` / `✓` per agent.
+- Tests: `test_pending_evaluations.py`, `test_evaluate_pending.py`, `test_dynamic_weights.py`, `test_was_correct.py` (26 tests total).
+
+#### Removed
+- The tautological `UPDATE agent_memory SET was_correct=…` block in `arbitrate_node`. `was_correct` now comes exclusively from market outcomes.
+
+### Feature 4 — Paper trading mode
+
+#### Added
+- `_paper_mode` runtime flag, `set_paper_mode()` / `get_paper_mode()` / `get_runtime_mode()` helpers, `_no_llm_mode()` predicate (`True` for sim **or** paper).
+- `_get_db_path()` routes to **`trades_paper.db`** when paper is active (priority `paper > sim > live`).
+- 3-mode topbar radio (`LIVE / PAPER / SIM`) replaces the binary toggle. `mode-store.data = {"mode": ...}`.
+- `_mode_palette()` helper + `.badge-paper` CSS animation (blue blink).
+- `/health` JSON now includes `"mode": "live"|"paper"|"sim"`.
+- `dashboard/layout/classify.py`: new `PAPER` log badge + `[PAPER][TECH/ANLST/RISK/MACRO]` specialist tags.
+- Tests: `test_paper_mode.py`, `test_paper_trading.py`, `test_mode_toggle_ui.py` (22 tests).
+
+#### Changed
+- `EVERY` LLM-bound branch in `agents/multi.py` and `agents/shared/nodes.py` now gated by `_no_llm_mode()` so paper reuses the rule-based `sim_*` decision nodes — only `fetch_data_node` keeps the LIVE branch in PAPER.
+- `dashboard/callbacks/agents.py` and `heatmap.py`: replaced raw `sqlite3.connect(DB_PATH)` with `_db_read()` / `_load_*` helpers so all tabs follow the active mode's DB.
+- `set_simulation_mode()` and `set_paper_mode()` now mutually exclusive — switching one clears the other and persists both flags to `.env`.
+- `trades_paper.db` added to `.gitignore` and `.dockerignore`.
+
+### CI / coverage
+- Test count: **131 passing** (was 80 at sprint start).
 
 ## [2026-04-12] — Remediation Sprint (Full)
 
