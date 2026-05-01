@@ -86,7 +86,8 @@ CREATE TABLE IF NOT EXISTS trades (
     lesson                TEXT,
     trace_id              TEXT,
     source                TEXT DEFAULT 'live',
-    prompt_version        TEXT
+    prompt_version        TEXT,
+    sell_pct              REAL
 );
 CREATE TABLE IF NOT EXISTS patterns (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,6 +154,11 @@ def _init_db() -> None:
                 pass
             try:
                 con.execute("ALTER TABLE trades ADD COLUMN prompt_version TEXT")
+                con.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                con.execute("ALTER TABLE trades ADD COLUMN sell_pct REAL")
                 con.commit()
             except sqlite3.OperationalError:
                 pass
@@ -760,7 +766,8 @@ def load_memory_node(state: AgentState) -> dict:
 
     rows = _db_read(
         "SELECT timestamp,symbol,action,price,amount_usd,shares,"
-        "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source,prompt_version "
+        "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source,prompt_version,"
+        "sell_pct "
         "FROM trades ORDER BY timestamp DESC LIMIT 20"
     )
 
@@ -779,6 +786,7 @@ def load_memory_node(state: AgentState) -> dict:
         "trace_id",
         "source",
         "prompt_version",
+        "sell_pct",
     )
     past_trades = [dict(zip(cols, row)) for row in rows]
 
@@ -1090,8 +1098,8 @@ def make_save_memory_node(portfolio: Portfolio):
                     "INSERT INTO trades "
                     "(timestamp,symbol,action,price,amount_usd,shares,"
                     "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source,"
-                    "prompt_version) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "prompt_version,sell_pct) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         _ts(),
                         symbol,
@@ -1107,6 +1115,7 @@ def make_save_memory_node(portfolio: Portfolio):
                         _get_trace_id(),
                         source,
                         PROMPT_VERSION,
+                        float(decision.get("sell_pct", 100.0)) if action == "SELL" else None,
                     ),
                 ),
                 (

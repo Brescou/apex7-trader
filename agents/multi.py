@@ -68,6 +68,15 @@ WEIGHTS = {
     "macro_watcher": 0.15,
 }
 
+# Map risk_manager sizing recommendation → SELL exit percentage.
+# Used by ``arbitrate_node`` to derive a partial exit instead of always closing 100%.
+SIZING_TO_SELL_PCT: dict[str, float] = {
+    "FULL": 100.0,
+    "HALF": 50.0,
+    "QUARTER": 25.0,
+    "SKIP": 0.0,
+}
+
 _cached_weights: dict = {}
 _weights_computed_at: float = 0.0
 
@@ -900,17 +909,36 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         "_votes": votes,
     }
 
+    if final_action == "SELL":
+        sizing = str(risk_v.get("sizing_recommendation", "FULL")).upper()
+        risk_sell_pct = SIZING_TO_SELL_PCT.get(sizing, 100.0)
+        try:
+            tech_sell_pct = float(tech_v.get("sell_pct", 100))
+        except (TypeError, ValueError):
+            tech_sell_pct = 100.0
+        tech_sell_pct = max(0.0, min(100.0, tech_sell_pct))
+        final_sell_pct = min(risk_sell_pct, tech_sell_pct)
+        logs.append(
+            _entry(
+                f"arbitrate: SELL sizing={sizing} → risk_pct={risk_sell_pct:.0f} "
+                f"tech_pct={tech_sell_pct:.0f} → final={final_sell_pct:.0f}"
+            )
+        )
+    else:
+        final_sell_pct = 100.0
+
     decision = {
         "action": final_action,
         "symbol": symbol,
         "allocation_pct": min(float(max_alloc), MAX_ALLOC_PCT),
-        "sell_pct": 100,
+        "sell_pct": final_sell_pct,
         "confidence": composite_conf,
         "reasoning": arbitration["reasoning"],
         "thoughts": thoughts,
         "emotion": emotion,
         "market_intel": market_intel,
     }
+    arbitration["sell_pct"] = final_sell_pct
 
     skip_res = state.get("skip_research", False) or composite_conf >= 0.72
 
