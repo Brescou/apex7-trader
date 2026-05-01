@@ -1,4 +1,8 @@
-"""agents.shared.state — TypedDict definitions shared across simple and multi graphs."""
+"""agents.shared.state — TypedDict definitions for the multi-agent graph.
+
+``AgentState`` defines the core fields shared by all nodes; ``MultiAgentState``
+extends it with multi-agent-specific fields (votes, supervisor brief, arbitration).
+"""
 
 import operator
 from typing import Annotated, List, Optional, TypedDict
