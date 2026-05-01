@@ -11,7 +11,7 @@ import threading
 import time
 import uuid as _uuid_mod
 from contextlib import closing
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,7 @@ except ImportError:
 
 from config import (
     ANTHROPIC_API_KEY,
+    EVAL_HORIZON_CALENDAR_DAYS,
     INITIAL_BALANCE,
     MAX_ALLOC_PCT,
     MAX_POSITIONS,
@@ -117,6 +118,19 @@ CREATE TABLE IF NOT EXISTS postmortem (
     summary         TEXT,
     source          TEXT DEFAULT 'simulation'
 );
+CREATE TABLE IF NOT EXISTS pending_evaluations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id        INTEGER NOT NULL,
+    trace_id        TEXT,
+    symbol          TEXT NOT NULL,
+    action          TEXT NOT NULL,
+    entry_price     REAL NOT NULL,
+    entry_date      TEXT NOT NULL,
+    eval_after_date TEXT NOT NULL,
+    evaluated       INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_pending_eval_due
+    ON pending_evaluations (evaluated, eval_after_date);
 """
 
 
@@ -198,6 +212,27 @@ def _db_write(query: str, params: tuple, *, retries: int = 3) -> bool:
             logger.error("SQLite unexpected error: %s", e)
             return False
     return False
+
+
+def _db_write_returning_id(query: str, params: tuple, *, retries: int = 3) -> int | None:
+    """Run a single INSERT and return ``cursor.lastrowid`` (None on failure)."""
+    _ensure_db()
+    for attempt in range(retries):
+        try:
+            with closing(sqlite3.connect(_get_db_path(), timeout=5)) as con:
+                cur = con.execute(query, params)
+                con.commit()
+                return cur.lastrowid
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e) and attempt < retries - 1:
+                time.sleep(0.1 * (attempt + 1))
+                continue
+            logger.error("SQLite write failed: %s (query=%s)", e, query[:80])
+            return None
+        except Exception as e:
+            logger.error("SQLite unexpected error: %s", e)
+            return None
+    return None
 
 
 def _db_write_multi(queries: list[tuple[str, tuple]], *, retries: int = 3) -> bool:
@@ -1092,40 +1127,52 @@ def make_save_memory_node(portfolio: Portfolio):
                 haiku, HAIKU_ID, [{"role": "user", "content": lesson_prompt}], max_tokens=80
             ).strip()
 
-        success = _db_write_multi(
-            [
-                (
-                    "INSERT INTO trades "
-                    "(timestamp,symbol,action,price,amount_usd,shares,"
-                    "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source,"
-                    "prompt_version,sell_pct) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        _ts(),
-                        symbol,
-                        action,
-                        price,
-                        amount,
-                        shares,
-                        decision.get("reasoning", ""),
-                        float(decision.get("confidence", 0.0)),
-                        state["emotion"],
-                        pv_after,
-                        lesson,
-                        _get_trace_id(),
-                        source,
-                        PROMPT_VERSION,
-                        float(decision.get("sell_pct", 100.0)) if action == "SELL" else None,
-                    ),
-                ),
-                (
-                    "INSERT INTO patterns (timestamp, pattern) VALUES (?,?)",
-                    (_ts(), lesson),
-                ),
-            ]
+        ts = _ts()
+        trace_id = _get_trace_id()
+        trade_id = _db_write_returning_id(
+            "INSERT INTO trades "
+            "(timestamp,symbol,action,price,amount_usd,shares,"
+            "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source,"
+            "prompt_version,sell_pct) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                ts,
+                symbol,
+                action,
+                price,
+                amount,
+                shares,
+                decision.get("reasoning", ""),
+                float(decision.get("confidence", 0.0)),
+                state["emotion"],
+                pv_after,
+                lesson,
+                trace_id,
+                source,
+                PROMPT_VERSION,
+                float(decision.get("sell_pct", 100.0)) if action == "SELL" else None,
+            ),
         )
-        if not success:
-            logs.append(_entry("save_memory: DB write failed", "error"))
+        if trade_id is None:
+            logs.append(_entry("save_memory: trades INSERT failed", "error"))
+        else:
+            entry_dt = datetime.fromisoformat(ts) if "T" in ts else datetime.now()
+            eval_after = (entry_dt + timedelta(days=EVAL_HORIZON_CALENDAR_DAYS)).isoformat()
+            ok_pending = _db_write(
+                "INSERT INTO pending_evaluations "
+                "(trade_id,trace_id,symbol,action,entry_price,entry_date,eval_after_date,evaluated) "
+                "VALUES (?,?,?,?,?,?,?,0)",
+                (trade_id, trace_id, symbol, action, price, ts, eval_after),
+            )
+            if not ok_pending:
+                logs.append(_entry("save_memory: pending_evaluations INSERT failed", "error"))
+
+        ok_pattern = _db_write(
+            "INSERT INTO patterns (timestamp, pattern) VALUES (?,?)",
+            (ts, lesson),
+        )
+        if not ok_pattern:
+            logs.append(_entry("save_memory: patterns INSERT failed", "error"))
 
         logs.append(_entry(f"save_memory: lesson → {lesson[:90]}"))
         return {

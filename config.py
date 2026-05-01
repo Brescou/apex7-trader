@@ -28,6 +28,12 @@ STOP_LOSS_PCT = 0.05
 
 POSTMORTEM_HOUR = 22
 
+# Number of trading days the market needs to move before evaluating an agent
+# vote. Approximated as ``EVAL_HORIZON_CALENDAR_DAYS`` calendar days when
+# scheduling ``pending_evaluations.eval_after_date``.
+EVAL_HORIZON_DAYS = 5
+EVAL_HORIZON_CALENDAR_DAYS = 7
+
 MACRO_SYMBOLS = {"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}
 MARKET_DATA_CACHE_SEC = 60
 WATCHLIST_CACHE_SEC = 10

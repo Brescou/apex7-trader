@@ -942,16 +942,10 @@ def arbitrate_node(state: MultiAgentState) -> dict:
 
     skip_res = state.get("skip_research", False) or composite_conf >= 0.72
 
-    # Update was_correct for the agent_memory rows just inserted this cycle
-    for _agent_name in ["technician", "analyst", "risk_manager", "macro_watcher"]:
-        _av = vote_map.get(_agent_name, {})
-        _correct = 1 if _av.get("action", "HOLD") == final_action else 0
-        _db_write(
-            "UPDATE agent_memory SET was_correct=? WHERE id=("
-            "SELECT id FROM agent_memory WHERE agent_name=? AND was_correct IS NULL "
-            "ORDER BY timestamp DESC LIMIT 1)",
-            (_correct, _agent_name),
-        )
+    # ``was_correct`` is no longer set here — it was tautological (consensus
+    # check, not market performance). Evaluation now happens asynchronously
+    # against the actual price move (see ``pending_evaluations`` table and
+    # the evaluation job).
 
     logs.append(
         _entry(
