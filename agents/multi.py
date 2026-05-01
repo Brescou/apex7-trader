@@ -19,6 +19,8 @@ from agents.shared.nodes import (
     _live_price_history,
     _llm,
     _parse_json_obj,
+    _no_llm_mode,
+    _paper_mode,
     _portfolio_value,
     _route_risk,
     _sim_mode,
@@ -446,7 +448,7 @@ def sim_macro_watcher(state: MultiAgentState) -> dict:
 def supervisor_node(state: MultiAgentState) -> dict:
     logs = [_entry("supervisor: preparing context brief for team")]
 
-    if _sim_mode["enabled"]:
+    if _no_llm_mode():
         pv = _portfolio_value(state)
         mode = (
             "PANIC"
@@ -499,7 +501,7 @@ def _route_to_agents(state: MultiAgentState) -> list:
 
 
 def technician_node(state: MultiAgentState) -> dict:
-    if _sim_mode["enabled"]:
+    if _no_llm_mode():
         return sim_technician(state)
 
     prices = state["prices"]
@@ -575,7 +577,7 @@ def technician_node(state: MultiAgentState) -> dict:
 
 
 def analyst_node(state: MultiAgentState) -> dict:
-    if _sim_mode["enabled"]:
+    if _no_llm_mode():
         return sim_analyst(state)
 
     pos = state["positions"]
@@ -641,7 +643,7 @@ def analyst_node(state: MultiAgentState) -> dict:
 
 
 def risk_manager_node(state: MultiAgentState) -> dict:
-    if _sim_mode["enabled"]:
+    if _no_llm_mode():
         return sim_risk_manager(state)
 
     pos = state["positions"]
@@ -724,7 +726,7 @@ def risk_manager_node(state: MultiAgentState) -> dict:
 
 
 def macro_watcher_node(state: MultiAgentState) -> dict:
-    if _sim_mode["enabled"]:
+    if _no_llm_mode():
         return sim_macro_watcher(state)
 
     sentiment = state.get("sentiment", {})
@@ -866,9 +868,13 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         default=str,
     )
 
-    if _sim_mode["enabled"]:
+    if _no_llm_mode():
+        tag = "PAPER" if _paper_mode["enabled"] else "SIM"
         emotion = "FOCUSED" if composite_conf > 0.6 else "CALM"
-        thoughts = f"[SIM] Composite: {final_action} {symbol}. Score={composite_conf:.2f}. Consensus={consensus}."
+        thoughts = (
+            f"[{tag}] Composite: {final_action} {symbol}. "
+            f"Score={composite_conf:.2f}. Consensus={consensus}."
+        )
         market_intel = macro_v.get("reasoning", "")
         reasoning = (
             f"BUY={action_scores['BUY']:.2f} | SELL={action_scores['SELL']:.2f} | "
@@ -923,7 +929,7 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         "confidence": composite_conf,
         "reasoning": (
             reasoning
-            if not _sim_mode["enabled"]
+            if not _no_llm_mode()
             else (
                 f"BUY={action_scores['BUY']:.2f} SELL={action_scores['SELL']:.2f} "
                 f"HOLD={action_scores['HOLD']:.2f} | Risk {risk_score:.0f}/10 | {regime}"
@@ -1007,7 +1013,12 @@ def run_daily_postmortem(portfolio: Portfolio) -> None:
     Uses ``_get_db_path()`` so sim-mode writes go to ``trades_sim.db``.
     """
     midnight = datetime.combine(date.today(), datetime.min.time()).isoformat()
-    source = "simulation" if _sim_mode["enabled"] else "live"
+    if _paper_mode["enabled"]:
+        source = "paper"
+    elif _sim_mode["enabled"]:
+        source = "simulation"
+    else:
+        source = "live"
 
     sells = portfolio.closed_trades_since(midnight)
     if not sells:
@@ -1042,8 +1053,9 @@ def run_daily_postmortem(portfolio: Portfolio) -> None:
         )
         agents_correct = json.dumps([r[0] for r in rows])
 
-        if _sim_mode["enabled"]:
-            summary = f"[SIM] P&L {pnl_pct:+.2f}% sur {holding_hours:.1f}h — signal RSI."
+        if _no_llm_mode():
+            tag = "PAPER" if _paper_mode["enabled"] else "SIM"
+            summary = f"[{tag}] P&L {pnl_pct:+.2f}% sur {holding_hours:.1f}h — signal RSI."
         else:
             prompt = (
                 f"Postmortem de trade — {symbol}\n"

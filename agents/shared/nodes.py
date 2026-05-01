@@ -55,8 +55,19 @@ _API_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 sonnet = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=_API_TIMEOUT)
 haiku = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=_API_TIMEOUT)
 
-# Runtime simulation toggle (survives hot-switch from Dash UI)
+# Runtime mode toggles (survive hot-switch from the Dash UI).
+# Three mutually-exclusive operating modes:
+#   * LIVE  : real prices + LLM decisions + ``trades.db``
+#   * PAPER : real prices + rule-based decisions (no LLM) + ``trades_paper.db``
+#   * SIM   : random-walk prices + rule-based decisions + ``trades_sim.db``
 _sim_mode: dict = {"enabled": SIMULATION_MODE}
+_paper_mode: dict = {"enabled": False}
+
+
+def _no_llm_mode() -> bool:
+    """Decisions are rule-based — no Anthropic call (sim or paper)."""
+    return _sim_mode["enabled"] or _paper_mode["enabled"]
+
 
 # ── SQLite ───────────────────────────────────────────────────────────────────
 
@@ -65,7 +76,9 @@ DB_PATH = _DB_ROOT / "trades.db"  # kept for backward compat
 
 
 def _get_db_path() -> Path:
-    """Return the DB path based on current simulation mode."""
+    """Return the DB path based on the current mode (paper > sim > live)."""
+    if _paper_mode["enabled"]:
+        return _DB_ROOT / "trades_paper.db"
     if _sim_mode["enabled"]:
         return _DB_ROOT / "trades_sim.db"
     return _DB_ROOT / "trades.db"
@@ -139,18 +152,18 @@ _db_initialized = False
 
 
 def _init_db() -> None:
-    """Create tables and set WAL mode for live/sim DBs, or a single test path."""
+    """Create tables and set WAL mode for project DBs, or a single test path."""
     primary = Path(_get_db_path())
     project_live = _DB_ROOT / "trades.db"
     project_sim = _DB_ROOT / "trades_sim.db"
+    project_paper = _DB_ROOT / "trades_paper.db"
+    project_dbs = [project_live, project_sim, project_paper]
     try:
         resolved_primary = primary.resolve()
-        project_paths = {project_live.resolve(), project_sim.resolve()}
-        db_files = [project_live, project_sim] if resolved_primary in project_paths else [primary]
+        project_paths = {p.resolve() for p in project_dbs}
+        db_files = project_dbs if resolved_primary in project_paths else [primary]
     except OSError:
-        db_files = (
-            [project_live, project_sim] if primary in {project_live, project_sim} else [primary]
-        )
+        db_files = project_dbs if primary in set(project_dbs) else [primary]
     for db_file in db_files:
         with closing(sqlite3.connect(db_file)) as con:
             con.execute("PRAGMA journal_mode=WAL")
@@ -783,12 +796,38 @@ def _write_env_var(key: str, value: str) -> None:
 
 
 def set_simulation_mode(enabled: bool) -> None:
+    """Enable simulation mode. Disables paper mode (mutually exclusive)."""
     _sim_mode["enabled"] = enabled
+    if enabled:
+        _paper_mode["enabled"] = False
+        _write_env_var("PAPER_MODE", "false")
     _write_env_var("SIMULATION_MODE", "true" if enabled else "false")
 
 
 def get_simulation_mode() -> bool:
     return _sim_mode["enabled"]
+
+
+def set_paper_mode(enabled: bool) -> None:
+    """Enable paper trading. Disables simulation mode (mutually exclusive)."""
+    _paper_mode["enabled"] = enabled
+    if enabled:
+        _sim_mode["enabled"] = False
+        _write_env_var("SIMULATION_MODE", "false")
+    _write_env_var("PAPER_MODE", "true" if enabled else "false")
+
+
+def get_paper_mode() -> bool:
+    return _paper_mode["enabled"]
+
+
+def get_runtime_mode() -> str:
+    """Return the active mode label: ``'paper'``, ``'sim'``, or ``'live'``."""
+    if _paper_mode["enabled"]:
+        return "paper"
+    if _sim_mode["enabled"]:
+        return "sim"
+    return "live"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -829,10 +868,11 @@ def load_memory_node(state: AgentState) -> dict:
         logs.append(_entry("load_memory: no history yet"))
         return {"past_trades": [], "known_patterns": [], "log": logs}
 
-    # In simulation mode, skip the LLM pattern extraction
-    if _sim_mode["enabled"]:
+    # Sim and paper skip the LLM pattern extraction (no Anthropic call).
+    if _no_llm_mode():
         patterns = [t["lesson"] for t in past_trades if t.get("lesson")][:5]
-        logs.append(_entry(f"[SIM] load_memory: {len(past_trades)} trades (no LLM analysis)"))
+        tag = "PAPER" if _paper_mode["enabled"] else "SIM"
+        logs.append(_entry(f"[{tag}] load_memory: {len(past_trades)} trades (no LLM analysis)"))
         return {"past_trades": past_trades, "known_patterns": patterns, "log": logs}
 
     prompt = (
@@ -902,7 +942,7 @@ def make_fetch_data_node(portfolio: Portfolio):
 
 
 def research_node(state: AgentState) -> dict:
-    if _sim_mode["enabled"]:
+    if _no_llm_mode():
         return sim_research(state)
 
     decision = state.get("decision") or {}
@@ -1111,10 +1151,13 @@ def make_save_memory_node(portfolio: Portfolio):
         shares = last_trade.get("shares", 0.0)
         amount = last_trade.get("amount", 0.0)
 
-        source = "simulation" if _sim_mode["enabled"] else "live"
+        source = get_runtime_mode()  # 'live' | 'paper' | 'sim' → 'simulation'
+        if source == "sim":
+            source = "simulation"
 
-        if _sim_mode["enabled"]:
-            lesson = f"[SIM] {action} {symbol} @ ${price:.2f} — RSI-based signal"
+        if _no_llm_mode():
+            tag = "PAPER" if _paper_mode["enabled"] else "SIM"
+            lesson = f"[{tag}] {action} {symbol} @ ${price:.2f} — RSI-based signal"
         else:
             lesson_prompt = (
                 f"En une phrase concise (max 15 mots), quelle leçon retenir de ce trade ?\n"

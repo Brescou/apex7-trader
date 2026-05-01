@@ -9,6 +9,7 @@ from agents.shared.nodes import (
     _new_trace_id,
     evaluate_pending_trades,
     get_consecutive_hold_cycles,
+    get_runtime_mode,
     get_simulation_mode,
 )
 from agents.multi import run_daily_postmortem
@@ -59,6 +60,7 @@ def _agent_loop(p: Portfolio) -> None:
             _ctrl["step"] = False
             _ctrl["cycle"] = cycle
             _ctrl["sim_mode"] = get_simulation_mode()
+            _ctrl["mode"] = get_runtime_mode()
         trace_id = _new_trace_id()
         logger.info("[%s] === CYCLE %d START ===", trace_id, cycle)
         p.log(f"=== CYCLE {cycle} START ===")
@@ -118,6 +120,8 @@ def _agent_loop(p: Portfolio) -> None:
         if p.is_dead:
             p.log("AGENT HALTED — DEATH CONDITION MET", "critical")
             break
+        # Sim runs fast (random walk). Paper and live both pace at AGENT_INTERVAL
+        # so the paper feedback loop matches live.
         sleep_s = 3 if get_simulation_mode() else AGENT_INTERVAL
         p.log(f"=== CYCLE {cycle} DONE — sleeping {sleep_s}s ===")
         elapsed = 0.0
@@ -173,7 +177,8 @@ def _postmortem_loop(p: Portfolio) -> None:
 
         # Resolve any due pending trade evaluations every minute — independent
         # of the daily postmortem schedule. Skipped in simulation mode because
-        # ``evaluate_pending_trades`` calls real yfinance.
+        # ``evaluate_pending_trades`` calls real yfinance. Paper mode uses real
+        # quotes too, so it benefits from the same evaluation loop.
         if not get_simulation_mode():
             try:
                 done = evaluate_pending_trades(now)

@@ -37,6 +37,7 @@ htmlcov/
 # DB files
 trades.db
 trades_sim.db
+trades_paper.db
 
 # Runtime state files
 portfolio_state.json

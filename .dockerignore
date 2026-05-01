@@ -5,6 +5,7 @@ __pycache__
 .env
 trades.db
 trades_sim.db
+trades_paper.db
 portfolio_state.json
 .pytest_cache
 .ruff_cache
