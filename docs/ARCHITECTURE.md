@@ -13,8 +13,7 @@ apex7-trader/
 ├── README.md → docs/README.md
 ├── agents/
 │   ├── __init__.py
-│   ├── simple.py          ← simple graph (was agent.py)
-│   ├── multi.py           ← multi-agent graph (was agent_multi.py)
+│   ├── multi.py           ← unique multi-agent graph (4 specialists + arbitration)
 │   └── shared/
 │       ├── __init__.py
 │       ├── state.py       ← AgentState, MultiAgentState TypedDicts
@@ -26,7 +25,7 @@ apex7-trader/
 │   ├── data.py            ← Portfolio, LiveFeed
 │   ├── backtest.py        ← BacktestEngine, run_backtest
 │   ├── indicators.py      ← Shared RSI implementation
-│   └── registry.py        ← graph ID → builder map
+│   └── registry.py        ← graph builder + UI metadata (single graph)
 ├── dashboard/
 │   ├── __init__.py        ← create_app()
 │   ├── server.py          ← Dash() init + design tokens + /health endpoint
@@ -78,11 +77,10 @@ main.py
         └── dashboard.callbacks.* (all @app.callback)
               ├── core.data (Portfolio)
               ├── core.backtest (run_backtest)
-              ├── core.registry (build_graph)
+              ├── core.registry (get_graph)
               └── market_data (fetch_*)
 
 core.registry
-  ├── agents.simple (build_simple_graph)
   └── agents.multi (build_multi_graph)
         └── agents.shared.nodes, agents.shared.state
               └── core.data (Portfolio)
@@ -90,31 +88,7 @@ core.registry
 
 Import direction is one-way: `dashboard` → `core`/`agents`/`market_data`. Never import from `dashboard` inside `agents/` or `core/`.
 
-## Simple Graph
-
-```
-__start__
-    │
-load_memory   (Haiku — SQLite query + pattern extraction)
-    │
-fetch_data    (no LLM — async parallel: prices + news + sentiment)
-    │
-analyze       (Sonnet + web_search — JSON decision)
-    │
-  conf ≥ 0.70 or iters ≥ 2 or skip_research
-    │                   │
- risk_check          research   (Sonnet + web_search, max 2×)
-    │                   │
-  _risk_passed         analyze  (loop back)
-    │        │
- execute    skip
-    │
-save_memory  (Haiku — lesson generation + SQLite INSERT)
-    │
-__end__
-```
-
-## Multi-Agent Graph
+## Agent Graph
 
 ```
 __start__
@@ -146,7 +120,7 @@ save_memory  (Haiku)
 __end__
 ```
 
-Note: in the multi-agent graph, `research` edges directly to `risk_check` (no loop back to `arbitrate`).
+Note: `research` edges directly to `risk_check` (no loop back to `arbitrate`). This is the only graph supported — no graph selector in the UI.
 
 ## Specialized Agents
 
@@ -180,20 +154,7 @@ Macro filter: `regime == "risk-off"` → BUY dampened ×0.5.
 
 ## StateGraph — Nodes & Edges
 
-### Simple graph (`agents/simple.py`)
-
-| Node | Incoming | Outgoing |
-|------|----------|----------|
-| `load_memory` | START | `fetch_data` |
-| `fetch_data` | `load_memory` | `analyze` |
-| `analyze` | `fetch_data`, `research` | `risk_check` / `research` (conditional) |
-| `research` | `analyze` | `analyze` |
-| `risk_check` | `analyze` | `execute` / `skip` (conditional) |
-| `execute` | `risk_check` | `save_memory` |
-| `save_memory` | `execute` | END |
-| `skip` | `risk_check` | END |
-
-### Multi-agent graph (`agents/multi.py`)
+### Multi-agent graph (`agents/multi.py`) — unique graph
 
 | Node | Incoming | Outgoing |
 |------|----------|----------|
@@ -211,7 +172,9 @@ Macro filter: `regime == "risk-off"` → BUY dampened ×0.5.
 | `save_memory` | `execute` | END |
 | `skip` | `risk_check` | END |
 
-Shared nodes (defined in `agents/shared/nodes.py`, imported by both `agents/simple.py` and `agents/multi.py`): `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`.
+Shared nodes are defined in `agents/shared/nodes.py` and reused by `agents/multi.py`: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`.
+
+`core/registry.py` exposes a single `get_graph(portfolio)` returning the compiled multi-agent graph and `get_graph_info()` returning UI metadata.
 
 ## SQLite Schema
 
@@ -338,15 +301,14 @@ All 7 tab content divs are always present in the DOM (`id` = `tab-live`, `tab-an
 | `watchlist-interval` | 10s | Watchlist table refresh |
 | `news-interval` | 120s | News feed refresh |
 
-Agent cards panel (LIVE tab, multi-agent mode only):
+Agent cards panel (LIVE tab):
 - TECH (blue), ANLST (green), RISK (orange), MACRO (purple) — each collapsible
 - ARBITRATION card always visible below agent cards
 
-Agent Track Records badges (LIVE tab, multi-agent mode only):
+Agent Track Records badges (LIVE tab):
 - One badge per agent showing accuracy rate (correct votes / total votes from `agent_memory`)
-- Only visible when `AGENT_GRAPH=multi`
 
-Controls (top bar): PAUSE / STEP / RESET buttons, SIM/LIVE radio, graph selector dropdown.
+Controls (top bar): PAUSE / STEP / RESET buttons, SIM/LIVE radio (no graph selector — multi is the only graph).
 
 ## Data Classes
 
@@ -442,7 +404,7 @@ Wired into `Portfolio.fetch_prices()` when `USE_LIVEFEED=True`. If `LiveFeed.fet
 - SQLite writes go through `_db_write()` in `agents/shared/nodes.py` — handles WAL mode, retries (3 attempts with backoff), and structured logging
 - Sim and live use separate databases (`trades_sim.db` / `trades.db`) via `_get_db_path()`
 - `_ctrl` and `_state` in `dashboard/controller.py` share one **`threading.RLock()`** (`_controller_lock`) — all mutations and reads use `with _controller_lock`.
-- Graph switch and reset: agent thread is stopped (`portfolio.is_dead = True`), new Portfolio + thread created
+- Reset: agent thread is stopped (`portfolio.is_dead = True`), new Portfolio + thread created
 
 ## market_data.py — Standalone Market Data Module
 
@@ -489,7 +451,6 @@ Pre-commit hooks (`.pre-commit-config.yaml`): ruff (auto-fix) + black + trailing
 | `SIMULATION_MODE` | env | `false` | Skip all network/LLM calls |
 | `SIM_VOLATILITY` | env | `0.02` | Price random-walk std dev per step |
 | `SIM_DRIFT` | env | `0.0001` | Price drift per step |
-| `AGENT_GRAPH` | env | `simple` | `simple` or `multi` |
 | `X_BEARER_TOKEN` | env | — | Twitter/X sentiment (optional) |
 | `MACRO_SYMBOLS` | hardcoded | `{"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}` | Symbols fetched for TERMINAL macro bar |
 | `MARKET_DATA_CACHE_SEC` | hardcoded | `60` | Macro cache TTL in `market_data.py` |

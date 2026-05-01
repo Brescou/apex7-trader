@@ -11,9 +11,6 @@ uv sync
 # Run the dashboard + agent (opens http://localhost:8050)
 uv run python main.py
 
-# Run a single agent cycle standalone (calls Anthropic + yfinance)
-uv run python agents/simple.py
-
 # Launch LangGraph Studio (visual graph debugger)
 uv run langgraph dev
 
@@ -48,8 +45,7 @@ apex7-trader/
 ├── README.md             ← symlink → docs/README.md (tracked: docs/README.md)
 ├── agents/
 │   ├── __init__.py
-│   ├── simple.py          ← simple graph (was agent.py)
-│   ├── multi.py           ← multi-agent graph (was agent_multi.py)
+│   ├── multi.py           ← unique multi-agent graph
 │   └── shared/
 │       ├── __init__.py
 │       ├── state.py       ← AgentState, MultiAgentState TypedDicts
@@ -61,7 +57,7 @@ apex7-trader/
 │   ├── data.py            ← Portfolio, LiveFeed
 │   ├── backtest.py        ← BacktestEngine, run_backtest
 │   ├── indicators.py      ← Shared RSI implementation
-│   └── registry.py        ← graph ID → builder map
+│   └── registry.py        ← single graph builder + UI metadata
 ├── dashboard/
 │   ├── __init__.py        ← create_app()
 │   ├── server.py          ← Dash() init + design tokens
@@ -118,15 +114,14 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `dashboard/controller.py` | Agent loop thread, portfolio init, postmortem thread |
 | `dashboard/layout/` | Dash layout package — `main.py` sets `app.layout`; tab modules + helpers |
 | `dashboard/callbacks/` | All `@app.callback` handlers (7 modules) |
-| `agents/simple.py` | Simple graph: LangGraph nodes, simulation engine, `start_agent()` |
-| `agents/multi.py` | Multi-agent graph: 4 specialized agents + arbitration node + `run_daily_postmortem()` |
+| `agents/multi.py` | Unique LangGraph: 4 specialized agents + arbitration + `run_daily_postmortem()` |
 | `agents/shared/state.py` | `AgentState`, `MultiAgentState` TypedDicts |
 | `agents/shared/nodes.py` | Shared nodes: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`; also `_llm()` helper, `_db_write()`, simulation engine |
 | `agents/shared/schemas.py` | Pydantic validation models for LLM decision outputs |
 | `core/data.py` | `Portfolio` — thread-safe state; `LiveFeed` — multi-symbol yfinance wrapper |
 | `core/backtest.py` | `BacktestEngine` + functional API (`run_backtest`, `compare_strategies`) |
 | `core/indicators.py` | Shared `rsi()` implementation used across agents, backtest, and market_data |
-| `core/registry.py` | Graph ID → builder map |
+| `core/registry.py` | Single `get_graph(p)` + `get_graph_info()` UI metadata |
 | `config.py` | All constants, loaded from `.env` |
 | `market_data.py` | Standalone market data — fetch_macro, fetch_watchlist_prices, fetch_news, run_screener, fetch_sparkline, fetch_comparison |
 | `langgraph.json` | LangGraph Studio config — exposes both compiled graphs |
@@ -140,19 +135,13 @@ The Dash callback thread and the agent loop thread share a single `Portfolio` ob
 
 A third daemon thread (`apex7-postmortem`) runs in `dashboard/controller.py` and calls `run_daily_postmortem()` once per day at `POSTMORTEM_HOUR`. It only reads `portfolio.trade_history` and writes to SQLite — no Portfolio mutations.
 
-### Two graphs
+### Pipeline (single graph)
 
-**Simple graph** (`AGENT_GRAPH=simple`, default):
 ```
-load_memory → fetch_data → analyze → [research loop if conf < 0.70] → risk_check → execute → save_memory
-```
-
-**Multi-agent graph** (`AGENT_GRAPH=multi`):
-```
-load_memory → fetch_data → supervisor → [technician | analyst | risk_manager | macro_watcher] (parallel, via Send) → arbitrate → [research if conf < 0.72] → risk_check → execute → save_memory
+load_memory → fetch_data → supervisor → [technician | analyst | risk_manager | macro_watcher] (parallel, via Send) → arbitrate → [research if conf < 0.72, then risk_check] → risk_check → execute|skip → save_memory
 ```
 
-Nodes shared between both graphs: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research` (defined in `agents/shared/nodes.py`).
+Shared nodes (defined in `agents/shared/nodes.py`, used by `agents/multi.py`): `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`.
 
 ### Model usage
 
@@ -200,7 +189,7 @@ System prompts and user messages in `analyze_node`, `research_node`, and the mul
 ### Adding a new graph node
 
 ```python
-# In agents/simple.py
+# In agents/multi.py
 def my_node(state: AgentState) -> dict:
     return {"log": [_entry("my_node ran")], "confidence": 0.9}
 
@@ -238,7 +227,6 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 | `SIMULATION_MODE` | `false` | Skip all network/LLM calls |
 | `SIM_VOLATILITY` | `0.02` | Price random-walk std dev per step |
 | `SIM_DRIFT` | `0.0001` | Price drift per step |
-| `AGENT_GRAPH` | `simple` | `simple` or `multi` |
 | `X_BEARER_TOKEN` | — | Twitter/X sentiment (optional) |
 | `USE_LIVEFEED` | `true` | Delegate Portfolio.fetch_prices() to LiveFeed; set `false` in tests |
 | `PORTFOLIO_STATE_PATH` | `portfolio_state.json` | Path for JSON portfolio persistence |
@@ -262,12 +250,10 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`HOLD` trades not saved** — `save_memory_node` returns early on HOLD. Patterns table only contains BUY/SELL lessons.
 - **`avg_price` vs `avg_cost`** — both keys appear in `_portfolio_value()` due to backward compat (`pos.get("avg_price", pos.get("avg_cost", 0))`). New positions always use `avg_price`.
 - **`trades.db` soft migration** — on startup, `agents/shared/nodes.py` tries `ALTER TABLE trades ADD COLUMN source …` and `ADD COLUMN trace_id …`, and silently catches `OperationalError` if columns exist. Do not remove these blocks.
-- **`research` in multi-graph goes directly to `risk_check`** — unlike the simple graph where `research` loops back to `analyze`. This is intentional.
+- **`research` goes directly to `risk_check`** — `research_node` does not loop back to `arbitrate`. This is intentional.
 - **`LiveFeed` not wired into graph nodes** — `LiveFeed` is wired into `Portfolio.fetch_prices()` only; it is not a LangGraph node.
-- **`core/registry.py` description** — update the "4 Specialists" description string if a 5th specialist is added to `agents/multi.py`.
-- **`start_agent()` in `agents/simple.py` is unused from the dashboard** — `dashboard/controller.py` runs its own `_agent_loop` directly. The function exists for standalone use.
-- **Postmortem thread only in `dashboard/controller.py`** — `run_daily_postmortem()` is never called from `main.py` or `agents/simple.py`. It only runs when the full Dash app is started.
-- **`agent_memory` inserts in live path only for specialist nodes** — the simple graph does not write to `agent_memory` at all.
+- **`core/registry.py` description** — update `GRAPH_INFO["description"]` if a 5th specialist is added to `agents/multi.py`.
+- **Postmortem thread only in `dashboard/controller.py`** — `run_daily_postmortem()` is never called from `main.py`. It only runs when the full Dash app is started.
 - **Multi-symbol position limit** — `Portfolio.buy()` returns `{"success": False, "error": "position already open"}` if the symbol is already held. Callers in `execute_node` check `result["success"]`.
 - **`market_data.py` cache** — macro cached 60s, watchlist 10s to avoid yfinance rate limiting. Cache is in-memory only; resets on restart.
 - **`market_data.py` decoupled** — zero imports from `agents/` or `dashboard/` by design.
@@ -276,7 +262,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`PORTFOLIO_SAVE_ENABLED=True` by default** — set to `False` in unit tests to avoid disk writes.
 - **`dashboard/callbacks/__init__.py` must import all callback modules** — `live`, `analytics`, `backtest_tab`, `leaderboard_tab`, `heatmap`, `agents`, `terminal` must all be imported. If any are missing, those `@app.callback` decorators are never registered and the corresponding UI updates silently fail.
 - **`agents/` → `dashboard/` import direction is forbidden** — `agents/shared/nodes.py` imports from `core.data`. Never import from `dashboard` in any `agents/` file. This violates the one-way dependency rule (dashboard depends on agents/core, not the reverse).
-- **Lazy DB init** — `_init_db()` is no longer called at import time. It runs lazily on first `_db_write`/`_db_read`/`_db_write_multi` call via `_ensure_db()`. Importing `agents/shared/nodes.py` no longer creates SQLite tables. Importing `dashboard/controller.py` does not create a `Portfolio` until `start_controller()` is called explicitly. Importing `agents/simple.py` or `agents/multi.py` compiles a LangGraph graph at module level (for LangGraph Studio compatibility).
+- **Lazy DB init** — `_init_db()` is no longer called at import time. It runs lazily on first `_db_write`/`_db_read`/`_db_write_multi` call via `_ensure_db()`. Importing `agents/shared/nodes.py` no longer creates SQLite tables. Importing `dashboard/controller.py` does not create a `Portfolio` until `start_controller()` is called explicitly. Importing `agents/multi.py` compiles the LangGraph graph at module level (for LangGraph Studio compatibility).
 - **RSI computed in `core/indicators.py`** — a single canonical `rsi()` function. Do not re-implement RSI elsewhere.
 - **`_db_write()` / `_db_read()` centralize all SQLite access** — never open raw `sqlite3.connect()` anywhere — not in agent nodes, not in `dashboard/layout/helpers.py`, not in `dashboard/callbacks/`. Always use `_db_write()` or `_db_read()` from `agents.shared.nodes` (dashboard loaders and track records use `_db_read()` so analytics match sim/live mode).
 - **\_live\_price\_history warm-up** — en live mode, le RSI retourne 50.0 (`insufficient data`) pendant les 14 premiers cycles (~7 min) si la série n’est pas encore prête. Le technician est aveugle pendant cette période (mitigation : seed daily + append par jour, sprint v3).

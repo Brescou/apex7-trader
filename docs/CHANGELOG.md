@@ -2,7 +2,22 @@
 
 ## [Unreleased]
 
-No uncommitted changes.
+### Removed
+- `agents/simple.py` — single-LLM graph decommissioned; multi-agent graph is now the only supported pipeline.
+- `AGENT_GRAPH` env var, `graph_id` plumbing, `graph-store` Dash store, `graph-selector` topbar dropdown, `_switch_graph` callback.
+- `analyze_node`, `sim_analyze`, `_route_analyze` and `ANALYZE_SYSTEM_PROMPT` (used only by the simple graph).
+- `core/registry.py`'s `GRAPHS` dict and dual-graph `get_graph(graph_id, p)` API.
+- Tests `test_simple_graph_build`, `test_simple_graph_buy_flow`, `test_simple_graph_hold_flow`.
+
+### Changed
+- `core/registry.py`: now exposes a single `get_graph(portfolio)` and parameterless `get_graph_info()` returning `GRAPH_INFO`.
+- `dashboard/controller.py`: `_agent_loop(p)` and `_launch(p)` no longer take `graph_id`; `_state` no longer stores `graph_id`.
+- `dashboard/callbacks/live.py`: `_refresh` returns 24 outputs (was 26 — `sec-graph` panel and `graph-store` State removed); `is_multi` flag removed (always true).
+- `dashboard/layout/main.py` / `live_tab.py`: removed `graph-store`, `graph-selector` dropdown, and `sec-graph` div.
+- `langgraph.json`: single `apex7` entry pointing to `agents/multi.py:agent_multi_graph`.
+- `tests/test_smoke.py::test_simulation_cycle` migrated to `build_multi_graph` with full `MultiAgentState` init.
+
+## [2026-04-12] — Remediation Sprint (Full)
 
 ## [2026-04-12] — Remediation Sprint (Full)
 
