@@ -117,8 +117,8 @@ def _agents_refresh(_, __, active_tab):
             style={"display": "flex", "alignItems": "center"},
         )
 
-    hdr_cols = ["AGENT", "VOTES", "CORRECT", "WIN RATE", "AVG CONF", "TREND 7J"]
-    hdr_widths = ["120px", "60px", "70px", "160px", "80px", "1fr"]
+    hdr_cols = ["AGENT", "VOTES", "EVAL", "STATUS", "WIN RATE", "AVG CONF", "TREND 7J"]
+    hdr_widths = ["120px", "55px", "65px", "130px", "140px", "70px", "1fr"]
     table_hdr = html.Div(
         [
             html.Span(
@@ -143,14 +143,37 @@ def _agents_refresh(_, __, active_tab):
         },
     )
 
+    _MIN_EVALUATED = 5
+
+    def _eval_status_badge(evaluated: int) -> html.Span:
+        """Calibrating (⏳) until ``_MIN_EVALUATED`` evaluated votes, then market-validated (✓)."""
+        if evaluated < _MIN_EVALUATED:
+            label, color = "⏳ Calibrating", ORANGE
+        else:
+            label, color = "✓ Market-validated", GREEN
+        return html.Span(
+            label,
+            style={
+                "fontSize": "9px",
+                "fontWeight": "700",
+                "color": color,
+                "background": f"{color}11",
+                "border": f"1px solid {color}33",
+                "borderRadius": "2px",
+                "padding": "2px 6px",
+                "letterSpacing": "0.05em",
+            },
+        )
+
     table_rows = []
     for ag in _AGENT_DEFS:
         key = ag["key"]
         col = ag["color"]
         rows = [r for r in mem if r.get("agent_name") == key]
         total = len(rows)
+        evaluated = sum(1 for r in rows if r.get("was_correct") in (0, 1, True, False, "0", "1"))
         correct = sum(1 for r in rows if r.get("was_correct") in (1, True, "1"))
-        wr = (correct / total * 100) if total > 0 else 0.0
+        wr = (correct / evaluated * 100) if evaluated > 0 else 0.0
         confs = [float(r["confidence"]) for r in rows if r.get("confidence") is not None]
         avg_c = (sum(confs) / len(confs)) if confs else 0.0
 
@@ -226,26 +249,31 @@ def _agents_refresh(_, __, active_tab):
                         style={
                             "fontSize": "11px",
                             "color": TEXT_DIM,
-                            "width": "60px",
+                            "width": "55px",
                             "flexShrink": "0",
                         },
                     ),
                     html.Span(
-                        str(correct),
+                        f"{evaluated}/{total}",
+                        title=f"{total - evaluated} pending evaluation",
                         style={
                             "fontSize": "11px",
-                            "color": TEXT_DIM,
-                            "width": "70px",
+                            "color": TEXT_MAIN if evaluated > 0 else TEXT_DIM,
+                            "width": "65px",
                             "flexShrink": "0",
                         },
                     ),
-                    html.Div(_win_rate_bar(wr, col), style={"width": "160px", "flexShrink": "0"}),
+                    html.Div(
+                        _eval_status_badge(evaluated),
+                        style={"width": "130px", "flexShrink": "0"},
+                    ),
+                    html.Div(_win_rate_bar(wr, col), style={"width": "140px", "flexShrink": "0"}),
                     html.Span(
                         f"{avg_c:.0%}",
                         style={
                             "fontSize": "11px",
                             "color": TEXT_MAIN,
-                            "width": "80px",
+                            "width": "70px",
                             "flexShrink": "0",
                         },
                     ),

@@ -692,12 +692,33 @@ def _refresh(_, store, active_tab):
     badge_items = []
     for agent_key, agent_label, agent_color in _TRACK_AGENTS:
         rows = _tr_by_agent.get(agent_key, [])[:20]
-        if rows:
+        evaluated = sum(1 for wc in rows if wc in (0, 1, True, False))
+        pending = len(rows) - evaluated
+        if evaluated:
             correct = sum(1 for wc in rows if wc in (1, True))
-            wr = correct / len(rows) * 100
+            wr = correct / evaluated * 100
         else:
             wr = 0.0
         wr_col = GREEN if wr >= 60 else (ORANGE if wr >= 40 else RED)
+        # Compact évaluation indicator: ⏳ when nothing has been resolved yet,
+        # otherwise N pending (so users see weights are still warming up).
+        if not rows:
+            eval_chip = html.Span(
+                "⏳ pending",
+                style={"fontSize": "8px", "color": TEXT_DIM, "marginLeft": "5px"},
+            )
+        elif pending:
+            eval_chip = html.Span(
+                f"⏳ {pending}",
+                title=f"{pending} vote(s) awaiting market evaluation",
+                style={"fontSize": "8px", "color": ORANGE, "marginLeft": "5px"},
+            )
+        else:
+            eval_chip = html.Span(
+                "✓",
+                title="All recent votes evaluated",
+                style={"fontSize": "8px", "color": GREEN, "marginLeft": "5px"},
+            )
         badge_items.append(
             html.Span(
                 [
@@ -711,6 +732,7 @@ def _refresh(_, store, active_tab):
                         },
                     ),
                     html.Span(f"{wr:.0f}%", style={"fontSize": "9px", "color": wr_col}),
+                    eval_chip,
                 ],
                 style={
                     "background": f"{agent_color}11",
