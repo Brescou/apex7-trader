@@ -1,7 +1,9 @@
 """APEX-7 // MULTI-AGENT GRAPH — 4 specialized agents + arbitration (extracted from agent_multi.py)."""
 
 import json
+import logging
 import random
+import threading
 import time
 from datetime import datetime, date
 
@@ -57,6 +59,8 @@ from config import (
 from core.data import Portfolio
 from core.indicators import rsi as _rsi
 
+logger = logging.getLogger("apex7.multi")
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # WEIGHTS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -79,63 +83,88 @@ SIZING_TO_SELL_PCT: dict[str, float] = {
 
 _cached_weights: dict = {}
 _weights_computed_at: float = 0.0
+# Dedicated lock for the cache + DB read; arbitrate_node may be entered
+# concurrently by multiple cycles in tests / hot-reload scenarios.
+_weights_lock = threading.Lock()
+_WEIGHTS_CACHE_TTL_SEC = 600
+_MIN_EVALUATED_VOTES = 5
 
 
 def _compute_dynamic_weights() -> dict:
     """Compute agent weights blended with historical accuracy from agent_memory.
 
-    Uses a 10-minute cache. Falls back to static WEIGHTS if an agent has
-    fewer than 5 scored votes. Blend: 70% static + 30% accuracy-based.
-    Always returns a dict normalised to sum=1.0.
+    Uses a 10-minute cache and is thread-safe via ``_weights_lock``. Falls
+    back to static :data:`WEIGHTS` when an agent has fewer than
+    ``_MIN_EVALUATED_VOTES`` evaluated votes; if **no** agent has any
+    evaluated history yet (typical during the warm-up window where
+    ``evaluate_pending_trades`` has not had time to fill ``was_correct``),
+    returns the static weights verbatim.
+
+    Blend formula for agents with enough history: ``0.7 * static + 0.3 * accuracy``.
+    Result is always normalised to ``sum == 1.0``.
     """
     global _cached_weights, _weights_computed_at
 
-    if _cached_weights and (time.time() - _weights_computed_at) < 600:
-        return _cached_weights
+    with _weights_lock:
+        if _cached_weights and (time.time() - _weights_computed_at) < _WEIGHTS_CACHE_TTL_SEC:
+            return dict(_cached_weights)
 
-    agents = list(WEIGHTS.keys())
-    accuracy: dict[str, float] = {}
+        agents = list(WEIGHTS.keys())
+        accuracy: dict[str, float | None] = {}
 
-    try:
-        for agent in agents:
-            rows = _db_read(
-                "SELECT was_correct FROM agent_memory "
-                "WHERE agent_name=? AND was_correct IS NOT NULL "
-                "ORDER BY timestamp DESC LIMIT 50",
-                (agent,),
+        try:
+            for agent in agents:
+                rows = _db_read(
+                    "SELECT was_correct FROM agent_memory "
+                    "WHERE agent_name=? AND was_correct IS NOT NULL "
+                    "ORDER BY timestamp DESC LIMIT 50",
+                    (agent,),
+                )
+                if len(rows) >= _MIN_EVALUATED_VOTES:
+                    accuracy[agent] = sum(r[0] for r in rows) / len(rows)
+                else:
+                    accuracy[agent] = None
+        except Exception as exc:
+            logger.warning(
+                "Dynamic weights: agent_memory read failed (%s) — falling back to static",
+                exc,
             )
-            if len(rows) >= 5:
-                accuracy[agent] = sum(r[0] for r in rows) / len(rows)
+            _cached_weights = dict(WEIGHTS)
+            _weights_computed_at = time.time()
+            return dict(_cached_weights)
+
+        evaluated = sum(1 for v in accuracy.values() if v is not None)
+        pending = len(agents) - evaluated
+        logger.info(
+            "Dynamic weights: %d agents have evaluated history, %d agents pending",
+            evaluated,
+            pending,
+        )
+
+        if evaluated == 0:
+            # No agent has any market-evaluated vote yet — pure static.
+            _cached_weights = dict(WEIGHTS)
+            _weights_computed_at = time.time()
+            return dict(_cached_weights)
+
+        sum_accuracies = sum(v for v in accuracy.values() if v is not None) or 1.0
+
+        dynamic: dict[str, float] = {}
+        for agent in agents:
+            static_w = WEIGHTS[agent]
+            if accuracy[agent] is not None:
+                acc_norm = accuracy[agent] / sum_accuracies
+                dynamic[agent] = 0.7 * static_w + 0.3 * acc_norm
             else:
-                accuracy[agent] = None  # type: ignore[assignment]
-    except Exception:
-        _cached_weights = dict(WEIGHTS)
+                dynamic[agent] = static_w
+
+        total = sum(dynamic.values())
+        if total > 0:
+            dynamic = {a: v / total for a, v in dynamic.items()}
+
+        _cached_weights = dynamic
         _weights_computed_at = time.time()
-        return _cached_weights
-
-    # Agents with enough data contribute their accuracy; others use static weight
-    valid_accuracies = {a: v for a, v in accuracy.items() if v is not None}
-    sum_accuracies = sum(valid_accuracies.values()) if valid_accuracies else 1.0
-    if sum_accuracies == 0.0:
-        sum_accuracies = 1.0
-
-    dynamic: dict[str, float] = {}
-    for agent in agents:
-        static_w = WEIGHTS[agent]
-        if accuracy[agent] is not None:
-            acc_norm = accuracy[agent] / sum_accuracies
-            dynamic[agent] = 0.7 * static_w + 0.3 * acc_norm
-        else:
-            dynamic[agent] = static_w
-
-    # Normalise to sum=1.0
-    total = sum(dynamic.values())
-    if total > 0:
-        dynamic = {a: v / total for a, v in dynamic.items()}
-
-    _cached_weights = dynamic
-    _weights_computed_at = time.time()
-    return _cached_weights
+        return dict(_cached_weights)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
