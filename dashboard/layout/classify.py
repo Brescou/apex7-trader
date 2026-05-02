@@ -13,6 +13,8 @@ def _classify_v2(msg: str, level: str) -> tuple[str, str]:
         return "WARN", YELLOW
     if msg.startswith("BUY "):
         return "BUY", BLUE
+    if msg.startswith("[TRAILING STOP]"):
+        return "TRAIL SL", ORANGE
     if msg.startswith("SELL "):
         return ("SELL WIN", GREEN) if "+" in msg else ("SELL LOSS", RED)
     if msg.startswith("HOLD "):

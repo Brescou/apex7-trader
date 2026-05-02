@@ -1110,7 +1110,19 @@ def make_execute_node(portfolio: Portfolio):
             trail_dd = (high - sp) / high if high > 0 else 0.0
             if trail_dd >= STOP_LOSS_PCT:
                 sl_slip = 1 + random.uniform(-0.001, 0.001)
-                portfolio.sell(sl_sym, 100, sp * sl_slip)
+                exit_px = sp * sl_slip
+                portfolio.sell(sl_sym, 100, exit_px)
+                try:
+                    from core.notifications import alert_trailing_stop
+
+                    alert_trailing_stop(
+                        symbol=sl_sym,
+                        price=exit_px,
+                        high_watermark=high,
+                        drawdown_pct=trail_dd,
+                    )
+                except Exception:
+                    pass
                 logs.append(
                     _entry(
                         f"[TRAILING STOP] triggered: {sl_sym} @ ${sp:.2f} "

@@ -1,5 +1,7 @@
 """APEX-7 — UI helpers: cards, sparklines, DB loaders, agent card builders."""
 
+import math
+
 import plotly.graph_objects as go
 from dash import dcc, html
 
@@ -140,66 +142,102 @@ def _log_entry_card(entry: dict) -> html.Div:
     )
 
 
-def _pos_card(sym: str, pos: dict, prices: dict) -> html.Div:
+def _pos_card(
+    sym: str, pos: dict, prices: dict, high_watermarks: dict[str, float] | None = None
+) -> html.Div:
     cur = prices.get(sym, pos["avg_price"])
     pnl = ((cur / pos["avg_price"]) - 1) * 100
     val = pos["shares"] * cur
     c = GREEN if pnl >= 0 else RED
     bar_w = min(abs(pnl) / 20, 1) * 100
+    hw_map = high_watermarks or {}
+    high = hw_map.get(sym)
+    trail_line = None
+    if (
+        high is not None
+        and isinstance(high, (int, float))
+        and not math.isnan(float(high))
+        and float(high) > 0
+        and isinstance(cur, (int, float))
+        and not math.isnan(float(cur))
+        and float(cur) > 0
+    ):
+        fh = float(high)
+        fc = float(cur)
+        trail_vs_high_pct = max(0.0, (fh - fc) / fh * 100)
+        trail_line = html.Div(
+            [
+                html.Span(
+                    f"high ${fh:.2f}",
+                    style={"color": TEXT_DIM, "fontSize": "9px"},
+                ),
+                html.Span(
+                    f"trail vs high {trail_vs_high_pct:.1f}%",
+                    style={"color": ORANGE, "fontSize": "9px", "fontWeight": "600"},
+                ),
+            ],
+            style={
+                "display": "flex",
+                "justifyContent": "space-between",
+                "marginTop": "2px",
+            },
+        )
+
+    inner: list = [
+        html.Div(
+            [
+                html.Span(sym, style={"fontSize": "13px", "fontWeight": "700", "color": TEXT_MAIN}),
+                html.Span(
+                    f"{pnl:+.2f}%", style={"fontSize": "12px", "fontWeight": "600", "color": c}
+                ),
+            ],
+            style={
+                "display": "flex",
+                "justifyContent": "space-between",
+                "alignItems": "baseline",
+            },
+        ),
+        html.Div(
+            [
+                html.Span(f"{pos['shares']:.4f} sh", style={"color": TEXT_DIM, "fontSize": "10px"}),
+                html.Span(f"${val:.2f}", style={"color": TEXT_MAIN, "fontSize": "11px"}),
+            ],
+            style={"display": "flex", "justifyContent": "space-between", "marginTop": "4px"},
+        ),
+        html.Div(
+            [
+                html.Span(
+                    f"avg ${pos['avg_price']:.2f}", style={"color": TEXT_DIM, "fontSize": "9px"}
+                ),
+                html.Span(f"→ ${cur:.2f}", style={"color": TEXT_MAIN, "fontSize": "9px"}),
+            ],
+            style={"display": "flex", "justifyContent": "space-between", "marginTop": "2px"},
+        ),
+    ]
+    if trail_line is not None:
+        inner.insert(3, trail_line)
+    inner.append(
+        html.Div(
+            html.Div(
+                style={
+                    "width": f"{bar_w}%",
+                    "height": "100%",
+                    "background": c,
+                    "borderRadius": "1px",
+                }
+            ),
+            style={
+                "height": "2px",
+                "background": f"{c}22",
+                "marginTop": "7px",
+                "borderRadius": "1px",
+                "overflow": "hidden",
+            },
+        )
+    )
 
     return html.Div(
-        [
-            html.Div(
-                [
-                    html.Span(
-                        sym, style={"fontSize": "13px", "fontWeight": "700", "color": TEXT_MAIN}
-                    ),
-                    html.Span(
-                        f"{pnl:+.2f}%", style={"fontSize": "12px", "fontWeight": "600", "color": c}
-                    ),
-                ],
-                style={
-                    "display": "flex",
-                    "justifyContent": "space-between",
-                    "alignItems": "baseline",
-                },
-            ),
-            html.Div(
-                [
-                    html.Span(
-                        f"{pos['shares']:.4f} sh", style={"color": TEXT_DIM, "fontSize": "10px"}
-                    ),
-                    html.Span(f"${val:.2f}", style={"color": TEXT_MAIN, "fontSize": "11px"}),
-                ],
-                style={"display": "flex", "justifyContent": "space-between", "marginTop": "4px"},
-            ),
-            html.Div(
-                [
-                    html.Span(
-                        f"avg ${pos['avg_price']:.2f}", style={"color": TEXT_DIM, "fontSize": "9px"}
-                    ),
-                    html.Span(f"→ ${cur:.2f}", style={"color": TEXT_MAIN, "fontSize": "9px"}),
-                ],
-                style={"display": "flex", "justifyContent": "space-between", "marginTop": "2px"},
-            ),
-            html.Div(
-                html.Div(
-                    style={
-                        "width": f"{bar_w}%",
-                        "height": "100%",
-                        "background": c,
-                        "borderRadius": "1px",
-                    }
-                ),
-                style={
-                    "height": "2px",
-                    "background": f"{c}22",
-                    "marginTop": "7px",
-                    "borderRadius": "1px",
-                    "overflow": "hidden",
-                },
-            ),
-        ],
+        inner,
         style={
             "background": f"{c}04",
             "border": f"1px solid {c}18",

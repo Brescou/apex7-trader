@@ -521,7 +521,10 @@ def _refresh(_, store, active_tab):
         )
 
         # ── POSITIONS ──
-        cards = [_pos_card(sym, pos, prices) for sym, pos in list(p.positions.items())[:3]]
+        cards = [
+            _pos_card(sym, pos, prices, p.high_watermarks)
+            for sym, pos in list(p.positions.items())[:3]
+        ]
         sec_positions = html.Div(
             [
                 _section_label(f"OPEN POSITIONS ({len(p.positions)}/3)"),
