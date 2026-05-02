@@ -39,7 +39,20 @@ uv run pre-commit run --all-files
 apex7-trader/
 ├── main.py
 ├── config.py
-├── market_data.py
+├── market_data/           ← package terminal / yfinance (pas d’import agents/dashboard)
+│   ├── __init__.py        ← API publique (réexporte fetch_*, yf, caches test)
+│   ├── caches.py
+│   ├── compat.py          ← yfinance unique (tests : patch ``market_data.yf``)
+│   ├── macro.py
+│   ├── quotes.py
+│   ├── news.py
+│   ├── earnings.py
+│   ├── charts.py
+│   ├── sectors.py
+│   ├── correlation.py
+│   ├── economic_calendar.py
+│   ├── screener.py
+│   └── helpers.py
 ├── pyproject.toml
 ├── langgraph.json
 ├── README.md             ← symlink → docs/README.md (tracked: docs/README.md)
@@ -119,7 +132,7 @@ together here for clarity. ``trades_paper.db`` was added in sprint v1.)
 - `agents/` — apex7-senior-back
 - `core/` — apex7-senior-back
 - `dashboard/` — apex7-senior-front
-- `config.py`, `market_data.py` — apex7-senior-back
+- `config.py`, `market_data/` — apex7-senior-back
 
 ## Architecture
 
@@ -149,7 +162,7 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `core/indicators.py` | Shared `rsi()` implementation used across agents, backtest, and market_data |
 | `core/registry.py` | Single `get_graph(p)` + `get_graph_info()` UI metadata |
 | `config.py` | All constants, loaded from `.env` |
-| `market_data.py` | Standalone market data — macro/watchlist/news/screener/sparkline/comparison/OHLCV, **sector rotation**, **correlation matrix**, **earnings calendar** / `build_economic_calendar_rows` |
+| `market_data/` | Package terminal — `macro`, `quotes`, `news`, `earnings`, `charts`, `sectors`, `correlation`, `economic_calendar`, `screener` ; **zéro** import `agents`/`dashboard` |
 | `langgraph.json` | LangGraph Studio config — exposes both compiled graphs |
 | `tests/test_smoke.py` | 11 regression smoke tests — no pytest, assert+print, exit 0/1 |
 | `tests/test_terminal.py` | Market data + terminal mocks (macro strip, sector %, correlation matrix, economic calendar) |
@@ -310,8 +323,8 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 | `DISCORD_WEBHOOK_URL` | — | Optional Discord webhook for `core.notifications` (trades, death, stagnation, rate-limit, startup, **daily digest**, **weekly report**, **evaluation**) |
 | `FRED_API_KEY` | — | Optional; FRED JSON works for many series without a key but is **rate-limited** — key improves limits |
 | `MACRO_SYMBOLS` | `{"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}` | Symbols for the TERMINAL macro header bar |
-| `MARKET_DATA_CACHE_SEC` | `60` | TTL for macro data cache in `market_data.py` |
-| `WATCHLIST_CACHE_SEC` | `10` | TTL for watchlist prices cache in `market_data.py` |
+| `MARKET_DATA_CACHE_SEC` | `60` | TTL for macro data cache (`market_data.caches` / `macro.py`) |
+| `WATCHLIST_CACHE_SEC` | `10` | TTL for watchlist prices cache (`market_data.caches` / `quotes.py`) |
 | `NEWS_MAX_ITEMS` | `8` | Max news items returned by `fetch_news()` |
 | `MAX_PYRAMID_LAYERS` | `3` | Env `MAX_PYRAMID_LAYERS` — max BUY layers per symbol (`Portfolio.buy` pyramiding; weighted `avg_price`) |
 
@@ -322,7 +335,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **FRED API** — works without `FRED_API_KEY` for many popular JSON series, but responses are **rate-limited**. Set `FRED_API_KEY` in `.env` for higher quotas and more predictable access (`core/external_data.fetch_fred_latest`).
 - **Fear & Greed** — CNN `production.dataviz.cnn.io` endpoint is **undocumented** and may change without notice. `fetch_fear_greed` is **fail-silent** (bar shows `F&G: —` on failure).
 - **Earnings calendar** — `yf.Ticker.calendar` shape varies across **yfinance** versions (dict vs DataFrame, column names). `market_data.fetch_earnings_calendar` and `build_economic_calendar_rows` must stay wrapped in **try/except**; never assume a single format.
-- **`_SCHEDULED_MACRO_EVENTS`** — calendrier macro FOMC/CPI/NFP **hardcodé** dans `market_data.py` ; **mettre à jour trimestriellement**. Le code émet un `logger.warning` lorsque la date du jour dépasse la dernière date de la liste (calendrier périmé).
+- **`_SCHEDULED_MACRO_EVENTS`** — calendrier macro FOMC/CPI/NFP **hardcodé** dans `market_data/economic_calendar.py` ; **mettre à jour trimestriellement**. Le code émet un `logger.warning` lorsque la date du jour dépasse la dernière date de la liste (calendrier périmé).
 - **`fetch_earnings_calendar`** — réponses **mises en cache 5 min** (`_EARNINGS_TTL`, clé = ensemble de symboles trié). Ne pas l’appeler directement depuis un callback Dash **à chaque tick** sans passer par ce cache (surcharge yfinance).
 - **Pyramiding** — `MAX_PYRAMID_LAYERS` (default 3, env `MAX_PYRAMID_LAYERS`) caps successive BUYs on the same symbol; `avg_price` is recomputed as a **share-weighted** average. Past the cap, `buy()` returns `{"success": False, "error": "max pyramid layers (…) reached"}` — `execute_node` checks `result["success"]`. **`high_watermarks`** for trailing stop is set on the **first** open only — pyramids do **not** reset it.
 - **Watchlist DB** — at most **20** symbols (`agents.shared.watchlist.MAX_WATCHLIST_SYMBOLS`). **`remove_from_watchlist`** refuses to drop a ticker that still has an **open position** (`open_symbols`).
@@ -342,8 +355,8 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`LiveFeed` not wired into graph nodes** — `LiveFeed` is wired into `Portfolio.fetch_prices()` only; it is not a LangGraph node.
 - **`core/registry.py` description** — update `GRAPH_INFO["description"]` if a 5th specialist is added to `agents/multi.py`.
 - **Postmortem thread only in `dashboard/controller.py`** — `run_daily_postmortem()` is never called from `main.py`. It only runs when the full Dash app is started.
-- **`market_data.py` cache** — macro cached 60s, watchlist 10s to avoid yfinance rate limiting. Cache is in-memory only; resets on restart.
-- **`market_data.py` decoupled** — zero imports from `agents/` or `dashboard/` by design.
+- **`market_data` caches** — macro 60s, watchlist 10s (`market_data.caches`) pour limiter yfinance. Cache mémoire uniquement ; reset au redémarrage.
+- **`market_data` découpé** — package sans import `agents/` ou `dashboard/` (règle inchangée).
 - **`USE_LIVEFEED=False` in tests** — set via env or config override to avoid yfinance rate limiting during test runs.
 - **`portfolio_state.json` created on first run** — added to `.gitignore`, do not commit.
 - **`PORTFOLIO_SAVE_ENABLED=True` by default** — set to `False` in unit tests to avoid disk writes.

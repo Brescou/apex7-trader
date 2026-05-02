@@ -221,7 +221,7 @@ Key Dash patterns used:
 apex7-trader/
 ├── main.py                         # Entrypoint: app.run()
 ├── config.py                       # All constants, loaded from .env
-├── market_data.py                  # Standalone market data (fetch_macro, sparkline, etc.)
+├── market_data/                    # Package market data (macro, quotes, terminal…)
 ├── leaderboard.py                  # Benchmarks 4 allocation strategies
 ├── langgraph.json                  # LangGraph Studio config
 ├── pyproject.toml                  # Dependencies (uv) + black/ruff/pytest config
@@ -274,7 +274,7 @@ apex7-trader/
 │   ├── conftest.py                 # sim_mode, portfolio, tmp_db (isolated SQLite)
 │   ├── test_smoke.py               # Import/graph/backtest/smoke (legacy runner still supported)
 │   ├── test_integration.py         # Graph flows, schemas, DB helpers, token reset
-│   ├── test_terminal.py            # market_data.py (macro, watchlist, news, screener…)
+│   ├── test_terminal.py            # market_data (macro, watchlist, news, screener…)
 │   ├── test_layout_helpers.py      # classify, registry, layout/controller wiring
 │   ├── test_circuit_breaker.py     # LLM circuit breaker + rate-limit behavior
 │   ├── test_stoploss.py            # execute_node stop-loss guards
@@ -462,7 +462,7 @@ Per-agent comparison table loaded from `agent_memory` in the active SQLite DB:
 
 ### TERMINAL tab
 
-Bloomberg-style market terminal with live data from `market_data.py`.
+Bloomberg-style market terminal with live data from the `market_data` package.
 
 ```
 ┌────────────────────────────────────────────────┐

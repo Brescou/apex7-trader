@@ -6,7 +6,20 @@
 apex7-trader/
 ├── main.py
 ├── config.py
-├── market_data.py
+├── market_data/           ← package : macro, cotations, news, earnings, charts, secteurs, corrélation, calendrier
+│   ├── __init__.py
+│   ├── caches.py
+│   ├── compat.py
+│   ├── helpers.py
+│   ├── macro.py
+│   ├── quotes.py
+│   ├── news.py
+│   ├── earnings.py
+│   ├── charts.py
+│   ├── sectors.py
+│   ├── correlation.py
+│   ├── economic_calendar.py
+│   └── screener.py
 ├── pyproject.toml
 ├── langgraph.json
 ├── README.md → docs/README.md
@@ -514,9 +527,9 @@ Optional `DISCORD_WEBHOOK_URL` — same **`httpx.post`**, 5s timeout, **fail-sil
 - `_ctrl` and `_state` in `dashboard/controller.py` share one **`threading.RLock()`** (`_controller_lock`) — all mutations and reads use `with _controller_lock`.
 - Reset: agent thread is stopped (`portfolio.is_dead = True`), new Portfolio + thread created
 
-## market_data.py — Standalone Market Data Module
+## `market_data/` — Standalone Market Data Package
 
-Zero imports from `agents/` or `dashboard/`. Used exclusively by `dashboard/callbacks/terminal.py` callbacks.
+Zero imports from `agents/` or `dashboard/`. Public API: ``from market_data import …`` (voir ``__init__.py``). Implémentation par sous-modules : ``macro``, ``quotes``, ``news``, ``earnings``, ``charts``, ``sectors``, ``correlation``, ``economic_calendar``, ``screener`` ; caches partagés dans ``caches.py`` ; ``compat.py`` expose ``yfinance`` pour les tests (``patch market_data.yf``). Utilisé surtout par ``dashboard/callbacks/terminal.py``.
 
 | Function | Cache TTL | Description |
 |----------|-----------|-------------|
@@ -533,7 +546,7 @@ Zero imports from `agents/` or `dashboard/`. Used exclusively by `dashboard/call
 | `is_earnings_week(symbol)` | uses earnings cache | `True` if next earnings within 5 calendar days |
 | `build_economic_calendar_rows(symbols, …)` | n/a | Merges earnings rows with static **FOMC/CPI/NFP** schedule (`_SCHEDULED_MACRO_EVENTS`); logs **warning** if that schedule is stale (last event date in the past) |
 
-Cache uses `threading.Lock()` — thread-safe for concurrent Dash callbacks. Separate lock per cache (`_sparkline_lock`, `_comparison_lock`, sector/correlation caches, etc.).
+Cache uses `threading.Lock()` in ``market_data/caches.py`` — thread-safe for concurrent Dash callbacks.
 
 ## CI/CD Pipeline
 
@@ -569,8 +582,8 @@ Pre-commit hooks (`.pre-commit-config.yaml`): ruff (auto-fix) + black + trailing
 | `SIM_DRIFT` | env | `0.0001` | Price drift per step |
 | `X_BEARER_TOKEN` | env | — | Twitter/X sentiment (optional) |
 | `MACRO_SYMBOLS` | hardcoded | `{"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}` | Symbols fetched for TERMINAL macro bar |
-| `MARKET_DATA_CACHE_SEC` | hardcoded | `60` | Macro cache TTL in `market_data.py` |
-| `WATCHLIST_CACHE_SEC` | hardcoded | `10` | Watchlist prices cache TTL in `market_data.py` |
+| `MARKET_DATA_CACHE_SEC` | hardcoded | `60` | Macro cache TTL (`market_data.caches` / `macro.py`) |
+| `WATCHLIST_CACHE_SEC` | hardcoded | `10` | Watchlist prices cache TTL (`market_data.caches` / `quotes.py`) |
 | `NEWS_MAX_ITEMS` | hardcoded | `8` | Max news items from `fetch_news()` |
 | `STOP_LOSS_PCT` | hardcoded | `0.05` | Stop-loss threshold (5%) — enforced as a pre-check loop in `execute_node` before the agent decision |
 | `POSTMORTEM_HOUR` | hardcoded | `22` | Hour (0–23) at which daily postmortem runs |

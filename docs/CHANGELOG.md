@@ -2,6 +2,10 @@
 
 ## [Unreleased] — Feature Sprint v3
 
+### Changed
+
+- **Structure:** `market_data.py` remplacé par le package `market_data/` (sous-modules macro, quotes, news, earnings, charts, sectors, correlation, economic_calendar, screener ; caches dans `caches.py`). L’import public `from market_data import fetch_*` est inchangé.
+
 ### Sprint Features v3 — summary
 
 - **Discord:** daily digest (`alert_daily_digest` / `run_daily_digest`), weekly report (`alert_weekly_report` / `run_weekly_report`), deferred **evaluation** alerts when `was_correct` is resolved (`alert_evaluation` in `agents/shared/eval.py`).

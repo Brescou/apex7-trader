@@ -43,19 +43,19 @@ def _dash_collect_text(node) -> list[str]:
 
 
 def _reset_sector_cache() -> None:
-    import market_data as md
+    from market_data import caches
 
-    md._sector_perf_cache["data"] = None
-    md._sector_perf_cache["ts"] = 0.0
-    md._sector_perf_cache["key"] = ""
+    caches._sector_perf_cache["data"] = None
+    caches._sector_perf_cache["ts"] = 0.0
+    caches._sector_perf_cache["key"] = ""
 
 
 def _reset_corr_cache() -> None:
-    import market_data as md
+    from market_data import caches
 
-    md._corr_matrix_cache["data"] = None
-    md._corr_matrix_cache["ts"] = 0.0
-    md._corr_matrix_cache["key"] = ""
+    caches._corr_matrix_cache["data"] = None
+    caches._corr_matrix_cache["ts"] = 0.0
+    caches._corr_matrix_cache["key"] = ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,7 +211,7 @@ def test_sector_performance(monkeypatch) -> None:
     """Sector grid uses ``yf.download`` closes; two ETFs → +10% first→last."""
     import market_data as md
 
-    monkeypatch.setattr(md, "_SECTOR_ETFS", {"Tech": "XLK", "Finance": "XLF"})
+    monkeypatch.setattr("market_data.sectors._SECTOR_ETFS", {"Tech": "XLK", "Finance": "XLF"})
     _reset_sector_cache()
 
     idx = pd.date_range("2026-01-01", periods=10, freq="D")
@@ -234,7 +234,7 @@ def test_sector_performance_fail_silent(monkeypatch) -> None:
 
     import market_data as md
 
-    monkeypatch.setattr(md, "_SECTOR_ETFS", {"Tech": "XLK", "Finance": "XLF"})
+    monkeypatch.setattr("market_data.sectors._SECTOR_ETFS", {"Tech": "XLK", "Finance": "XLF"})
     _reset_sector_cache()
     monkeypatch.setattr(md.yf, "download", _boom)
     out = md.fetch_sector_performance(["5d"])
