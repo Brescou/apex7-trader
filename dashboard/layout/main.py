@@ -87,6 +87,7 @@ def setup_layout() -> None:
                     dcc.Store(id="screener-active-store", data=False),
                     dcc.Store(id="cli-history-store", data=[]),
                     dcc.Store(id="cli-history-pos", data=-1),
+                    dcc.Store(id="cli-keyboard-event", data=None),
                     dcc.Interval(id="check-alerts-interval", interval=10000, n_intervals=0),
                     dcc.Interval(id="sector-heatmap-interval", interval=300000, n_intervals=0),
                     # ── TOP NAV BAR (30px) ──────────────────────────────────
@@ -195,10 +196,10 @@ def setup_layout() -> None:
                                 children=[
                                     dmc.TabsList(
                                         [
-                                            dmc.Tab("LIVE", value="live"),
-                                            dmc.Tab("ANALYTICS", value="analytics"),
-                                            dmc.Tab("BACKTEST", value="backtest"),
-                                            dmc.Tab("TERMINAL", value="terminal"),
+                                            dmc.TabsTab("LIVE", value="live"),
+                                            dmc.TabsTab("ANALYTICS", value="analytics"),
+                                            dmc.TabsTab("BACKTEST", value="backtest"),
+                                            dmc.TabsTab("TERMINAL", value="terminal"),
                                         ],
                                     ),
                                 ],

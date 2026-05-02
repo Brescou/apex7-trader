@@ -74,6 +74,17 @@ app.index_string = """<!DOCTYPE html>
 <body>
   {%app_entry%}
   <footer>{%config%}{%scripts%}{%renderer%}</footer>
+  <script>
+  document.addEventListener('keydown', function(e) {
+    var el = document.activeElement;
+    if (el && el.id === 'cli-input' && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      try {
+        window.dash_clientside.set_props('cli-keyboard-event', {data: {key: e.key, ts: Date.now()}});
+      } catch(_) {}
+    }
+  });
+  </script>
 </body>
 </html>"""
 

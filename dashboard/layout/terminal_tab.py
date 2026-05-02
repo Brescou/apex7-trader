@@ -1,11 +1,11 @@
 """APEX-7 — Terminal tab: CLI interface + hidden market data DOM."""
 
+import dash_mantine_components as dmc
 from dash import dcc, html
 
 from agents.shared.watchlist import get_watchlist
 from dashboard.server import (
     BG_DEEP,
-    BORDER,
     BORDER_INNER,
     FONT,
     GREEN,
@@ -27,8 +27,6 @@ def _cli_line(src: str, src_class: str, body: str) -> html.Div:
 
 def _tab_terminal() -> html.Div:
     _wl = get_watchlist()
-
-    # ── CLI terminal section ─────────────────────────────────────────────────
     _hints = [
         "help",
         "status",
@@ -44,7 +42,7 @@ def _tab_terminal() -> html.Div:
         style={
             "display": "flex",
             "flexDirection": "column",
-            "height": "calc(100vh - 60px)",
+            "height": "calc(100vh - 30px)",
             "background": BG_DEEP,
             "overflow": "hidden",
         },
@@ -80,16 +78,19 @@ def _tab_terminal() -> html.Div:
                     ),
                     html.Span(
                         id="cli-clock",
-                        style={"fontSize": "7px", "color": TEXT_GHOST, "marginLeft": "auto"},
+                        style={
+                            "fontSize": "7px",
+                            "color": TEXT_GHOST,
+                            "marginLeft": "auto",
+                        },
                     ),
                 ],
             ),
             # Scrollable output
-            html.Div(
+            dmc.ScrollArea(
                 id="cli-output",
                 style={
                     "flex": "1",
-                    "overflowY": "auto",
                     "padding": "2px 0",
                     "fontSize": "9px",
                     "lineHeight": "1.75",
@@ -148,7 +149,7 @@ def _tab_terminal() -> html.Div:
                                 n_clicks=0,
                                 style={
                                     "background": "none",
-                                    "border": f"1px solid {BORDER}",
+                                    "border": f"1px solid {BORDER_INNER}",
                                     "color": TEXT_GHOST,
                                     "fontFamily": FONT,
                                     "fontSize": "7px",

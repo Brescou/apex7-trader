@@ -1,76 +1,31 @@
-"""APEX-7 — CLI terminal callbacks + nav bar tab routing."""
+"""APEX-7 — CLI terminal callbacks. DMC Tabs handles nav routing."""
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from dash import Input, Output, State, callback, ctx, html
+from dash import Input, Output, State, callback, clientside_callback, ctx, html
 
 from dashboard.server import (
+    FONT,
     GREEN,
     ORANGE,
     TEXT_FAINT,
-    TEXT_MAIN,
-    FONT,
 )
 
-_TABS = ["live", "analytics", "backtest", "terminal"]
 
-_TAB_BASE = {
-    "position": "relative",
-    "display": "flex",
-    "alignItems": "center",
-    "padding": "0 18px",
-    "fontSize": "9px",
-    "letterSpacing": "0.16em",
-    "fontWeight": "600",
-    "color": TEXT_FAINT,
-    "cursor": "pointer",
-    "border": "none",
-    "borderBottom": "2px solid transparent",
-    "background": "none",
-    "fontFamily": FONT,
-    "height": "100%",
-    "transition": "color 0.12s",
-    "whiteSpace": "nowrap",
-}
-
-_TAB_ACTIVE = {
-    **_TAB_BASE,
-    "color": TEXT_MAIN,
-    "borderBottom": f"2px solid {GREEN}",
-}
-
-
-# ── Nav tab click → update main-tabs + button styles ────────────────────────
+# ── CLI clock ─────────────────────────────────────────────────────────────────
 
 
 @callback(
-    Output("main-tabs", "value"),
-    Output("nav-tab-live", "style"),
-    Output("nav-tab-analytics", "style"),
-    Output("nav-tab-backtest", "style"),
-    Output("nav-tab-terminal", "style"),
-    Input("nav-tab-live", "n_clicks"),
-    Input("nav-tab-analytics", "n_clicks"),
-    Input("nav-tab-backtest", "n_clicks"),
-    Input("nav-tab-terminal", "n_clicks"),
-    prevent_initial_call=True,
+    Output("cli-clock", "children"),
+    Input("tick", "n_intervals"),
 )
-def _nav_tab_click(n_live, n_analytics, n_backtest, n_terminal):
-    triggered = ctx.triggered_id
-    mapping = {
-        "nav-tab-live": "live",
-        "nav-tab-analytics": "analytics",
-        "nav-tab-backtest": "backtest",
-        "nav-tab-terminal": "terminal",
-    }
-    tab = mapping.get(triggered, "live")
-    styles = [_TAB_ACTIVE if f"nav-tab-{t}" == triggered else _TAB_BASE for t in _TABS]
-    return (tab, *styles)
+def _cli_clock(n):
+    return datetime.now().strftime("%H:%M:%S")
 
 
-# ── SIM toggle → mode-radio ──────────────────────────────────────────────────
+# ── SIM toggle → mode-radio ───────────────────────────────────────────────────
 
 
 @callback(
@@ -132,24 +87,12 @@ def _sim_toggle(n_clicks, current_mode):
             "display": "inline-block",
             "marginRight": "4px",
             "animation": "blink 1.1s infinite",
-            "className": "sim-led-blink",
         }
         label = "● SIMULATION"
     return new_mode, btn_style, led_style, label
 
 
-# ── CLI clock ────────────────────────────────────────────────────────────────
-
-
-@callback(
-    Output("cli-clock", "children"),
-    Input("tick", "n_intervals"),
-)
-def _cli_clock(n):
-    return datetime.now().strftime("%H:%M:%S")
-
-
-# ── CLI hint buttons → fill input ────────────────────────────────────────────
+# ── CLI hint buttons → fill input ─────────────────────────────────────────────
 
 
 @callback(
@@ -175,11 +118,10 @@ def _cli_hint(*args):
     return ""
 
 
-# ── CLI command parsing ──────────────────────────────────────────────────────
+# ── CLI command parsing ───────────────────────────────────────────────────────
 
 
-def _parse_cli_command(raw: str, portfolio_info: dict | None = None) -> list[html.Div]:
-    """Parse a CLI command and return output lines."""
+def _parse_cli_command(raw: str) -> list[html.Div]:
     parts = raw.strip().lower().split()
     if not parts:
         return []
@@ -204,21 +146,23 @@ def _parse_cli_command(raw: str, portfolio_info: dict | None = None) -> list[htm
                     [
                         "Available commands: ",
                         html.Span(
-                            "help · status · positions · portfolio · agents · buy [SYM] [QTY] · sell [SYM] [QTY] · clear",
+                            "help · status · positions · portfolio · agents"
+                            " · buy [SYM] [QTY] · sell [SYM] [QTY] · clear",
                             style={"color": GREEN},
                         ),
                     ]
                 ),
             ),
         ]
+
     if cmd == "status":
         try:
-            from dashboard.controller import _controller_lock, _ctrl, _state
             from agents.shared.nodes import get_runtime_mode
+            from dashboard.controller import _controller_lock, _ctrl
 
             with _controller_lock:
                 cycle = _ctrl.get("cycle", 0)
-                mode = get_runtime_mode()
+            mode = get_runtime_mode()
             return [
                 _line(
                     "SYS",
@@ -270,7 +214,8 @@ def _parse_cli_command(raw: str, portfolio_info: dict | None = None) -> list[htm
                                 [
                                     f"  {sym} · {sh:.4f}sh · avg=${avg:.2f} · cur=${cur:.2f} · ",
                                     html.Span(
-                                        f"{'+'if pnl>=0 else ''}{pnl:.1f}%", style={"color": color}
+                                        f"{'+'if pnl>=0 else ''}{pnl:.1f}%",
+                                        style={"color": color},
                                     ),
                                 ]
                             ),
@@ -316,7 +261,8 @@ def _parse_cli_command(raw: str, portfolio_info: dict | None = None) -> list[htm
                             [
                                 "  P&L: ",
                                 html.Span(
-                                    f"{'+'if pnl>=0 else ''}{pnl:+.2f}", style={"color": color}
+                                    f"{'+'if pnl>=0 else ''}{pnl:+.2f}",
+                                    style={"color": color},
                                 ),
                             ]
                         ),
@@ -399,41 +345,44 @@ def _parse_cli_command(raw: str, portfolio_info: dict | None = None) -> list[htm
     ]
 
 
-# ── CLI submit (n_submit) → append output ────────────────────────────────────
+# ── CLI submit → append output + update history ────────────────────────────────
 
 
 @callback(
     Output("cli-output", "children"),
     Output("cli-input", "value", allow_duplicate=True),
+    Output("cli-history-store", "data"),
+    Output("cli-history-pos", "data"),
     Input("cli-input", "n_submit"),
     State("cli-input", "value"),
     State("cli-output", "children"),
+    State("cli-history-store", "data"),
     prevent_initial_call=True,
 )
-def _cli_submit(n_submit, cmd_raw, current_lines):
+def _cli_submit(n_submit, cmd_raw, current_lines, history):
     if not cmd_raw or not cmd_raw.strip():
-        return current_lines, ""
+        return current_lines, "", history, -1
 
     cmd = cmd_raw.strip()
     if current_lines is None:
         current_lines = []
 
     if cmd.lower() == "clear":
-        return [], ""
+        return [], "", history, -1
 
-    # Echo line
+    new_history = list(history or [])
+    if not new_history or new_history[-1] != cmd:
+        new_history.append(cmd)
+    if len(new_history) > 100:
+        new_history = new_history[-100:]
+
     echo = html.Div(
         className="cli-line",
         children=[
             html.Span(datetime.now().strftime("%H:%M:%S"), className="cli-ts"),
             html.Span("[USR]", className="cli-src tc-g"),
             html.Span(
-                html.Span(
-                    [
-                        html.Span("$ ", style={"color": GREEN}),
-                        cmd,
-                    ]
-                ),
+                html.Span([html.Span("$ ", style={"color": GREEN}), cmd]),
                 className="cli-body",
             ),
         ],
@@ -441,8 +390,42 @@ def _cli_submit(n_submit, cmd_raw, current_lines):
 
     response_lines = _parse_cli_command(cmd)
     new_lines = list(current_lines) + [echo] + response_lines
-    # Keep last 500 lines to avoid memory blowup
     if len(new_lines) > 500:
         new_lines = new_lines[-500:]
 
-    return new_lines, ""
+    return new_lines, "", new_history, -1
+
+
+# ── CLI ↑↓ history navigation (clientside) ────────────────────────────────────
+
+clientside_callback(
+    """
+    function(event, currentVal, history, pos) {
+        if (!event || !event.key) {
+            return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+        }
+        var key = event.key;
+        if (key !== 'ArrowUp' && key !== 'ArrowDown') {
+            return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+        }
+        if (!history || history.length === 0) {
+            return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+        }
+        var newPos;
+        if (key === 'ArrowUp') {
+            newPos = Math.min(pos + 1, history.length - 1);
+        } else {
+            newPos = Math.max(pos - 1, -1);
+        }
+        var cmd = newPos === -1 ? '' : history[history.length - 1 - newPos];
+        return [cmd || '', newPos];
+    }
+    """,
+    Output("cli-input", "value", allow_duplicate=True),
+    Output("cli-history-pos", "data"),
+    Input("cli-keyboard-event", "data"),
+    State("cli-input", "value"),
+    State("cli-history-store", "data"),
+    State("cli-history-pos", "data"),
+    prevent_initial_call=True,
+)
