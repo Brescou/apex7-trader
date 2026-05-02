@@ -937,6 +937,24 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         market_intel = arb.get("market_intel", "")
         dissenting = arb.get("dissenting_agents", dissenting)
 
+        # Deterministic risk veto applied AFTER the LLM has spoken.
+        # The pre-LLM penalty (BUY * 0.15) only nudges the composite score —
+        # the LLM can still emit ``action=BUY``. This override is the
+        # last line of defence for capital preservation. (Review v5 Finding 4.1)
+        if final_action == "BUY" and risk_score > 8:
+            logger.warning(
+                "RISK VETO (post-LLM): forcing HOLD (risk_score=%s > 8)",
+                risk_score,
+            )
+            final_action = "HOLD"
+            composite_conf = 0.3
+            logs.append(
+                _entry(
+                    "arbitrate: RISK VETO (post-LLM) — forced HOLD",
+                    "warning",
+                )
+            )
+
     arbitration = {
         "action": final_action,
         "symbol": symbol,
