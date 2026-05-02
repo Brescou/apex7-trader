@@ -38,7 +38,7 @@
 - `EVAL_HORIZON_DAYS` (5) / `EVAL_HORIZON_CALENDAR_DAYS` (7) in `config.py`.
 - `dashboard/controller.py` postmortem thread now calls `evaluate_pending_trades(now)` every 60 s (skipped in SIM).
 - `_compute_dynamic_weights`: graceful warm-up — pure static `WEIGHTS` while no agent has ≥ `_MIN_EVALUATED_VOTES` (5) evaluated votes; thread-safe via `_weights_lock`.
-- Dashboard: AGENTS tab shows EVAL `{N}/{M}` and STATUS `⏳ Calibrating` / `✓ Market-validated`; LIVE tab Track Records show `⏳ {N pending}` / `✓` per agent.
+- Dashboard: LIVE specialist cards show `_live_agent_eval_banner` / `_agent_eval_metrics` (`dashboard/layout/helpers.py`); ANALYTICS tab includes **Trade postmortem**; LIVE tab Track Records show `⏳ {N pending}` / `✓` per agent.
 - Tests: `test_pending_evaluations.py`, `test_evaluate_pending.py`, `test_dynamic_weights.py`, `test_was_correct.py` (26 tests total).
 
 #### Removed
@@ -57,12 +57,24 @@
 
 #### Changed
 - `EVERY` LLM-bound branch in `agents/multi.py` and `agents/shared/nodes.py` now gated by `_no_llm_mode()` so paper reuses the rule-based `sim_*` decision nodes — only `fetch_data_node` keeps the LIVE branch in PAPER.
-- `dashboard/callbacks/agents.py` and `heatmap.py`: replaced raw `sqlite3.connect(DB_PATH)` with `_db_read()` / `_load_*` helpers so all tabs follow the active mode's DB.
+- `dashboard/callbacks/` loaders use `_db_read()` / `_load_*` helpers so tabs follow the active mode's DB.
 - `set_simulation_mode()` and `set_paper_mode()` now mutually exclusive — switching one clears the other and persists both flags to `.env`.
 - `trades_paper.db` added to `.gitignore` and `.dockerignore`.
 
 ### CI / coverage
 - Test count: **131 passing** (was 80 at sprint start).
+
+### Dashboard consolidation — Sprint Features v2
+
+#### Removed
+- HEATMAP tab and `dashboard/callbacks/heatmap.py`.
+- LEADERBOARD tab, root `leaderboard.py`, `dashboard/callbacks/leaderboard_tab.py`, and GBM-only `BacktestEngine` from `core/backtest.py` (functional `run_backtest` / `compare_strategies` / `fetch_historical` / `compute_indicators` retained).
+- AGENTS tab, `dashboard/callbacks/agents.py`, and `agents-tick` interval.
+
+#### Changed
+- **Four tabs**: LIVE, ANALYTICS, BACKTEST, TERMINAL — static divs `tab-live`, `tab-analytics`, `tab-backtest`, `tab-terminal`; `_show_tab` routing in `dashboard/callbacks/live.py`.
+- ANALYTICS: **Trade postmortem** block under KPI/charts/table (`_load_postmortem`, columns date / symbol / entry / exit / P&L / lesson).
+- LIVE: each specialist card shows accuracy + calibration via `_live_agent_eval_banner` + `_agent_eval_metrics` in `dashboard/layout/helpers.py`.
 
 ## [2026-04-12] — Remediation Sprint (Full)
 
@@ -149,7 +161,7 @@
 - `dashboard/callbacks/terminal.py`: `_update_macro_bar` — each macro bloc now includes 80×30px mini sparkline chart
 - `dashboard/callbacks/terminal.py`: `_run_screener` — now returns 3-tuple to 3 outputs (`children`, `screener-results-store`, `screener-active-store`)
 - `dashboard/callbacks/terminal.py`: `_tab_terminal()` fully rewritten — 65/35 column split, 64px macro bar, 2-column symbol card grid, news feed panel (`news-feed-content`), chart overlay panel (`chart-overlay-content`), compact screener section
-- `dashboard/callbacks/analytics.py` + `agents.py`: added `State("main-tabs", "value")` + `no_update` guard (skip computation when tab not active)
+- `dashboard/callbacks/analytics.py`: added `State("main-tabs", "value")` + `no_update` guard (skip computation when tab not active)
 - `dashboard/callbacks/heatmap.py`: fixed deprecated Plotly `titlefont` → `title=dict(text=..., font=dict(...))`
 - `market_data.fetch_news()`: fixed yfinance API format — title now read from `item['content']['title']` with fallback to `item['title']`; source, url, pubDate extracted from `content` dict
 - `core/data.py`: fixed `save_state()` TypeError — `path = str(path or PORTFOLIO_STATE_PATH)` (was failing with `PosixPath` argument)

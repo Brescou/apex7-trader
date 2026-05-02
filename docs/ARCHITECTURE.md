@@ -7,7 +7,6 @@ apex7-trader/
 ├── main.py
 ├── config.py
 ├── market_data.py
-├── leaderboard.py
 ├── pyproject.toml
 ├── langgraph.json
 ├── README.md → docs/README.md
@@ -23,7 +22,7 @@ apex7-trader/
 ├── core/
 │   ├── __init__.py
 │   ├── data.py            ← Portfolio, LiveFeed
-│   ├── backtest.py        ← BacktestEngine, run_backtest
+│   ├── backtest.py        ← run_backtest, compare_strategies
 │   ├── indicators.py      ← Shared RSI implementation
 │   └── registry.py        ← graph builder + UI metadata (single graph)
 ├── dashboard/
@@ -44,9 +43,6 @@ apex7-trader/
 │       ├── live.py
 │       ├── analytics.py
 │       ├── backtest_tab.py
-│       ├── leaderboard_tab.py
-│       ├── heatmap.py
-│       ├── agents.py
 │       └── terminal.py
 ├── docs/
 │   ├── ARCHITECTURE.md  (this file)
@@ -326,16 +322,13 @@ CREATE TABLE postmortem (
 
 ### Tab architecture
 
-All 7 tab content divs are always present in the DOM (`id` = `tab-live`, `tab-analytics`, `tab-backtest`, `tab-leaderboard`, `tab-heatmap`, `tab-agents`, `tab-terminal`). Visibility is toggled via CSS `display` by the `_show_tab` callback in `dashboard/callbacks/live.py` — no HTML reconstruction on tab switch.
+Four tab content divs are always present in the DOM (`id` = `tab-live`, `tab-analytics`, `tab-backtest`, `tab-terminal`). Visibility is toggled via CSS `display` by the `_show_tab` callback in `dashboard/callbacks/live.py` — no HTML reconstruction on tab switch.
 
 | Tab | Content | Refresh |
 |-----|---------|---------|
-| LIVE | Portfolio value, agent state, equity curve, activity log, agent cards (multi mode), Track Records badges | 2s interval |
-| ANALYTICS | KPI row, 4 charts, full trade table | 30s + manual; `no_update` guard when tab not active |
+| LIVE | Portfolio value, agent state, equity curve, activity log, agent cards (multi mode, incl. eval banner per specialist), Track Records badges | 2s interval |
+| ANALYTICS | KPI row, 4 charts, full trade table, **Trade postmortem** (`postmortem` SQLite via `_load_postmortem`) | 30s + manual; `no_update` guard when tab not active |
 | BACKTEST | Symbol input, period dropdown, strategy selector (simple/multi), RUN BACKTEST button; KPI row (return, vs benchmark, win rate, max drawdown, Sharpe); equity curve with SPY benchmark overlay and BUY/SELL trade markers; trade log table with P&L per row | on button click |
-| LEADERBOARD | Scenario selector, ranked agent comparison table | on button click |
-| HEATMAP | Per-symbol return heatmap + trade frequency matrix | on button click |
-| AGENTS | Per-agent accuracy, confidence, win-rate comparison table; `no_update` guard when tab not active | on button click |
 | TERMINAL | 65/35 split: left = 64px macro bar + 2-col symbol cards; right = chart overlay panel + news feed panel + compact screener | macro: 60s, watchlist: 10s, news: 120s |
 
 ### Terminal tab components
@@ -380,6 +373,7 @@ All 7 tab content divs are always present in the DOM (`id` = `tab-live`, `tab-an
 
 Agent cards panel (LIVE tab):
 - TECH (blue), ANLST (green), RISK (orange), MACRO (purple) — each collapsible
+- Each card body starts with `_live_agent_eval_banner(_agent_eval_metrics(...))` (win rate + calibrating vs market-validated when ≥ 5 evaluated votes)
 - ARBITRATION card always visible below agent cards
 
 Agent Track Records badges (LIVE tab):
@@ -419,14 +413,12 @@ Key methods:
 | `save_state(path)` | Serializes cash/positions/history/peak_value to JSON |
 | `load_state(path)` | Restores state from JSON (no-op if file absent) |
 
-### `BacktestEngine` and functional API (`backtest.py`)
+### Historical backtest (`backtest.py`)
 
-Self-contained engine — no LLM calls, deterministic rules only. Two interfaces:
-
-**Functional API (Sprint 4, primary):**
+No LLM calls — deterministic rules on real yfinance OHLCV data.
 
 ```python
-from backtest import fetch_historical, compute_indicators, run_backtest, compare_strategies
+from core.backtest import fetch_historical, compute_indicators, run_backtest, compare_strategies
 
 df = fetch_historical("AAPL", period="6mo", interval="1d")  # yfinance OHLCV DataFrame
 df = compute_indicators(df)   # adds RSI_14, MA_20, MA_50, MACD, BB_upper, BB_lower
@@ -438,28 +430,6 @@ both = compare_strategies("AAPL", period="6mo")  # runs both "simple" and "multi
 ```
 
 Strategies: `"simple"` (RSI<30 → BUY, RSI>70 → SELL), `"multi"` (same + simulated majority vote TECH+ANLST).
-
-**Class-based API (legacy, still present):**
-
-```python
-engine = BacktestEngine(scenario="Bull Market", config={"max_alloc_pct": 25})
-result = engine.run(n_cycles=100)
-# result keys: return_pct, sharpe, max_drawdown, win_rate, survived,
-#              portfolio_history, trades_count, trade_log
-```
-
-4 built-in GBM scenarios: Bull Market (+0.0005 drift / 0.020 vol), Bear Market (−0.0003 / 0.025), High Volatility (0.0 / 0.050), Flat Market (0.0 / 0.005).
-
-### `Leaderboard` (`leaderboard.py`)
-
-Runs `BacktestEngine` for 4 allocation strategies over 80 cycles and ranks by return_pct:
-
-| Agent ID | max_alloc_pct |
-|----------|--------------|
-| CONSERVATIVE | 15% |
-| BALANCED | 25% |
-| AGGRESSIVE | 40% |
-| APEX-7 | `MAX_ALLOC_PCT` (config) |
 
 ### `LiveFeed` (`data.py`)
 

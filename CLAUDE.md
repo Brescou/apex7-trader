@@ -39,7 +39,6 @@ apex7-trader/
 ├── main.py
 ├── config.py
 ├── market_data.py
-├── leaderboard.py
 ├── pyproject.toml
 ├── langgraph.json
 ├── README.md             ← symlink → docs/README.md (tracked: docs/README.md)
@@ -55,7 +54,7 @@ apex7-trader/
 ├── core/
 │   ├── __init__.py
 │   ├── data.py            ← Portfolio, LiveFeed
-│   ├── backtest.py        ← BacktestEngine, run_backtest
+│   ├── backtest.py        ← run_backtest, compare_strategies (yfinance history)
 │   ├── indicators.py      ← Shared RSI implementation
 │   └── registry.py        ← single graph builder + UI metadata
 ├── dashboard/
@@ -73,12 +72,9 @@ apex7-trader/
 │   │   └── emotions.py
 │   └── callbacks/
 │       ├── __init__.py    ← imports all callback modules
-│       ├── live.py        ← live tab + tab routing
-│       ├── analytics.py   ← analytics tab
+│       ├── live.py        ← live tab + tab routing (4 tabs)
+│       ├── analytics.py   ← analytics tab (+ trade postmortem section)
 │       ├── backtest_tab.py← backtest tab
-│       ├── leaderboard_tab.py ← leaderboard tab
-│       ├── heatmap.py     ← heatmap tab
-│       ├── agents.py      ← agents tab
 │       └── terminal.py    ← terminal tab (16 callbacks)
 ├── docs/
 │   ├── ARCHITECTURE.md
@@ -115,7 +111,7 @@ together here for clarity. ``trades_paper.db`` was added in sprint v1.)
 - `agents/` — apex7-senior-back
 - `core/` — apex7-senior-back
 - `dashboard/` — apex7-senior-front
-- `config.py`, `leaderboard.py`, `market_data.py` — apex7-senior-back
+- `config.py`, `market_data.py` — apex7-senior-back
 
 ## Architecture
 
@@ -128,13 +124,13 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `main.py` | Entrypoint — calls `create_app().run()` |
 | `dashboard/controller.py` | Agent loop thread, portfolio init, postmortem thread |
 | `dashboard/layout/` | Dash layout package — `main.py` sets `app.layout`; tab modules + helpers |
-| `dashboard/callbacks/` | All `@app.callback` handlers (7 modules) |
+| `dashboard/callbacks/` | All `@app.callback` handlers (`live`, `analytics`, `backtest_tab`, `terminal`) |
 | `agents/multi.py` | Unique LangGraph: 4 specialized agents + arbitration + `run_daily_postmortem()` |
 | `agents/shared/state.py` | `AgentState`, `MultiAgentState` TypedDicts |
 | `agents/shared/nodes.py` | Shared nodes: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`; also `_llm()` helper, `_db_write()`, simulation engine |
 | `agents/shared/schemas.py` | Pydantic validation models for LLM decision outputs |
 | `core/data.py` | `Portfolio` — thread-safe state; `LiveFeed` — multi-symbol yfinance wrapper |
-| `core/backtest.py` | `BacktestEngine` + functional API (`run_backtest`, `compare_strategies`) |
+| `core/backtest.py` | Functional API (`fetch_historical`, `compute_indicators`, `run_backtest`, `compare_strategies`) |
 | `core/indicators.py` | Shared `rsi()` implementation used across agents, backtest, and market_data |
 | `core/registry.py` | Single `get_graph(p)` + `get_graph_info()` UI metadata |
 | `config.py` | All constants, loaded from `.env` |
@@ -300,7 +296,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`USE_LIVEFEED=False` in tests** — set via env or config override to avoid yfinance rate limiting during test runs.
 - **`portfolio_state.json` created on first run** — added to `.gitignore`, do not commit.
 - **`PORTFOLIO_SAVE_ENABLED=True` by default** — set to `False` in unit tests to avoid disk writes.
-- **`dashboard/callbacks/__init__.py` must import all callback modules** — `live`, `analytics`, `backtest_tab`, `leaderboard_tab`, `heatmap`, `agents`, `terminal` must all be imported. If any are missing, those `@app.callback` decorators are never registered and the corresponding UI updates silently fail.
+- **`dashboard/callbacks/__init__.py` must import all callback modules** — `live`, `analytics`, `backtest_tab`, `terminal` must all be imported. If any are missing, those `@app.callback` decorators are never registered and the corresponding UI updates silently fail.
 - **`agents/` → `dashboard/` import direction is forbidden** — `agents/shared/nodes.py` imports from `core.data`. Never import from `dashboard` in any `agents/` file. This violates the one-way dependency rule (dashboard depends on agents/core, not the reverse).
 - **Lazy DB init** — `_init_db()` is no longer called at import time. It runs lazily on first `_db_write`/`_db_read`/`_db_write_multi` call via `_ensure_db()`. Importing `agents/shared/nodes.py` no longer creates SQLite tables. Importing `dashboard/controller.py` does not create a `Portfolio` until `start_controller()` is called explicitly. Importing `agents/multi.py` compiles the LangGraph graph at module level (for LangGraph Studio compatibility).
 - **RSI computed in `core/indicators.py`** — a single canonical `rsi()` function. Do not re-implement RSI elsewhere.
@@ -320,7 +316,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`pending_evaluations` retry policy** — rows are flagged `evaluated=1` even when the verdict is inconclusive (move below `EVAL_SIGNIFICANCE_PCT`) to prevent infinite retries. The only path back to `evaluated=0` is when `_fast_last_price` returns `None` (network/quote unavailable) — those rows are retried at the next tick.
 - **Dynamic weights graceful warm-up** — `_compute_dynamic_weights` returns the static `WEIGHTS` dict verbatim while no agent has ≥ `_MIN_EVALUATED_VOTES` (5) evaluated votes. Holding `_weights_lock` (threading.Lock) during cache check + DB read prevents thundering-herd recomputation.
 - **Postmortem thread also runs `evaluate_pending_trades`** — every 60 s tick, regardless of `POSTMORTEM_HOUR`. Skipped under SIM mode (random-walk prices would corrupt `was_correct`); runs under LIVE and PAPER.
-- **Raw `sqlite3.connect` removed from dashboard callbacks** — `dashboard/callbacks/agents.py` and `dashboard/callbacks/heatmap.py` now go through `_db_read()` / `_load_*()` helpers so they follow the active DB path. Do not reintroduce `sqlite3.connect(DB_PATH)` outside `agents/shared/nodes.py`.
+- **Raw `sqlite3.connect` removed from dashboard** — layout/helpers and callbacks use `_db_read()` / `_load_*()` helpers so tabs follow the active DB path. Do not reintroduce `sqlite3.connect(DB_PATH)` outside `agents/shared/nodes.py`.
 - **`agent_memory.trace_id` invariant** — must exist in `_SCHEMA` AND be written by `_record_vote`. If either is missing, `evaluate_pending_trades` silently fails (UPDATE matches zero rows) and `was_correct` stays NULL forever. The regression guard is `tests/test_smoke.py::test_agent_memory_has_trace_id`.
 
 ## Code conventions
