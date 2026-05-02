@@ -4,5 +4,6 @@ from dashboard.callbacks import live
 from dashboard.callbacks import analytics
 from dashboard.callbacks import backtest_tab
 from dashboard.callbacks import terminal
+from dashboard.callbacks import cli
 
-__all__ = ["live", "analytics", "backtest_tab", "terminal"]
+__all__ = ["live", "analytics", "backtest_tab", "terminal", "cli"]

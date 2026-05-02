@@ -1,651 +1,251 @@
-"""APEX-7 — Terminal tab layout skeleton."""
+"""APEX-7 — Terminal tab: CLI interface + hidden market data DOM."""
 
 from dash import dcc, html
 
-from dashboard.layout.helpers import _section_label
+from agents.shared.watchlist import get_watchlist
 from dashboard.server import (
-    BG_CARD,
     BG_DEEP,
-    BG_HOVER,
-    BLUE,
     BORDER,
+    BORDER_INNER,
     FONT,
     GREEN,
-    PURPLE,
-    TEXT_DIM,
-    TEXT_MAIN,
+    TEXT_FAINT,
+    TEXT_GHOST,
 )
 
 
-def _tab_terminal() -> html.Div:
-    _input_style = {
-        "background": BG_DEEP,
-        "border": f"1px solid {BORDER}",
-        "color": TEXT_MAIN,
-        "fontFamily": FONT,
-        "fontSize": "11px",
-        "padding": "5px 9px",
-        "borderRadius": "3px",
-        "outline": "none",
-        "width": "140px",
-    }
-    _btn_style = {
-        "background": "transparent",
-        "border": f"1px solid {GREEN}",
-        "color": GREEN,
-        "fontFamily": FONT,
-        "fontSize": "10px",
-        "letterSpacing": "0.1em",
-        "padding": "5px 12px",
-        "cursor": "pointer",
-        "borderRadius": "3px",
-        "flexShrink": "0",
-    }
-    _alert_input_style = {
-        "background": BG_DEEP,
-        "border": f"1px solid {BORDER}",
-        "color": TEXT_MAIN,
-        "fontFamily": FONT,
-        "fontSize": "11px",
-        "padding": "5px 9px",
-        "borderRadius": "3px",
-        "outline": "none",
-        "width": "90px",
-    }
+def _cli_line(src: str, src_class: str, body: str) -> html.Div:
     return html.Div(
-        [
-            # ── A) Macro Header Bar (64px, full width) ────────────────────────────
-            html.Div(
-                [
-                    html.Div(
-                        id="macro-bar-content",
-                        style={
-                            "display": "flex",
-                            "alignItems": "center",
-                            "gap": "0",
-                            "flex": "1",
-                        },
-                    ),
-                ],
-                style={
-                    "background": BG_HOVER,
-                    "borderBottom": f"1px solid {BORDER}",
-                    "padding": "0 18px",
-                    "height": "64px",
-                    "display": "flex",
-                    "alignItems": "center",
-                    "flexShrink": "0",
-                },
-            ),
-            # ── B) 2-column layout (65% / 35%) ───────────────────────────────────
-            html.Div(
-                [
-                    # Left column (65%)
-                    html.Div(
-                        [
-                            # C) Watchlist header + ADD input + card grid
-                            html.Div(
-                                [
-                                    _section_label("WATCHLIST"),
-                                    html.Div(
-                                        [
-                                            dcc.Input(
-                                                id="watchlist-add-input",
-                                                placeholder="Symbol (e.g. NVDA)",
-                                                debounce=False,
-                                                style=_input_style,
-                                            ),
-                                            html.Button(
-                                                "ADD",
-                                                id="btn-watchlist-add",
-                                                n_clicks=0,
-                                                style=_btn_style,
-                                            ),
-                                            html.Button(
-                                                "COMPARE",
-                                                id="btn-compare",
-                                                n_clicks=0,
-                                                style={
-                                                    "background": "transparent",
-                                                    "border": f"1px solid {BLUE}",
-                                                    "color": BLUE,
-                                                    "fontFamily": FONT,
-                                                    "fontSize": "10px",
-                                                    "letterSpacing": "0.1em",
-                                                    "padding": "5px 10px",
-                                                    "cursor": "pointer",
-                                                    "borderRadius": "3px",
-                                                    "flexShrink": "0",
-                                                },
-                                            ),
-                                            html.Button(
-                                                "CSV",
-                                                id="btn-export-csv",
-                                                n_clicks=0,
-                                                style={
-                                                    "background": "transparent",
-                                                    "border": f"1px solid {BORDER}",
-                                                    "color": TEXT_DIM,
-                                                    "fontFamily": FONT,
-                                                    "fontSize": "10px",
-                                                    "letterSpacing": "0.1em",
-                                                    "padding": "5px 10px",
-                                                    "cursor": "pointer",
-                                                    "borderRadius": "3px",
-                                                    "flexShrink": "0",
-                                                },
-                                            ),
-                                            dcc.Download(id="csv-download"),
-                                        ],
-                                        style={
-                                            "display": "flex",
-                                            "gap": "8px",
-                                            "marginBottom": "10px",
-                                            "alignItems": "center",
-                                            "flexWrap": "wrap",
-                                        },
-                                    ),
-                                    html.Div(id="watchlist-chips", style={"display": "none"}),
-                                    html.Div(
-                                        id="compare-panel",
-                                        style={"display": "none"},
-                                        children=[
-                                            html.Div(
-                                                [
-                                                    html.Div(
-                                                        [
-                                                            html.Div(
-                                                                "SYMBOLS",
-                                                                style={
-                                                                    "fontSize": "9px",
-                                                                    "color": TEXT_DIM,
-                                                                    "letterSpacing": "0.1em",
-                                                                    "marginBottom": "4px",
-                                                                },
-                                                            ),
-                                                            dcc.Checklist(
-                                                                id="compare-symbols",
-                                                                options=[],
-                                                                value=[],
-                                                                inline=True,
-                                                                style={
-                                                                    "fontSize": "11px",
-                                                                    "color": TEXT_MAIN,
-                                                                    "display": "flex",
-                                                                    "flexWrap": "wrap",
-                                                                    "gap": "8px",
-                                                                },
-                                                                labelStyle={
-                                                                    "display": "flex",
-                                                                    "alignItems": "center",
-                                                                    "gap": "3px",
-                                                                    "cursor": "pointer",
-                                                                },
-                                                            ),
-                                                        ],
-                                                        style={"flex": "1"},
-                                                    ),
-                                                    html.Div(
-                                                        [
-                                                            html.Div(
-                                                                "PERIOD",
-                                                                style={
-                                                                    "fontSize": "9px",
-                                                                    "color": TEXT_DIM,
-                                                                    "letterSpacing": "0.1em",
-                                                                    "marginBottom": "4px",
-                                                                },
-                                                            ),
-                                                            dcc.Dropdown(
-                                                                id="compare-period",
-                                                                options=[
-                                                                    {"label": p, "value": p}
-                                                                    for p in [
-                                                                        "1d",
-                                                                        "5d",
-                                                                        "1mo",
-                                                                        "3mo",
-                                                                    ]
-                                                                ],
-                                                                value="1mo",
-                                                                clearable=False,
-                                                                style={
-                                                                    "width": "80px",
-                                                                    "background": BG_CARD,
-                                                                    "color": TEXT_MAIN,
-                                                                    "fontFamily": FONT,
-                                                                    "fontSize": "11px",
-                                                                },
-                                                            ),
-                                                        ]
-                                                    ),
-                                                ],
-                                                style={
-                                                    "display": "flex",
-                                                    "gap": "16px",
-                                                    "alignItems": "flex-start",
-                                                    "marginBottom": "8px",
-                                                },
-                                            ),
-                                            dcc.Graph(
-                                                id="compare-chart",
-                                                config={"displayModeBar": False},
-                                                style={"height": "260px"},
-                                            ),
-                                        ],
-                                    ),
-                                    html.Div(id="watchlist-table"),
-                                ],
-                                style={
-                                    "background": BG_CARD,
-                                    "border": f"1px solid {BORDER}",
-                                    "borderRadius": "4px",
-                                    "padding": "12px 14px",
-                                    "marginBottom": "12px",
-                                },
-                            ),
-                            # D) Screener bar
-                            html.Div(
-                                [
-                                    _section_label("SCREENER"),
-                                    html.Div(
-                                        [
-                                            html.Div(
-                                                "RSI RANGE",
-                                                style={
-                                                    "fontSize": "9px",
-                                                    "color": TEXT_DIM,
-                                                    "letterSpacing": "0.1em",
-                                                    "marginBottom": "4px",
-                                                },
-                                            ),
-                                            dcc.RangeSlider(
-                                                id="screener-rsi",
-                                                min=0,
-                                                max=100,
-                                                step=1,
-                                                value=[30, 70],
-                                                marks={
-                                                    0: "0",
-                                                    30: "30",
-                                                    50: "50",
-                                                    70: "70",
-                                                    100: "100",
-                                                },
-                                                tooltip={
-                                                    "placement": "bottom",
-                                                    "always_visible": False,
-                                                },
-                                            ),
-                                        ],
-                                        style={"marginBottom": "12px"},
-                                    ),
-                                    html.Div(
-                                        [
-                                            html.Div(
-                                                [
-                                                    html.Div(
-                                                        "CHG% MIN",
-                                                        style={
-                                                            "fontSize": "9px",
-                                                            "color": TEXT_DIM,
-                                                            "marginBottom": "3px",
-                                                        },
-                                                    ),
-                                                    dcc.Input(
-                                                        id="screener-chg-min",
-                                                        type="number",
-                                                        placeholder="-5",
-                                                        style={**_input_style, "width": "80px"},
-                                                    ),
-                                                ]
-                                            ),
-                                            html.Div(
-                                                [
-                                                    html.Div(
-                                                        "CHG% MAX",
-                                                        style={
-                                                            "fontSize": "9px",
-                                                            "color": TEXT_DIM,
-                                                            "marginBottom": "3px",
-                                                        },
-                                                    ),
-                                                    dcc.Input(
-                                                        id="screener-chg-max",
-                                                        type="number",
-                                                        placeholder="5",
-                                                        style={**_input_style, "width": "80px"},
-                                                    ),
-                                                ]
-                                            ),
-                                            html.Div(
-                                                [
-                                                    dcc.Checklist(
-                                                        id="screener-flags",
-                                                        options=[
-                                                            {
-                                                                "label": " Above MA20",
-                                                                "value": "above_ma20",
-                                                            },
-                                                            {
-                                                                "label": " Vol > 1M",
-                                                                "value": "high_volume",
-                                                            },
-                                                        ],
-                                                        value=[],
-                                                        style={
-                                                            "fontSize": "11px",
-                                                            "color": TEXT_MAIN,
-                                                            "display": "flex",
-                                                            "flexDirection": "column",
-                                                            "gap": "4px",
-                                                        },
-                                                        labelStyle={
-                                                            "display": "flex",
-                                                            "alignItems": "center",
-                                                            "gap": "4px",
-                                                            "cursor": "pointer",
-                                                        },
-                                                    ),
-                                                ],
-                                                style={"display": "flex", "alignItems": "center"},
-                                            ),
-                                            html.Button(
-                                                "RUN SCREENER",
-                                                id="btn-screener-run",
-                                                n_clicks=0,
-                                                style={
-                                                    **_btn_style,
-                                                    "border": f"1px solid {PURPLE}",
-                                                    "color": PURPLE,
-                                                    "letterSpacing": "0.12em",
-                                                    "padding": "6px 14px",
-                                                },
-                                            ),
-                                            html.Button(
-                                                "CLEAR",
-                                                id="btn-screener-clear",
-                                                n_clicks=0,
-                                                style={
-                                                    **_btn_style,
-                                                    "border": f"1px solid {BORDER}",
-                                                    "color": TEXT_DIM,
-                                                    "letterSpacing": "0.12em",
-                                                    "padding": "6px 10px",
-                                                },
-                                            ),
-                                        ],
-                                        style={
-                                            "display": "flex",
-                                            "gap": "16px",
-                                            "alignItems": "flex-end",
-                                            "marginBottom": "12px",
-                                        },
-                                    ),
-                                    html.Div(id="screener-results"),
-                                ],
-                                style={
-                                    "background": BG_CARD,
-                                    "border": f"1px solid {BORDER}",
-                                    "borderRadius": "4px",
-                                    "padding": "12px 14px",
-                                },
-                            ),
-                            # E) Price Alerts — compact one-line input row
-                            html.Div(
-                                [
-                                    _section_label("PRICE ALERTS"),
-                                    html.Div(id="alert-banner", style={"display": "none"}),
-                                    html.Div(
-                                        [
-                                            dcc.Input(
-                                                id="alert-symbol-input",
-                                                placeholder="Symbol",
-                                                debounce=False,
-                                                style=_alert_input_style,
-                                            ),
-                                            dcc.Dropdown(
-                                                id="alert-direction-dropdown",
-                                                options=[
-                                                    {"label": "ABOVE", "value": "above"},
-                                                    {"label": "BELOW", "value": "below"},
-                                                ],
-                                                value="above",
-                                                clearable=False,
-                                                style={
-                                                    "width": "95px",
-                                                    "background": BG_CARD,
-                                                    "color": TEXT_MAIN,
-                                                    "fontFamily": FONT,
-                                                    "fontSize": "11px",
-                                                },
-                                            ),
-                                            dcc.Input(
-                                                id="alert-price-input",
-                                                type="number",
-                                                placeholder="$190.00",
-                                                debounce=False,
-                                                style=_alert_input_style,
-                                            ),
-                                            html.Button(
-                                                "SET",
-                                                id="btn-set-alert",
-                                                n_clicks=0,
-                                                style={
-                                                    "background": "transparent",
-                                                    "border": f"1px solid {GREEN}",
-                                                    "color": GREEN,
-                                                    "fontFamily": FONT,
-                                                    "fontSize": "10px",
-                                                    "letterSpacing": "0.1em",
-                                                    "padding": "5px 10px",
-                                                    "cursor": "pointer",
-                                                    "borderRadius": "3px",
-                                                    "flexShrink": "0",
-                                                },
-                                            ),
-                                        ],
-                                        style={
-                                            "display": "flex",
-                                            "gap": "6px",
-                                            "marginBottom": "10px",
-                                            "alignItems": "center",
-                                            "flexWrap": "nowrap",
-                                        },
-                                    ),
-                                    html.Div(id="alerts-list"),
-                                ],
-                                style={
-                                    "background": BG_CARD,
-                                    "border": f"1px solid {BORDER}",
-                                    "borderRadius": "4px",
-                                    "padding": "12px 14px",
-                                    "marginTop": "12px",
-                                },
-                            ),
-                        ],
-                        style={
-                            "width": "65%",
-                            "paddingRight": "10px",
-                            "display": "flex",
-                            "flexDirection": "column",
-                        },
-                    ),
-                    # Right column (35%)
-                    html.Div(
-                        [
-                            html.Div(
-                                [
-                                    _section_label("📅 ECONOMIC CALENDAR"),
-                                    html.Div(
-                                        id="economic-calendar-content",
-                                        style={
-                                            "maxHeight": "240px",
-                                            "overflowY": "auto",
-                                            "overflowX": "hidden",
-                                            "paddingRight": "4px",
-                                        },
-                                    ),
-                                ],
-                                style={
-                                    "background": BG_CARD,
-                                    "border": f"1px solid {BORDER}",
-                                    "borderRadius": "4px",
-                                    "padding": "12px 14px",
-                                    "marginBottom": "12px",
-                                },
-                            ),
-                            html.Div(
-                                [
-                                    _section_label("SECTOR ROTATION"),
-                                    html.Div(
-                                        id="sector-rotation-content",
-                                        style={
-                                            "overflowX": "auto",
-                                            "marginTop": "4px",
-                                        },
-                                    ),
-                                ],
-                                style={
-                                    "background": BG_CARD,
-                                    "border": f"1px solid {BORDER}",
-                                    "borderRadius": "4px",
-                                    "padding": "12px 14px",
-                                    "marginBottom": "12px",
-                                },
-                            ),
-                            html.Div(
-                                [
-                                    _section_label("CORRELATION MATRIX"),
-                                    html.Div(
-                                        [
-                                            html.Span(
-                                                "PERIOD",
-                                                style={
-                                                    "fontSize": "9px",
-                                                    "color": TEXT_DIM,
-                                                    "letterSpacing": "0.1em",
-                                                    "marginRight": "8px",
-                                                },
-                                            ),
-                                            dcc.Dropdown(
-                                                id="correlation-period-dropdown",
-                                                options=[
-                                                    {"label": "1M", "value": "1mo"},
-                                                    {"label": "3M", "value": "3mo"},
-                                                    {"label": "6M", "value": "6mo"},
-                                                ],
-                                                value="3mo",
-                                                clearable=False,
-                                                style={
-                                                    "width": "100px",
-                                                    "background": BG_CARD,
-                                                    "color": TEXT_MAIN,
-                                                    "fontFamily": FONT,
-                                                    "fontSize": "11px",
-                                                },
-                                            ),
-                                        ],
-                                        style={
-                                            "display": "flex",
-                                            "alignItems": "center",
-                                            "marginBottom": "8px",
-                                            "flexWrap": "wrap",
-                                            "gap": "6px",
-                                        },
-                                    ),
-                                    html.Div(
-                                        id="correlation-matrix-warning",
-                                        style={"marginBottom": "8px"},
-                                    ),
-                                    html.Div(
-                                        id="correlation-matrix-content",
-                                        style={
-                                            "overflowX": "auto",
-                                            "marginBottom": "8px",
-                                        },
-                                    ),
-                                    html.Div(
-                                        "🔴 >0.8 correlated  🟡 0.4–0.8 moderate  🟢 <0.4 diversified",
-                                        style={
-                                            "fontSize": "9px",
-                                            "color": TEXT_DIM,
-                                            "lineHeight": "1.4",
-                                            "letterSpacing": "0.03em",
-                                        },
-                                    ),
-                                ],
-                                style={
-                                    "background": BG_CARD,
-                                    "border": f"1px solid {BORDER}",
-                                    "borderRadius": "4px",
-                                    "padding": "12px 14px",
-                                    "marginBottom": "12px",
-                                },
-                            ),
-                            # News feed
-                            html.Div(
-                                [
-                                    html.Div(
-                                        id="news-header",
-                                        style={
-                                            "fontSize": "9px",
-                                            "fontWeight": "700",
-                                            "letterSpacing": "0.18em",
-                                            "color": TEXT_DIM,
-                                            "textTransform": "uppercase",
-                                            "borderBottom": f"1px solid {BORDER}",
-                                            "paddingBottom": "6px",
-                                            "marginBottom": "10px",
-                                        },
-                                    ),
-                                    html.Div(
-                                        id="news-feed-content",
-                                        style={"maxHeight": "340px", "overflowY": "auto"},
-                                    ),
-                                    html.Div(id="news-feed", style={"display": "none"}),
-                                ],
-                                style={
-                                    "background": BG_CARD,
-                                    "border": f"1px solid {BORDER}",
-                                    "borderRadius": "4px",
-                                    "padding": "12px 14px",
-                                    "marginBottom": "12px",
-                                },
-                            ),
-                            # Chart overlay (1mo OHLCV)
-                            html.Div(
-                                [html.Div(id="chart-overlay-content")],
-                                style={
-                                    "background": BG_CARD,
-                                    "border": f"1px solid {BORDER}",
-                                    "borderRadius": "4px",
-                                    "padding": "0",
-                                    "overflow": "hidden",
-                                },
-                            ),
-                        ],
-                        style={
-                            "width": "35%",
-                            "paddingLeft": "10px",
-                            "display": "flex",
-                            "flexDirection": "column",
-                        },
-                    ),
-                ],
-                style={
-                    "display": "flex",
-                    "flex": "1",
-                    "padding": "14px 16px",
-                    "overflowY": "auto",
-                    "minHeight": "0",
-                },
-            ),
+        className="cli-line",
+        children=[
+            html.Span("—", className="cli-ts", style={"color": "#122535"}),
+            html.Span(f"[{src}]", className=f"cli-src {src_class}"),
+            html.Span(body, className="cli-body"),
         ],
+    )
+
+
+def _tab_terminal() -> html.Div:
+    _wl = get_watchlist()
+
+    # ── CLI terminal section ─────────────────────────────────────────────────
+    _hints = [
+        "help",
+        "status",
+        "positions",
+        "portfolio",
+        "agents",
+        "buy AAPL 5",
+        "sell TSLA 1",
+        "clear",
+    ]
+
+    cli_section = html.Div(
         style={
             "display": "flex",
             "flexDirection": "column",
-            "height": "calc(100vh - 96px)",
+            "height": "calc(100vh - 60px)",
+            "background": BG_DEEP,
             "overflow": "hidden",
         },
+        children=[
+            # Header row
+            html.Div(
+                style={
+                    "display": "flex",
+                    "alignItems": "center",
+                    "gap": "6px",
+                    "padding": "4px 10px",
+                    "borderBottom": f"1px solid {BORDER_INNER}",
+                    "flexShrink": "0",
+                },
+                children=[
+                    html.Div(
+                        className="term-led",
+                        style={
+                            "width": "6px",
+                            "height": "6px",
+                            "borderRadius": "50%",
+                            "background": GREEN,
+                        },
+                    ),
+                    html.Span(
+                        "APEX-7 SYSTEM TERMINAL",
+                        style={
+                            "fontSize": "8px",
+                            "color": TEXT_FAINT,
+                            "letterSpacing": "0.12em",
+                            "fontWeight": "700",
+                        },
+                    ),
+                    html.Span(
+                        id="cli-clock",
+                        style={"fontSize": "7px", "color": TEXT_GHOST, "marginLeft": "auto"},
+                    ),
+                ],
+            ),
+            # Scrollable output
+            html.Div(
+                id="cli-output",
+                style={
+                    "flex": "1",
+                    "overflowY": "auto",
+                    "padding": "2px 0",
+                    "fontSize": "9px",
+                    "lineHeight": "1.75",
+                },
+                children=[
+                    _cli_line("SYS", "tc-c", "Apex-7 Trading System v2.4.1 — agent initialized"),
+                    _cli_line("SYS", "tc-c", "Type 'help' for available commands."),
+                    _cli_line("---", "tc-d", "─" * 58),
+                ],
+            ),
+            # Prompt + hint buttons footer
+            html.Div(
+                style={
+                    "display": "flex",
+                    "alignItems": "center",
+                    "gap": "6px",
+                    "padding": "5px 10px",
+                    "borderTop": f"1px solid {BORDER_INNER}",
+                    "flexShrink": "0",
+                    "flexWrap": "wrap",
+                },
+                children=[
+                    html.Span(
+                        "apex7>",
+                        style={
+                            "fontSize": "9px",
+                            "color": GREEN,
+                            "fontWeight": "700",
+                            "flexShrink": "0",
+                        },
+                    ),
+                    dcc.Input(
+                        id="cli-input",
+                        type="text",
+                        placeholder="type command…",
+                        debounce=False,
+                        n_submit=0,
+                        autoComplete="off",
+                        style={
+                            "flex": "1",
+                            "background": "transparent",
+                            "border": "none",
+                            "outline": "none",
+                            "color": "#b0ccd4",
+                            "fontFamily": FONT,
+                            "fontSize": "9px",
+                            "minWidth": "80px",
+                        },
+                    ),
+                    html.Div(
+                        style={"display": "flex", "gap": "4px", "flexWrap": "wrap"},
+                        children=[
+                            html.Button(
+                                h,
+                                id=f"cli-hint-{i}",
+                                n_clicks=0,
+                                style={
+                                    "background": "none",
+                                    "border": f"1px solid {BORDER}",
+                                    "color": TEXT_GHOST,
+                                    "fontFamily": FONT,
+                                    "fontSize": "7px",
+                                    "padding": "1px 5px",
+                                    "cursor": "pointer",
+                                    "letterSpacing": "0.1em",
+                                    "borderRadius": "0",
+                                    "transition": "all 0.1s",
+                                },
+                            )
+                            for i, h in enumerate(_hints)
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    # ── Hidden market-data DOM (keeps existing terminal callbacks alive) ─────
+    hidden_market_data = html.Div(
+        style={"display": "none"},
+        children=[
+            html.Div(id="macro-bar-content"),
+            dcc.Input(id="watchlist-add-input"),
+            html.Button("ADD", id="btn-watchlist-add", n_clicks=0),
+            html.Button("COMPARE", id="btn-compare", n_clicks=0),
+            html.Button("CSV", id="btn-export-csv", n_clicks=0),
+            dcc.Download(id="csv-download"),
+            html.Div(id="watchlist-chips"),
+            html.Div(
+                id="compare-panel",
+                children=[
+                    dcc.Checklist(
+                        id="compare-symbols",
+                        options=[{"label": s, "value": s} for s in _wl],
+                        value=[],
+                    ),
+                    dcc.Dropdown(
+                        id="compare-period",
+                        options=[{"label": p, "value": p} for p in ["1d", "5d", "1mo", "3mo"]],
+                        value="1mo",
+                        clearable=False,
+                    ),
+                    dcc.Graph(id="compare-chart", config={"displayModeBar": False}),
+                ],
+            ),
+            html.Div(id="watchlist-table"),
+            dcc.RangeSlider(id="screener-rsi", min=0, max=100, step=1, value=[30, 70]),
+            dcc.Input(id="screener-chg-min", type="number"),
+            dcc.Input(id="screener-chg-max", type="number"),
+            dcc.Checklist(
+                id="screener-flags",
+                options=[
+                    {"label": "Above MA20", "value": "above_ma20"},
+                    {"label": "Vol > 1M", "value": "high_volume"},
+                ],
+                value=[],
+            ),
+            html.Button("RUN SCREENER", id="btn-screener-run", n_clicks=0),
+            html.Button("CLEAR", id="btn-screener-clear", n_clicks=0),
+            html.Div(id="screener-results"),
+            dcc.Input(id="alert-symbol-input"),
+            dcc.Dropdown(
+                id="alert-direction-dropdown",
+                options=[
+                    {"label": "ABOVE", "value": "above"},
+                    {"label": "BELOW", "value": "below"},
+                ],
+                value="above",
+                clearable=False,
+            ),
+            dcc.Input(id="alert-price-input", type="number"),
+            html.Button("SET", id="btn-set-alert", n_clicks=0),
+            html.Div(id="alert-banner"),
+            html.Div(id="alerts-list"),
+            html.Div(id="economic-calendar-content"),
+            html.Div(id="sector-rotation-content"),
+            html.Div(id="correlation-matrix-warning"),
+            html.Div(id="correlation-matrix-content"),
+            dcc.Dropdown(
+                id="correlation-period-dropdown",
+                options=[
+                    {"label": "1M", "value": "1mo"},
+                    {"label": "3M", "value": "3mo"},
+                    {"label": "6M", "value": "6mo"},
+                ],
+                value="3mo",
+                clearable=False,
+            ),
+            html.Div(id="news-header"),
+            html.Div(id="news-feed"),
+            html.Div(id="news-feed-content"),
+            html.Div(id="chart-overlay-content"),
+        ],
+    )
+
+    return html.Div(
+        style={"height": "100%", "overflow": "hidden"},
+        children=[cli_section, hidden_market_data],
     )

@@ -6,22 +6,37 @@ import dash
 from config import DEATH_THRESHOLD, INITIAL_BALANCE  # noqa: F401
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# DESIGN TOKENS
+# DESIGN TOKENS  (Apex7.html reference palette)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-BG_DEEP = "#060810"
-BG_CARD = "#0a0f1e"
-BG_HOVER = "#0f1729"
-GREEN = "#10b981"
-RED = "#ef4444"
-BLUE = "#3b82f6"
-ORANGE = "#f97316"
-YELLOW = "#f59e0b"
-PURPLE = "#8b5cf6"
-GRAY = "#475569"
-BORDER = "#1a2535"
-TEXT_DIM = "#64748b"
-TEXT_MAIN = "#e2e8f0"
+BG_BASE = "#05090f"  # page background
+BG_NAV = "#060c13"  # top nav
+BG_DEEP = "#040810"  # terminal / darkest areas
+BG_CARD = "#070e16"  # card backgrounds
+BG_HOVER = "#081420"  # hover state
+BG_SELECTED = "#07121e"  # selected card
+
+GREEN = "#00dda0"  # positive / buy / active
+RED = "#ff4060"  # negative / sell / danger
+ORANGE = "#e08030"  # warning / simulation
+BLUE = "#3090ff"  # tactical / info
+PURPLE = "#9070d0"  # supervisor
+CYAN = "#28b0b0"  # system messages
+
+BORDER = "#0d2030"  # default border
+BORDER_INNER = "#091c28"  # inner dividers
+BORDER_FAINT = "#070e16"  # faintest row borders
+
+TEXT_MAIN = "#b8d0d6"  # high-emphasis
+TEXT_DIM = "#6a9aaa"  # medium labels
+TEXT_MUTED = "#3a6878"  # dim text
+TEXT_FAINT = "#2e5060"  # inactive
+TEXT_GHOST = "#1e3a4a"  # barely visible
+
+# Legacy aliases kept for backward compat with existing callbacks
+GRAY = TEXT_FAINT
+YELLOW = "#d8b860"
+
 FONT = "'JetBrains Mono', 'Fira Code', Consolas, monospace"
 
 DB_PATH = Path(__file__).parent.parent / "trades.db"
@@ -38,91 +53,25 @@ def _rgba(hex_color: str, alpha: float) -> str:
 # DASH APP INSTANCE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-app = dash.Dash(__name__, title="APEX-7 // SURVIVAL TRADER", suppress_callback_exceptions=True)
+app = dash.Dash(
+    __name__,
+    title="APEX-7 // SURVIVAL TRADER",
+    suppress_callback_exceptions=True,
+    external_stylesheets=[
+        "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap"
+    ],
+)
 server = app.server
 
 app.index_string = """<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   {%metas%}
   <title>{%title%}</title>
   {%favicon%}
   {%css%}
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
-  <style>
-    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
-    html, body { height:100%; overflow:hidden; }
-    body {
-      background:#060810;
-      font-family:'JetBrains Mono','Fira Code',Consolas,monospace;
-      color:#e2e8f0;
-      -webkit-font-smoothing:antialiased;
-    }
-    ::-webkit-scrollbar { width:3px; }
-    ::-webkit-scrollbar-track { background:#0a0f1e; }
-    ::-webkit-scrollbar-thumb { background:#1a2535; border-radius:2px; }
-
-    #scanlines {
-      position:fixed; inset:0; pointer-events:none; z-index:1;
-      background:repeating-linear-gradient(
-        0deg, transparent, transparent 2px,
-        rgba(0,0,0,0.025) 2px, rgba(0,0,0,0.025) 4px
-      );
-    }
-
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
-    @keyframes glow-g { 0%,100%{box-shadow:0 0 4px #10b981,0 0 10px #10b981} 50%{box-shadow:0 0 8px #10b981,0 0 20px #10b981,0 0 30px #10b98133} }
-    @keyframes glow-y { 0%,100%{box-shadow:0 0 4px #f59e0b,0 0 10px #f59e0b} 50%{box-shadow:0 0 8px #f59e0b,0 0 20px #f59e0b} }
-    @keyframes glow-o { 0%,100%{box-shadow:0 0 4px #f97316,0 0 10px #f97316} 50%{box-shadow:0 0 8px #f97316,0 0 20px #f97316,0 0 28px #f9731633} }
-    .dot-degraded { background:#f97316; animation:glow-o 1.1s ease-in-out infinite; }
-    .dot-alive    { background:#10b981; animation:glow-g 2s ease-in-out infinite; }
-    .dot-thinking { background:#f59e0b; animation:glow-y 0.8s ease-in-out infinite; }
-    .dot-dead     { background:#ef4444; animation:glow-r 0.45s ease-in-out infinite; }
-
-    @keyframes sim-blink { 0%,100%{opacity:1;box-shadow:0 0 6px #f97316} 50%{opacity:.55;box-shadow:0 0 14px #f97316} }
-    .badge-sim { animation:sim-blink 1.1s ease-in-out infinite; }
-
-    @keyframes paper-blink { 0%,100%{opacity:1;box-shadow:0 0 6px #3b82f6} 50%{opacity:.6;box-shadow:0 0 14px #3b82f6} }
-    .badge-paper { animation:paper-blink 1.4s ease-in-out infinite; }
-
-    .mode-radio label { cursor:pointer; }
-    .mode-radio input[type=radio] { display:none; }
-
-    @keyframes flicker { 0%,100%{opacity:1} 30%{opacity:.8} 70%{opacity:.92} }
-    .flicker { animation:flicker .9s ease-in-out infinite; }
-    @keyframes skull-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }
-    .skull-pulse { animation:skull-pulse 1.8s ease-in-out infinite; }
-
-    /* Tab underline style */
-    .tab-active { border-bottom: 2px solid #10b981 !important; color: #10b981 !important; }
-
-    /* Control buttons */
-    .cbtn {
-      background:transparent; cursor:pointer;
-      font-family:'JetBrains Mono',monospace;
-      font-size:11px; font-weight:700; letter-spacing:.12em;
-      padding:5px 12px; border-radius:3px; text-transform:uppercase;
-      transition:border-color .15s, color .15s;
-    }
-    .cbtn-pause       { border:1px solid #1a2535; color:#475569; }
-    .cbtn-pause:hover { border-color:#ef4444; color:#ef4444; }
-    .cbtn-pause.on    { border-color:#f59e0b; color:#f59e0b; }
-    .cbtn-step        { border:1px solid #1a2535; color:#475569; }
-    .cbtn-step:hover  { border-color:#3b82f6; color:#3b82f6; }
-    .cbtn-reset       { border:1px solid #1a2535; color:#475569; }
-    .cbtn-reset:hover { border-color:#475569; color:#e2e8f0; }
-
-    /* Dropdown overrides */
-    .Select-control { background:#0a0f1e !important; border-color:#1a2535 !important; }
-    .Select-menu-outer { background:#0a0f1e !important; border-color:#1a2535 !important; }
-    .Select-option { background:#0a0f1e !important; color:#e2e8f0 !important; }
-    .Select-option:hover { background:#0f1729 !important; }
-    .Select-value-label { color:#e2e8f0 !important; }
-  </style>
 </head>
 <body>
-  <div id="scanlines"></div>
   {%app_entry%}
   <footer>{%config%}{%scripts%}{%renderer%}</footer>
 </body>
