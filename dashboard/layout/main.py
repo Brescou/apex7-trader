@@ -7,7 +7,6 @@ from dashboard.layout.analytics_tab import (
     _tab_agents,
     _tab_analytics,
     _tab_backtest,
-    _tab_leaderboard,
 )
 from dashboard.layout.live_tab import _tab_live
 from dashboard.layout.terminal_tab import _tab_terminal
@@ -209,16 +208,6 @@ def setup_layout() -> None:
                 },
             ),
             html.Div(
-                id="tab-leaderboard",
-                children=_tab_leaderboard(),
-                style={
-                    "flex": "1",
-                    "minHeight": "0",
-                    "overflow": "hidden",
-                    "display": "none",
-                },
-            ),
-            html.Div(
                 id="tab-agents",
                 children=_tab_agents(),
                 style={
@@ -282,7 +271,6 @@ def _tabs_bar() -> dcc.Tabs:
             dcc.Tab(label="LIVE", value="live", style=ts, selected_style=ss),
             dcc.Tab(label="ANALYTICS", value="analytics", style=ts, selected_style=ss),
             dcc.Tab(label="BACKTEST", value="backtest", style=ts, selected_style=ss),
-            dcc.Tab(label="LEADERBOARD", value="leaderboard", style=ts, selected_style=ss),
             dcc.Tab(label="AGENTS", value="agents", style=ts, selected_style=ss),
             dcc.Tab(
                 label="TERMINAL",

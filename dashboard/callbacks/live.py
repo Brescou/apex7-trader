@@ -69,7 +69,7 @@ def _mode_palette(mode: str) -> tuple[str, str, str]:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-_TABS = ["live", "analytics", "backtest", "leaderboard", "agents", "terminal"]
+_TABS = ["live", "analytics", "backtest", "agents", "terminal"]
 _TAB_SHOW = {"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "block"}
 _TAB_HIDE = {"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "none"}
 
@@ -78,7 +78,6 @@ _TAB_HIDE = {"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "no
     Output("tab-live", "style"),
     Output("tab-analytics", "style"),
     Output("tab-backtest", "style"),
-    Output("tab-leaderboard", "style"),
     Output("tab-agents", "style"),
     Output("tab-terminal", "style"),
     Input("main-tabs", "value"),

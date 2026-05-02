@@ -1,4 +1,4 @@
-"""APEX-7 — Analytics-related tab layouts (analytics, backtest, leaderboard, agents)."""
+"""APEX-7 — Analytics-related tab layouts (analytics, backtest, agents)."""
 
 from dash import dcc, html
 
@@ -8,7 +8,6 @@ from dashboard.server import (
     BORDER,
     FONT,
     GREEN,
-    PURPLE,
     TEXT_DIM,
     TEXT_MAIN,
 )
@@ -236,64 +235,5 @@ def _tab_agents() -> html.Div:
             "flexDirection": "column",
             "height": "calc(100vh - 96px)",
             "overflow": "hidden",
-        },
-    )
-
-
-def _tab_leaderboard() -> html.Div:
-    scenarios = ["Bull Market", "Bear Market", "High Volatility", "Flat Market"]
-    return html.Div(
-        [
-            html.Div(
-                [
-                    dcc.Dropdown(
-                        id="lb-scenario",
-                        options=[{"label": s, "value": s} for s in scenarios],
-                        value=scenarios[0],
-                        clearable=False,
-                        style={
-                            "width": "200px",
-                            "background": BG_CARD,
-                            "color": TEXT_MAIN,
-                            "fontFamily": FONT,
-                            "fontSize": "11px",
-                        },
-                    ),
-                    html.Button(
-                        "⚡ RUN ALL AGENTS",
-                        id="btn-lb-run",
-                        n_clicks=0,
-                        style={
-                            "background": "transparent",
-                            "border": f"1px solid {PURPLE}",
-                            "color": PURPLE,
-                            "fontFamily": FONT,
-                            "fontSize": "10px",
-                            "letterSpacing": "0.12em",
-                            "padding": "6px 16px",
-                            "cursor": "pointer",
-                            "borderRadius": "3px",
-                        },
-                    ),
-                ],
-                style={
-                    "display": "flex",
-                    "gap": "10px",
-                    "alignItems": "center",
-                    "padding": "12px 16px",
-                    "borderBottom": f"1px solid {BORDER}",
-                },
-            ),
-            dcc.Loading(
-                id="lb-loading",
-                children=html.Div(id="lb-results", style={"padding": "16px", "overflowY": "auto"}),
-                color=PURPLE,
-                style={"flex": "1"},
-            ),
-        ],
-        style={
-            "display": "flex",
-            "flexDirection": "column",
-            "height": "calc(100vh - 96px)",
         },
     )

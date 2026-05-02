@@ -7,25 +7,6 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def test_leaderboard_run_all_mocked() -> None:
-    """``Leaderboard.run_all`` hits engine loop without Yahoo."""
-    fake = {
-        "return_pct": 1.2,
-        "sharpe": 0.4,
-        "win_rate": 55.0,
-        "max_drawdown": -5.0,
-        "trades_count": 2,
-        "survived": True,
-    }
-    with patch("leaderboard.BacktestEngine") as eng:
-        eng.return_value.run.return_value = fake
-        from leaderboard import Leaderboard
-
-        rows = Leaderboard().run_all("Bull Market")
-    assert len(rows) == 4
-    assert rows[0]["agent_id"] in ("CONSERVATIVE", "BALANCED", "AGGRESSIVE", "APEX-7")
-
-
 def test_seed_live_price_history_uses_yfinance() -> None:
     """Seeding pulls daily rows and sets technician history (network-free)."""
     import pandas as pd
