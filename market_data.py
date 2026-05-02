@@ -4,14 +4,19 @@ No imports from agent.py or agent_multi.py.
 Thread-safe in-memory cache for macro (60s) and watchlist prices (10s).
 """
 
+import logging
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime
+from typing import Any
 
+import pandas as pd
 import yfinance as yf
 
 from config import MACRO_SYMBOLS, MARKET_DATA_CACHE_SEC, WATCHLIST_CACHE_SEC, NEWS_MAX_ITEMS
 from core.indicators import rsi
+
+logger = logging.getLogger("apex7.market_data")
 
 # ─── Cache structures ────────────────────────────────────────────────────────
 
@@ -103,6 +108,47 @@ def _format_volume(vol: float) -> str:
     if vol >= 1_000:
         return f"{vol / 1_000:.1f}K"
     return str(int(vol))
+
+
+def _extract_next_earnings_raw(calendar: Any) -> Any:
+    """Pull the next earnings date field from yfinance ``calendar`` (dict or DataFrame)."""
+    if calendar is None:
+        return None
+    if isinstance(calendar, dict):
+        ed = calendar.get("Earnings Date")
+        if ed is None:
+            return None
+        if isinstance(ed, (list, tuple)):
+            return ed[0] if len(ed) > 0 else None
+        return ed
+    try:
+        cal_df = calendar
+        if getattr(cal_df, "empty", True):
+            return None
+        return cal_df.iloc[0, 0]
+    except Exception:
+        return None
+
+
+def _coerce_to_date(value: Any) -> date | None:
+    """Normalize yfinance / pandas date-like values to ``datetime.date``."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, pd.Timestamp):
+        try:
+            return value.date()
+        except Exception:
+            return None
+    if hasattr(value, "to_pydatetime"):
+        try:
+            return value.to_pydatetime().date()
+        except Exception:
+            return None
+    return None
 
 
 # ─── Public API ──────────────────────────────────────────────────────────────
@@ -270,6 +316,43 @@ def fetch_news(symbol: str, max_items: int = NEWS_MAX_ITEMS) -> list[dict]:
         return items
     except Exception:
         return []
+
+
+def fetch_earnings_calendar(symbols: list[str]) -> dict[str, dict[str, Any] | None]:
+    """Fetch next earnings dates for each symbol via yfinance ``Ticker.calendar``.
+
+    Returns per symbol either ``{"earnings_date": str, "days_until": int | None}``
+    or ``None`` when unavailable.
+    """
+    result: dict[str, dict[str, Any] | None] = {}
+    today = date.today()
+    for sym in symbols:
+        try:
+            cal = yf.Ticker(sym).calendar
+            if cal is not None and not (getattr(cal, "empty", False)):
+                raw = _extract_next_earnings_raw(cal)
+                ed = _coerce_to_date(raw)
+                if ed is not None:
+                    days_until = (ed - today).days
+                    result[sym] = {
+                        "earnings_date": str(ed),
+                        "days_until": days_until,
+                    }
+                    continue
+        except Exception:
+            logger.debug("Earnings calendar failed for %s", sym)
+        result[sym] = None
+    return result
+
+
+def is_earnings_week(symbol: str) -> bool:
+    """Return True if earnings fall within the next 5 calendar days (inclusive)."""
+    cal = fetch_earnings_calendar([symbol])
+    entry = cal.get(symbol)
+    if entry and entry.get("days_until") is not None:
+        days = entry["days_until"]
+        return 0 <= days <= 5
+    return False
 
 
 def fetch_sparkline(symbol: str) -> list[dict]:
