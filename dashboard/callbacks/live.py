@@ -1,4 +1,4 @@
-"""APEX-7 — Live tab callbacks + tab routing."""
+"""APEX-7 — Live tab callbacks + tab routing (5 tabs; HEATMAP/LEADERBOARD removed)."""
 
 from dash import Input, Output, State, ctx, html, no_update, MATCH
 from dash.exceptions import PreventUpdate
