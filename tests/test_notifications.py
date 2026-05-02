@@ -26,6 +26,7 @@ def test_alert_trade_posts_embed(monkeypatch) -> None:
             price=100.0,
             amount_usd=500.0,
             votes_summary="technician: BUY AAPL (+70%)",
+            mode="live",
         )
     post.assert_called_once()
     assert post.call_args.kwargs["timeout"] == 5.0
@@ -44,6 +45,7 @@ def test_alert_trade_partial_sell_includes_sell_pct(monkeypatch) -> None:
             price=50.0,
             sell_pct=50.0,
             amount_usd=200.0,
+            mode="live",
         )
     desc = post.call_args.kwargs["json"]["embeds"][0]["description"]
     assert "50%" in desc
@@ -58,7 +60,7 @@ def test_fail_silent_on_http_error(monkeypatch) -> None:
 def test_posts_use_five_second_timeout(monkeypatch) -> None:
     monkeypatch.setattr("config.DISCORD_WEBHOOK_URL", "https://example.com/hook")
     with patch("core.notifications.httpx.post") as post:
-        n.alert_startup()
+        n.alert_startup(mode="live", watchlist_summary="AAPL, MSFT")
     assert post.call_args.kwargs["timeout"] == 5.0
 
 

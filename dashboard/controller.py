@@ -12,6 +12,7 @@ from agents.shared.nodes import (
     get_runtime_mode,
     get_simulation_mode,
 )
+from agents.shared.watchlist import get_watchlist
 from agents.multi import run_daily_digest, run_daily_postmortem, run_weekly_report
 from config import AGENT_INTERVAL, POSTMORTEM_HOUR
 from core.data import Portfolio
@@ -195,7 +196,10 @@ def start_controller() -> None:
     try:
         from core.notifications import alert_startup
 
-        alert_startup()
+        alert_startup(
+            mode=str(get_runtime_mode() or "live"),
+            watchlist_summary=", ".join(get_watchlist()),
+        )
     except Exception:
         pass
 

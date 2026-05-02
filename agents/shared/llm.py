@@ -11,6 +11,8 @@ import httpx
 
 from config import ANTHROPIC_API_KEY
 
+from agents.shared.modes import get_runtime_mode
+
 logger = logging.getLogger("apex7")
 
 SONNET_ID = "claude-sonnet-4-5"
@@ -173,7 +175,11 @@ def _llm(
         try:
             from core.notifications import alert_circuit_breaker
 
-            alert_circuit_breaker("Rate limited", int(max(wait_s, 1.0)))
+            alert_circuit_breaker(
+                "Rate limited",
+                int(max(wait_s, 1.0)),
+                mode=str(get_runtime_mode() or "live"),
+            )
         except Exception:
             pass
         _set_llm_degradation("circuit_breaker")

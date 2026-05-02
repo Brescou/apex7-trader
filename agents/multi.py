@@ -63,7 +63,7 @@ from config import (
 )
 from core.data import Portfolio
 from core.indicators import rsi as _rsi
-from core.watchlist import get_watchlist
+from agents.shared.watchlist import get_watchlist
 
 logger = logging.getLogger("apex7.multi")
 
@@ -1126,7 +1126,7 @@ def run_daily_digest(portfolio: Portfolio) -> None:
     except Exception:
         return
 
-    prices = portfolio.fetch_prices()
+    prices = portfolio.fetch_prices(get_watchlist())
     portfolio_value = float(portfolio.total_value(prices))
     today = date.today()
     date_str = today.isoformat()
@@ -1341,7 +1341,7 @@ def run_weekly_report(portfolio: Portfolio) -> None:
     week_start = monday.isoformat()
     week_end = today.isoformat()
 
-    prices = portfolio.fetch_prices()
+    prices = portfolio.fetch_prices(get_watchlist())
     portfolio_value = float(portfolio.total_value(prices))
 
     wval, wkey = get_weekly_start_value()

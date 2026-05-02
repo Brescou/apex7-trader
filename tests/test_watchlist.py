@@ -1,4 +1,4 @@
-"""Tests for ``core.watchlist`` — SQLite-backed dynamic watchlist."""
+"""Tests for ``agents.shared.watchlist`` — SQLite-backed dynamic watchlist."""
 
 import os
 import sqlite3
@@ -10,7 +10,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import WATCHLIST
-from core.watchlist import (
+from agents.shared.watchlist import (
     add_to_watchlist,
     get_watchlist,
     remove_from_watchlist,
@@ -25,7 +25,7 @@ def test_get_watchlist_seeded(tmp_db) -> None:
     assert "AAPL" in wl
 
 
-@patch("core.watchlist.yf.Ticker")
+@patch("agents.shared.watchlist.yf.Ticker")
 def test_add_symbol(mock_ticker, tmp_db) -> None:
     """Add NVDA and persist a row in ``watchlist``."""
     mock_ticker.return_value.history.return_value = pd.DataFrame({"Close": [1.0, 1.1]})
@@ -40,7 +40,7 @@ def test_add_symbol(mock_ticker, tmp_db) -> None:
     assert row[0] == "NVDA"
 
 
-@patch("core.watchlist.yf.Ticker")
+@patch("agents.shared.watchlist.yf.Ticker")
 def test_add_invalid_symbol(mock_ticker, tmp_db) -> None:
     """Invalid ticker (no history) is rejected."""
     mock_ticker.return_value.history.return_value = MagicMock(empty=True)
@@ -49,7 +49,7 @@ def test_add_invalid_symbol(mock_ticker, tmp_db) -> None:
     assert get_watchlist() == before
 
 
-@patch("core.watchlist.yf.Ticker")
+@patch("agents.shared.watchlist.yf.Ticker")
 def test_add_max_symbols(mock_ticker, tmp_db) -> None:
     """Exactly 20 symbols in DB → 21st add is rejected."""
     mock_ticker.return_value.history.return_value = pd.DataFrame({"Close": [1.0]})

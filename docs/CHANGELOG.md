@@ -5,7 +5,7 @@
 ### Sprint Features v3 — summary
 
 - **Discord:** daily digest (`alert_daily_digest` / `run_daily_digest`), weekly report (`alert_weekly_report` / `run_weekly_report`), deferred **evaluation** alerts when `was_correct` is resolved (`alert_evaluation` in `agents/shared/eval.py`).
-- **Trading:** position **pyramiding** — up to `MAX_PYRAMID_LAYERS` weighted BUY adds per symbol; dynamic **watchlist** persisted in SQLite (`watchlist` table, `core/watchlist.py`).
+- **Trading:** position **pyramiding** — up to `MAX_PYRAMID_LAYERS` weighted BUY adds per symbol; dynamic **watchlist** persisted in SQLite (`watchlist` table, `agents/shared/watchlist.py`).
 - **Data:** **FRED** macro series (`core/external_data.py`, optional `FRED_API_KEY`), **CNN Fear & Greed** index, **earnings calendar** via yfinance (`fetch_earnings_calendar`, `build_economic_calendar_rows`).
 - **Terminal:** **economic calendar** strip, **sector rotation** heatmap, **correlation** matrix panel, **enriched macro bar** (F&G, Fed funds, 10Y).
 

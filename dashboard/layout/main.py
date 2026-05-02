@@ -9,7 +9,7 @@ from dashboard.layout.analytics_tab import (
 )
 from dashboard.layout.live_tab import _tab_live
 from dashboard.layout.terminal_tab import _tab_terminal
-from core.watchlist import get_watchlist
+from agents.shared.watchlist import get_watchlist
 from dashboard.server import (
     BG_CARD,
     BG_DEEP,

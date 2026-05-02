@@ -34,7 +34,6 @@ from config import (
 )
 from core.data import Portfolio
 from core.external_data import fetch_fear_greed, fetch_macro_indicators
-from core.watchlist import get_watchlist
 from market_data import fetch_earnings_calendar, is_earnings_week
 from agents.shared.state import AgentState
 from agents.shared.prompts import PROMPT_VERSION
@@ -62,6 +61,7 @@ from agents.shared.eval import (
     _fast_last_price,
     evaluate_pending_trades,
 )
+from agents.shared.watchlist import get_watchlist
 from agents.shared.modes import (
     _no_llm_mode,
     _paper_mode,
@@ -204,7 +204,7 @@ def _record_hold_stagnation(final_action: str) -> None:
             try:
                 from core.notifications import alert_stagnation
 
-                alert_stagnation(hold_cycles=n)
+                alert_stagnation(hold_cycles=n, mode=str(get_runtime_mode() or "live"))
             except Exception:
                 pass
 
@@ -214,8 +214,8 @@ def _record_hold_stagnation(final_action: str) -> None:
 _prev_prices: dict[str, float] = {}
 
 
-def _fetch_prices_sync(portfolio: Portfolio) -> dict[str, float]:
-    return portfolio.fetch_prices()
+def _fetch_prices_sync(portfolio: Portfolio, symbols: list[str]) -> dict[str, float]:
+    return portfolio.fetch_prices(symbols)
 
 
 def _fetch_news_sync(symbols: list[str]) -> str:
@@ -262,7 +262,7 @@ async def _gather_data(
 ) -> tuple[dict, str, dict]:
     loop = asyncio.get_running_loop()
     prices, news, sentiment = await asyncio.gather(
-        loop.run_in_executor(None, _fetch_prices_sync, portfolio),
+        loop.run_in_executor(None, _fetch_prices_sync, portfolio, watchlist_syms),
         loop.run_in_executor(None, _fetch_news_sync, news_syms),
         loop.run_in_executor(None, _fetch_sentiment_sync, watchlist_syms),
     )
@@ -763,6 +763,7 @@ def make_execute_node(portfolio: Portfolio):
                         price=exit_px,
                         high_watermark=high,
                         drawdown_pct=trail_dd,
+                        mode=str(get_runtime_mode() or "live"),
                     )
                 except Exception:
                     pass
@@ -810,7 +811,7 @@ def make_execute_node(portfolio: Portfolio):
             logs.append(_entry(f"execute failed: {result.get('error', '?')}", "warning"))
 
         portfolio.record_value(prices)
-        portfolio.check_death(prices)
+        portfolio.check_death(prices, discord_mode=get_runtime_mode())
         new_pv = portfolio.total_value(prices)
 
         return {
@@ -949,6 +950,7 @@ def make_save_memory_node(portfolio: Portfolio):
                     votes_summary=summary,
                     pyramid_layer=pyramid_layer,
                     pyramid_max=pyramid_max,
+                    mode=str(get_runtime_mode() or "live"),
                 )
             except Exception:
                 pass

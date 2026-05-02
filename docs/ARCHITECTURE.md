@@ -21,6 +21,7 @@ apex7-trader/
 │       ├── modes.py       ← live / paper / sim
 │       ├── llm.py         ← Anthropic clients, _llm, circuit breaker
 │       ├── eval.py        ← evaluate_pending_trades
+│       ├── watchlist.py   ← DB watchlist (max 20 symbols)
 │       ├── prompts.py     ← versioned system prompts (PROMPT_VERSION)
 │       └── schemas.py     ← Pydantic validation for LLM outputs
 ├── core/
@@ -28,7 +29,6 @@ apex7-trader/
 │   ├── data.py            ← Portfolio, LiveFeed
 │   ├── notifications.py  ← Discord (trades, digest, weekly, evaluation)
 │   ├── external_data.py  ← FRED + CNN Fear & Greed
-│   ├── watchlist.py      ← DB watchlist (max 20 symbols)
 │   ├── backtest.py        ← run_backtest, compare_strategies
 │   ├── indicators.py      ← Shared RSI implementation
 │   └── registry.py        ← graph builder + UI metadata (single graph)
@@ -332,7 +332,7 @@ CREATE TABLE postmortem (
 `HOLD` actions are not persisted to `trades` (save_memory_node skips HOLDs).
 `agent_memory.was_correct` is set asynchronously by `evaluate_pending_trades` (postmortem thread) based on the actual market outcome after `EVAL_HORIZON_DAYS` (≈ `EVAL_HORIZON_CALENDAR_DAYS` = 7 calendar days). Only BUY/SELL votes are evaluated; HOLD votes (`risk_manager`, `macro_watcher`) remain `was_correct=NULL` so they don't pollute `_compute_dynamic_weights`.
 `postmortem` rows are written once per SELL trade by `run_daily_postmortem()` at `POSTMORTEM_HOUR`.
-**`watchlist`** — one row per ticker (max **20** enforced in `core/watchlist.py`). New DB files are seeded from `config.WATCHLIST`. A symbol with an **open** position cannot be removed from the watchlist.
+**`watchlist`** — one row per ticker (max **20** enforced in `agents/shared/watchlist.py`). New DB files are seeded from `config.WATCHLIST`. A symbol with an **open** position cannot be removed from the watchlist.
 
 ## External data sources
 

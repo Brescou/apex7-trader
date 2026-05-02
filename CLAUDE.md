@@ -54,6 +54,7 @@ apex7-trader/
 │       ├── modes.py       ← live/paper/sim toggles, _no_llm_mode
 │       ├── llm.py         ← Anthropic clients, _llm, token budget, circuit breaker
 │       ├── eval.py        ← evaluate_pending_trades, _fast_last_price
+│       ├── watchlist.py   ← persisted watchlist (SQLite), max 20 symbols
 │       ├── prompts.py     ← system prompts versionnés (PROMPT_VERSION)
 │       └── schemas.py     ← Pydantic validation for LLM outputs
 ├── core/
@@ -61,7 +62,6 @@ apex7-trader/
 │   ├── data.py            ← Portfolio, LiveFeed
 │   ├── notifications.py   ← optional Discord webhook (trades, digest, weekly, evaluation, …)
 │   ├── external_data.py   ← FRED series + CNN Fear & Greed (HTTP, TTL caches)
-│   ├── watchlist.py       ← persisted watchlist helpers (SQLite via agents.shared.db)
 │   ├── backtest.py        ← run_backtest, compare_strategies (yfinance history)
 │   ├── indicators.py      ← Shared RSI implementation
 │   └── registry.py        ← single graph builder + UI metadata
@@ -141,10 +141,10 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `agents/shared/llm.py` | Sonnet/Haiku clients, `_llm()`, token budget, circuit breaker, degradation flags |
 | `agents/shared/eval.py` | `evaluate_pending_trades`, `_fast_last_price`, `EVAL_SIGNIFICANCE_PCT` |
 | `agents/shared/schemas.py` | Pydantic validation models for LLM decision outputs |
+| `agents/shared/watchlist.py` | `get_watchlist`, `add_to_watchlist`, `remove_from_watchlist` — max 20 symbols |
 | `core/data.py` | `Portfolio` — thread-safe state; `LiveFeed` — multi-symbol yfinance wrapper |
-| `core/notifications.py` | Optional Discord webhook — trades, death/stagnation/rate-limit/startup, **daily digest**, **weekly report**, **evaluation** alerts |
-| `core/external_data.py` | `fetch_fred_latest`, `fetch_macro_indicators`, `fetch_fear_greed` (CNN); used by terminal macro bar + `fetch_data` context |
-| `core/watchlist.py` | `get_watchlist`, `add_to_watchlist`, `remove_from_watchlist` — max 20 symbols; cannot remove a symbol with an open position |
+| `core/notifications.py` | Optional Discord webhook — callers pass `mode` / `watchlist_summary`; must not import `agents/` |
+| `core/external_data.py` | `fetch_fred_latest`, `fetch_macro_indicators`, `fetch_fear_greed` (CNN) |
 | `core/backtest.py` | Functional API (`fetch_historical`, `compute_indicators`, `run_backtest`, `compare_strategies`) |
 | `core/indicators.py` | Shared `rsi()` implementation used across agents, backtest, and market_data |
 | `core/registry.py` | Single `get_graph(p)` + `get_graph_info()` UI metadata |
@@ -246,7 +246,7 @@ g.add_edge("my_node", "risk_check")
 | `agent_memory` | One row per agent vote per cycle; `was_correct` is **NULL until evaluated** by `evaluate_pending_trades` in `agents/shared/eval.py` (NOT by arbitration) |
 | `postmortem` | One row per closed trade (SELL); written by `run_daily_postmortem()` |
 | `pending_evaluations` | One row per executed trade scheduled for outcome evaluation (`eval_after_date = entry_date + EVAL_HORIZON_CALENDAR_DAYS`, default 7 calendar days) |
-| `watchlist` | `symbol` PRIMARY KEY, `added_at`, `source` — seeded from `config.WATCHLIST` when empty; UI + `core/watchlist.py` enforce **max 20** symbols |
+| `watchlist` | `symbol` PRIMARY KEY, `added_at`, `source` — seeded from `config.WATCHLIST` when empty; UI + `agents/shared/watchlist.py` enforce **max 20** symbols |
 
 The `source` column on `trades`, `agent_memory`, and `postmortem` is one of `'live'` / `'paper'` / `'simulation'`.
 
@@ -323,7 +323,8 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **Fear & Greed** — CNN `production.dataviz.cnn.io` endpoint is **undocumented** and may change without notice. `fetch_fear_greed` is **fail-silent** (bar shows `F&G: —` on failure).
 - **Earnings calendar** — `yf.Ticker.calendar` shape varies across **yfinance** versions (dict vs DataFrame, column names). `market_data.fetch_earnings_calendar` and `build_economic_calendar_rows` must stay wrapped in **try/except**; never assume a single format.
 - **Pyramiding** — `MAX_PYRAMID_LAYERS` (default 3, env `MAX_PYRAMID_LAYERS`) caps successive BUYs on the same symbol; `avg_price` is recomputed as a **share-weighted** average. Past the cap, `buy()` returns `{"success": False, "error": "max pyramid layers (…) reached"}` — `execute_node` checks `result["success"]`. **`high_watermarks`** for trailing stop is set on the **first** open only — pyramids do **not** reset it.
-- **Watchlist DB** — at most **20** symbols (`core/watchlist.MAX_WATCHLIST_SYMBOLS`). **`remove_from_watchlist`** refuses to drop a ticker that still has an **open position** (`open_symbols`).
+- **Watchlist DB** — at most **20** symbols (`agents.shared.watchlist.MAX_WATCHLIST_SYMBOLS`). **`remove_from_watchlist`** refuses to drop a ticker that still has an **open position** (`open_symbols`).
+- **`core/` dependency rule** — **`core/` must NEVER import from `agents/` or `dashboard/`**. Pass runtime data (e.g. watchlist symbols, `get_runtime_mode()`) as **parameters** from callers in `agents/` or `dashboard/`.
 - **Discord webhook alerts** — `core.notifications` uses fire-and-forget `httpx.post` (5s timeout). Fail-silent on errors; never blocks the agent loop. Wire points use lazy imports (`core.data` ↔ `agents.shared.nodes`). Leave `DISCORD_WEBHOOK_URL` unset to disable.
 - **CI jobs** — `.github/workflows/ci.yml`: job `lint` runs `uv run black --check .` only; job `test` runs ruff + pytest + coverage. Failing `lint` on push: reproduce with `uv run black --check --diff .`.
 - **`README.md`** — root `README.md` is a symlink to `docs/README.md`; commit `docs/README.md` when updating user-facing README.

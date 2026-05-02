@@ -65,15 +65,6 @@ def send_discord_alert(
     _post_payload({"embeds": [embed]})
 
 
-def _runtime_mode_label() -> str:
-    try:
-        from agents.shared.nodes import get_runtime_mode
-
-        return str(get_runtime_mode() or "live")
-    except Exception:
-        return "unknown"
-
-
 def alert_trade(
     *,
     symbol: str,
@@ -85,6 +76,7 @@ def alert_trade(
     votes_summary: str | None = None,
     pyramid_layer: int | None = None,
     pyramid_max: int | None = None,
+    mode: str = "live",
 ) -> None:
     """Notify an executed BUY/SELL (after DB persistence)."""
     lines = [
@@ -101,9 +93,7 @@ def alert_trade(
     if confidence is not None:
         lines.append(f"Confidence: `{confidence:.0%}`")
     body = "\n".join(lines)
-    fields: list[dict[str, Any]] = [
-        {"name": "Mode", "value": _runtime_mode_label(), "inline": True}
-    ]
+    fields: list[dict[str, Any]] = [{"name": "Mode", "value": str(mode)[:256], "inline": True}]
     if votes_summary:
         fields.append({"name": "Votes", "value": votes_summary[:1024], "inline": False})
     send_discord_alert(
@@ -114,49 +104,45 @@ def alert_trade(
     )
 
 
-def alert_death(*, portfolio_value: float | None = None) -> None:
+def alert_death(*, portfolio_value: float | None = None, mode: str = "live") -> None:
     """Portfolio crossed death threshold."""
     desc = "Portfolio is dead (below survival threshold)."
     if portfolio_value is not None:
         desc += f"\nLast value: `${portfolio_value:,.2f}`"
-    fields = [{"name": "Mode", "value": _runtime_mode_label(), "inline": True}]
+    fields = [{"name": "Mode", "value": str(mode)[:256], "inline": True}]
     send_discord_alert("APEX-7 death", desc, color=_COLOR_RED, fields=fields)
 
 
-def alert_stagnation(*, hold_cycles: int) -> None:
+def alert_stagnation(*, hold_cycles: int, mode: str = "live") -> None:
     """Too many consecutive HOLD cycles (rule-based stagnation hook)."""
     send_discord_alert(
         "APEX-7 stagnation",
         f"Hold streak reached **{hold_cycles}** cycles without action.",
         color=_COLOR_ORANGE,
-        fields=[{"name": "Mode", "value": _runtime_mode_label(), "inline": True}],
+        fields=[{"name": "Mode", "value": str(mode)[:256], "inline": True}],
     )
 
 
-def alert_circuit_breaker(reason: str, wait_seconds: int) -> None:
+def alert_circuit_breaker(reason: str, wait_seconds: int, *, mode: str = "live") -> None:
     """LLM circuit breaker or rate limit backoff."""
     send_discord_alert(
         "APEX-7 circuit breaker",
         f"{reason}\nRetry/backoff: **{wait_seconds}s**",
         color=_COLOR_GOLD,
+        fields=[{"name": "Mode", "value": str(mode)[:256], "inline": True}],
     )
 
 
-def alert_startup() -> None:
+def alert_startup(*, mode: str = "live", watchlist_summary: str = "") -> None:
     """Dashboard / controller started."""
-    try:
-        from core.watchlist import get_watchlist
-
-        wl = ", ".join(get_watchlist())
-    except Exception:
-        wl = "(indisponible)"
+    wl = (watchlist_summary or "(indisponible)")[:1024]
     send_discord_alert(
         "APEX-7 startup",
         "Controller started.",
         color=_COLOR_GREEN,
         fields=[
-            {"name": "Mode", "value": _runtime_mode_label(), "inline": True},
-            {"name": "Watchlist", "value": wl[:1024], "inline": False},
+            {"name": "Mode", "value": str(mode)[:256], "inline": True},
+            {"name": "Watchlist", "value": wl, "inline": False},
         ],
     )
 
@@ -167,6 +153,7 @@ def alert_trailing_stop(
     price: float,
     high_watermark: float,
     drawdown_pct: float,
+    mode: str = "live",
 ) -> None:
     """Trailing stop-loss triggered (Feature 3 — wired from ``execute_node``)."""
     send_discord_alert(
@@ -174,7 +161,7 @@ def alert_trailing_stop(
         f"`{symbol}` @ `{price:.4f}` — high `{high_watermark:.4f}`, "
         f"drawdown from high `{drawdown_pct * 100:.2f}%`",
         color=_COLOR_ORANGE,
-        fields=[{"name": "Mode", "value": _runtime_mode_label(), "inline": True}],
+        fields=[{"name": "Mode", "value": str(mode)[:256], "inline": True}],
     )
 
 

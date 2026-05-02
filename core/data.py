@@ -21,8 +21,8 @@ from config import (
     PORTFOLIO_SAVE_ENABLED,
     PORTFOLIO_STATE_PATH,
     USE_LIVEFEED,
+    WATCHLIST,
 )
-from core.watchlist import get_watchlist
 
 logger = logging.getLogger("apex7.portfolio")
 
@@ -45,14 +45,14 @@ class Portfolio:
         self.high_watermarks: dict[str, float] = {}
 
     def fetch_prices(self, symbols: list[str] | None = None) -> dict[str, float]:
-        symbols = symbols or get_watchlist()
+        syms = list(WATCHLIST) if symbols is None else symbols
         prices = {}
 
         if USE_LIVEFEED:
             try:
-                if self._livefeed is None or self._livefeed_symbols != symbols:
-                    self._livefeed = LiveFeed(symbols)
-                    self._livefeed_symbols = list(symbols)
+                if self._livefeed is None or self._livefeed_symbols != syms:
+                    self._livefeed = LiveFeed(syms)
+                    self._livefeed_symbols = list(syms)
                 result = self._livefeed.fetch()
                 if result:
                     with self._lock:
@@ -62,15 +62,15 @@ class Portfolio:
                 pass
 
         try:
-            tickers = yf.Tickers(" ".join(symbols))
-            for sym in symbols:
+            tickers = yf.Tickers(" ".join(syms))
+            for sym in syms:
                 try:
                     prices[sym] = float(tickers.tickers[sym].fast_info.last_price)
                 except Exception:
                     prices[sym] = self.last_prices.get(sym, 0.0)
         except Exception as e:
             self.log(f"Price fetch error: {e}", "error")
-            prices = {s: self.last_prices.get(s, 0.0) for s in symbols}
+            prices = {s: self.last_prices.get(s, 0.0) for s in syms}
         with self._lock:
             self.last_prices = prices
         return prices
@@ -199,7 +199,7 @@ class Portfolio:
             if val > self.peak_value:
                 self.peak_value = val
 
-    def check_death(self, prices: dict[str, float]) -> bool:
+    def check_death(self, prices: dict[str, float], *, discord_mode: str | None = None) -> bool:
         # Portfolio dies exactly once — Discord alert on transition only.
         with self._lock:
             val = self._total_value_unlocked(prices)
@@ -208,13 +208,11 @@ class Portfolio:
             dead_now = self.is_dead
         if dead_now and not was_dead:
             try:
-                from agents.shared.modes import get_simulation_mode
-
-                if get_simulation_mode():
+                if discord_mode is None or str(discord_mode).lower() == "sim":
                     return dead_now
                 from core.notifications import alert_death
 
-                alert_death(portfolio_value=val)
+                alert_death(portfolio_value=val, mode=str(discord_mode))
             except Exception:
                 pass
         return dead_now

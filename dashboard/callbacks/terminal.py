@@ -7,7 +7,7 @@ import dash
 import plotly.graph_objects as go
 from dash import ALL, Input, Output, State, ctx, dcc, html, no_update
 
-from core.watchlist import add_to_watchlist, get_watchlist, remove_from_watchlist
+from agents.shared.watchlist import add_to_watchlist, get_watchlist, remove_from_watchlist
 from core.external_data import fetch_fear_greed, fetch_fred_latest
 from dashboard.controller import _state
 from market_data import (
