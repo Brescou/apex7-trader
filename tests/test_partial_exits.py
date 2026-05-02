@@ -11,6 +11,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pytest
+
 from agents.multi import arbitrate_node
 from agents.shared.nodes import (
     _sim_mode,
@@ -65,6 +67,102 @@ def _make_state(
         "prices": {symbol: 150.0},
         "skip_research": True,
     }
+
+
+def _make_buy_state(*, symbol: str = "AAPL", in_position: bool) -> dict:
+    """Minimal state that resolves to a BUY in simulation arbitration."""
+    tech_vote = {
+        "agent": "technician",
+        "action": "BUY",
+        "symbol": symbol,
+        "confidence": 0.9,
+    }
+    analyst_vote = {
+        "agent": "analyst",
+        "action": "BUY",
+        "symbol": symbol,
+        "confidence": 0.85,
+    }
+    risk_vote = {
+        "agent": "risk_manager",
+        "risk_score": 4,
+        "max_safe_allocation_pct": 30.0,
+        "sizing_recommendation": "FULL",
+    }
+    macro_vote = {
+        "agent": "macro_watcher",
+        "market_regime": "transitional",
+        "macro_bias": "neutral",
+    }
+    positions: dict = {}
+    if in_position:
+        positions = {symbol: {"shares": 2.0, "avg_price": 140.0, "layers": 1}}
+    return {
+        "round": 1,
+        "agent_votes": [tech_vote, analyst_vote, risk_vote, macro_vote],
+        "tech_vote": tech_vote,
+        "analyst_vote": analyst_vote,
+        "risk_vote": risk_vote,
+        "macro_vote": macro_vote,
+        "balance": 5000.0,
+        "positions": positions,
+        "prices": {symbol: 150.0},
+        "skip_research": True,
+    }
+
+
+def test_arbitrate_pyramid_flag_and_confidence_discount() -> None:
+    """BUY on an already-open symbol sets ``is_pyramid`` and lowers confidence ~20%."""
+    base = arbitrate_node(_make_buy_state(in_position=False))
+    pyr = arbitrate_node(_make_buy_state(in_position=True))
+    assert base["decision"]["action"] == "BUY"
+    assert base["decision"]["is_pyramid"] is False
+    assert pyr["decision"]["is_pyramid"] is True
+    assert pyr["decision"]["confidence"] == pytest.approx(base["decision"]["confidence"] * 0.8)
+
+
+def test_risk_check_allows_pyramid_buy_under_cap() -> None:
+    """Existing position + layers below max + cumulative allocation ≤ 1.5 × MAX → PASS."""
+    sym = "AAPL"
+    state = {
+        "decision": {"action": "BUY", "symbol": sym, "allocation_pct": 10, "sell_pct": 100},
+        "prices": {sym: 100.0},
+        "positions": {sym: {"shares": 1.0, "avg_price": 100.0, "layers": 1}},
+        "balance": 5000.0,
+    }
+    out = risk_check_node(state)
+    assert out["decision"].get("_risk_passed") is True
+
+
+def test_risk_check_rejects_max_pyramid_layers(monkeypatch) -> None:
+    from agents.shared import nodes as nodes_mod
+
+    monkeypatch.setattr(nodes_mod, "MAX_PYRAMID_LAYERS", 2)
+    sym = "AAPL"
+    state = {
+        "decision": {"action": "BUY", "symbol": sym, "allocation_pct": 5, "sell_pct": 100},
+        "prices": {sym: 100.0},
+        "positions": {sym: {"shares": 1.0, "avg_price": 100.0, "layers": 2}},
+        "balance": 5000.0,
+    }
+    out = risk_check_node(state)
+    assert out["decision"].get("_risk_passed") is False
+    assert "pyramid" in (out["decision"].get("_risk_reason") or "").lower()
+
+
+def test_risk_check_rejects_pyramid_over_alloc_cap() -> None:
+    """existing_alloc + new alloc must not exceed MAX_ALLOC_PCT * 1.5."""
+    sym = "AAPL"
+    # ~64 % already in the symbol; +10 % new → above 60 % cap (40 * 1.5)
+    state = {
+        "decision": {"action": "BUY", "symbol": sym, "allocation_pct": 10, "sell_pct": 100},
+        "prices": {sym: 100.0},
+        "positions": {sym: {"shares": 9.0, "avg_price": 100.0, "layers": 1}},
+        "balance": 500.0,
+    }
+    out = risk_check_node(state)
+    assert out["decision"].get("_risk_passed") is False
+    assert "pyramidale" in (out["decision"].get("_risk_reason") or "").lower()
 
 
 # ── Sizing → sell_pct mapping ────────────────────────────────────────────────

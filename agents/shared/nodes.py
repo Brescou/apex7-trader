@@ -26,6 +26,7 @@ from config import (
     INITIAL_BALANCE,
     MAX_ALLOC_PCT,
     MAX_POSITIONS,
+    MAX_PYRAMID_LAYERS,
     SIM_DRIFT,
     SIM_VOLATILITY,
     STOP_LOSS_PCT,
@@ -606,7 +607,20 @@ def risk_check_node(state: AgentState) -> dict:
         amount = pv * (alloc / 100)
         if amount > balance:
             failures.append(f"cash insuffisant (besoin ${amount:.0f} > dispo ${balance:.0f})")
-        if len(pos) >= MAX_POSITIONS and symbol not in pos:
+        if symbol in pos:
+            layers = int(pos[symbol].get("layers", 1))
+            if layers >= MAX_PYRAMID_LAYERS:
+                failures.append(f"max pyramid layers ({MAX_PYRAMID_LAYERS}) atteint pour {symbol}")
+            sym_px = float(prices.get(symbol, 0) or 0)
+            if sym_px > 0 and pv > 0:
+                existing_alloc = (float(pos[symbol]["shares"]) * sym_px) / pv * 100.0
+                total_alloc = existing_alloc + alloc
+                cap_pyramid = MAX_ALLOC_PCT * 1.5
+                if total_alloc > cap_pyramid:
+                    failures.append(
+                        f"allocation pyramidale trop élevée ({total_alloc:.1f}% > {cap_pyramid:.0f}%)"
+                    )
+        elif len(pos) >= MAX_POSITIONS:
             failures.append(f"max {MAX_POSITIONS} positions atteint")
         if not symbol or symbol not in prices:
             failures.append(f"symbol invalide ou absent du watchlist : {symbol!r}")
@@ -879,6 +893,11 @@ def make_save_memory_node(portfolio: Portfolio):
                 from core.notifications import alert_trade
 
                 summary = _discord_votes_summary(state)
+                pyramid_layer = None
+                pyramid_max = None
+                if action == "BUY" and decision.get("is_pyramid"):
+                    pyramid_layer = int(portfolio.positions.get(symbol, {}).get("layers", 1))
+                    pyramid_max = MAX_PYRAMID_LAYERS
                 alert_trade(
                     symbol=symbol,
                     action=action,
@@ -887,9 +906,14 @@ def make_save_memory_node(portfolio: Portfolio):
                     sell_pct=float(decision.get("sell_pct", 100.0)) if action == "SELL" else None,
                     confidence=float(decision.get("confidence", 0.0)),
                     votes_summary=summary,
+                    pyramid_layer=pyramid_layer,
+                    pyramid_max=pyramid_max,
                 )
             except Exception:
                 pass
+            if action == "BUY" and decision.get("is_pyramid"):
+                lyr = int(portfolio.positions.get(symbol, {}).get("layers", 1))
+                logs.append(_entry(f"save_memory: BUY (pyramid layer {lyr}) {symbol}"))
             entry_dt = datetime.fromisoformat(ts) if "T" in ts else datetime.now()
             eval_after = (entry_dt + timedelta(days=EVAL_HORIZON_CALENDAR_DAYS)).isoformat()
             ok_pending = _db_write(

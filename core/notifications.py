@@ -83,6 +83,8 @@ def alert_trade(
     sell_pct: float | None = None,
     confidence: float | None = None,
     votes_summary: str | None = None,
+    pyramid_layer: int | None = None,
+    pyramid_max: int | None = None,
 ) -> None:
     """Notify an executed BUY/SELL (after DB persistence)."""
     lines = [
@@ -94,6 +96,8 @@ def alert_trade(
         lines.append(f"Notional: `${amount_usd:,.2f}`")
     if sell_pct is not None and action.upper() == "SELL":
         lines.append(f"Sell %: `{sell_pct:g}%`")
+    if pyramid_layer is not None and pyramid_max is not None and action.upper() == "BUY":
+        lines.append(f"Layer: `{pyramid_layer}/{pyramid_max}`")
     if confidence is not None:
         lines.append(f"Confidence: `{confidence:.0%}`")
     body = "\n".join(lines)

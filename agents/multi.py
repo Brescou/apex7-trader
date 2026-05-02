@@ -975,6 +975,12 @@ def arbitrate_node(state: MultiAgentState) -> dict:
                 )
             )
 
+    positions = state.get("positions") or {}
+    is_pyramid = final_action == "BUY" and bool(symbol) and symbol in positions
+    if is_pyramid:
+        composite_conf *= 0.8
+        logs.append(_entry("arbitrate: pyramide — confiance ×0,8 (renfort sur position ouverte)"))
+
     arbitration = {
         "action": final_action,
         "symbol": symbol,
@@ -995,6 +1001,7 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         "market_intel": market_intel,
         "action_scores": action_scores,
         "_votes": votes,
+        "is_pyramid": is_pyramid,
     }
 
     if final_action == "SELL":
@@ -1025,6 +1032,7 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         "thoughts": thoughts,
         "emotion": emotion,
         "market_intel": market_intel,
+        "is_pyramid": is_pyramid,
     }
     arbitration["sell_pct"] = final_sell_pct
 
