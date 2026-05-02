@@ -1,4 +1,4 @@
-"""APEX-7 — Terminal tab callbacks (16 callbacks)."""
+"""APEX-7 — Terminal tab callbacks (17 callbacks)."""
 
 import time
 
@@ -9,6 +9,7 @@ from dash import ALL, Input, Output, State, ctx, dcc, html, no_update
 from core.watchlist import add_to_watchlist, get_watchlist, remove_from_watchlist
 from dashboard.controller import _state
 from market_data import (
+    build_economic_calendar_rows,
     fetch_comparison,
     fetch_macro,
     fetch_news,
@@ -185,6 +186,110 @@ def _update_macro_bar(_):
     )
 
     return blocs + [ts_el]
+
+
+def _calendar_event_line(row: dict) -> str:
+    """Single-line label for an economic calendar row (earnings vs macro)."""
+    ed = row["event_date"]
+    mon = ed.strftime("%b")
+    day = ed.day
+    if row.get("kind") == "earnings":
+        sym = row.get("symbol") or "?"
+        d = int(row["days_until"])
+        unit = "1 day" if d == 1 else f"{d} days"
+        return f"{sym} earnings in {unit} ⚠️"
+    ev = row.get("event") or ""
+    if ev == "FOMC":
+        return f"FOMC meeting {mon} {day} 📌"
+    return f"{ev} release {mon} {day} 📌"
+
+
+def _calendar_badge(days: int) -> tuple[str, str | None]:
+    """Return badge text and color (design token); empty string if no badge."""
+    if days <= 7:
+        return ("THIS WEEK", RED)
+    if days <= 30:
+        return ("THIS MONTH", YELLOW)
+    return ("", None)
+
+
+@app.callback(
+    Output("economic-calendar-content", "children"),
+    Input("macro-interval", "n_intervals"),
+    State("terminal-watchlist", "data"),
+    prevent_initial_call=False,
+)
+def _update_economic_calendar(_, wl_data):
+    symbols = wl_data if isinstance(wl_data, list) and wl_data else get_watchlist()
+    try:
+        rows = build_economic_calendar_rows(symbols, horizon_days=120)
+    except Exception:
+        rows = []
+
+    if not rows:
+        return html.Div(
+            "No upcoming events in the next 120 days.",
+            style={"fontSize": "11px", "color": TEXT_DIM, "padding": "4px 0"},
+        )
+
+    out: list = []
+    for row in rows:
+        line = _calendar_event_line(row)
+        badge_txt, badge_col = _calendar_badge(int(row["days_until"]))
+        date_iso = row["event_date"].isoformat()
+        badge_el = (
+            html.Span(
+                badge_txt,
+                style={
+                    "fontSize": "8px",
+                    "marginLeft": "8px",
+                    "padding": "2px 6px",
+                    "borderRadius": "2px",
+                    "border": f"1px solid {badge_col}",
+                    "color": badge_col,
+                    "letterSpacing": "0.1em",
+                    "fontWeight": "600",
+                },
+            )
+            if badge_txt
+            else None
+        )
+        out.append(
+            html.Div(
+                [
+                    html.Div(
+                        date_iso,
+                        style={
+                            "fontSize": "10px",
+                            "color": TEXT_DIM,
+                            "minWidth": "78px",
+                            "flexShrink": "0",
+                            "fontVariantNumeric": "tabular-nums",
+                        },
+                    ),
+                    html.Div(
+                        [html.Span(line, style={"fontSize": "11px", "color": TEXT_MAIN})]
+                        + ([badge_el] if badge_el else []),
+                        style={
+                            "flex": "1",
+                            "display": "flex",
+                            "alignItems": "center",
+                            "flexWrap": "wrap",
+                            "gap": "4px",
+                        },
+                    ),
+                ],
+                style={
+                    "display": "flex",
+                    "gap": "10px",
+                    "padding": "8px 0",
+                    "borderLeft": f"2px solid {BORDER}",
+                    "paddingLeft": "12px",
+                    "marginLeft": "2px",
+                },
+            )
+        )
+    return html.Div(out)
 
 
 @app.callback(

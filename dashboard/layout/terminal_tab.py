@@ -479,6 +479,27 @@ def _tab_terminal() -> html.Div:
                     # Right column (35%)
                     html.Div(
                         [
+                            html.Div(
+                                [
+                                    _section_label("📅 ECONOMIC CALENDAR"),
+                                    html.Div(
+                                        id="economic-calendar-content",
+                                        style={
+                                            "maxHeight": "240px",
+                                            "overflowY": "auto",
+                                            "overflowX": "hidden",
+                                            "paddingRight": "4px",
+                                        },
+                                    ),
+                                ],
+                                style={
+                                    "background": BG_CARD,
+                                    "border": f"1px solid {BORDER}",
+                                    "borderRadius": "4px",
+                                    "padding": "12px 14px",
+                                    "marginBottom": "12px",
+                                },
+                            ),
                             # News feed
                             html.Div(
                                 [
