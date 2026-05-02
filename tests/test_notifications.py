@@ -102,3 +102,39 @@ def test_alert_daily_digest_embed(monkeypatch) -> None:
     assert "Agent accuracy" in names
     assert "Holds" in names
     assert "Mode" in names
+
+
+def test_alert_weekly_report_embed(monkeypatch) -> None:
+    """Weekly embed includes P&L, win rate, SPY comparison, and ranking fields."""
+    monkeypatch.setattr("config.DISCORD_WEBHOOK_URL", "https://example.com/hook")
+    with patch("core.notifications.httpx.post") as post:
+        n.alert_weekly_report(
+            week_start="2026-04-28",
+            week_end="2026-05-04",
+            pnl_usd=120.0,
+            pnl_pct=12.0,
+            portfolio_value=1120.0,
+            total_trades=24,
+            win_rate=2 / 3,
+            best_trade={"symbol": "AAPL", "pnl_pct": 5.2},
+            worst_trade={"symbol": "TSLA", "pnl_pct": -1.1},
+            agent_ranking=[
+                {"name": "technician", "accuracy": 0.78, "trades": 12},
+                {"name": "analyst", "accuracy": None, "trades": 4},
+            ],
+            spy_pct=1.8,
+            mode="PAPER",
+            win_count=8,
+            closed_trades=12,
+        )
+    post.assert_called_once()
+    emb = post.call_args.kwargs["json"]["embeds"][0]
+    assert "Weekly Report" in emb["title"]
+    assert emb["color"] == n._COLOR_GREEN
+    names = {f["name"] for f in emb["fields"]}
+    assert "P&L (week)" in names
+    assert "Win rate" in names
+    assert "vs SPY" in names
+    assert (
+        "outperformed" in next(f["value"] for f in emb["fields"] if f["name"] == "vs SPY").lower()
+    )

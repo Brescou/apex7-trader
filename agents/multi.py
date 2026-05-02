@@ -5,8 +5,9 @@ import logging
 import random
 import threading
 import time
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
+import yfinance as yf
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
@@ -37,6 +38,7 @@ from agents.shared.nodes import (
     risk_check_node,
     skip_node,
     sonnet,
+    get_weekly_start_value,
 )
 from agents.shared.prompts import (
     ANALYST_SYSTEM_PROMPT,
@@ -1182,6 +1184,187 @@ def run_daily_digest(portfolio: Portfolio) -> None:
         consecutive_holds=get_consecutive_hold_cycles(),
         mode=mode_label,
         realized_pnl_pcts=_today_realized_pnl_pcts(portfolio),
+    )
+
+
+def _spy_week_return_pct() -> float | None:
+    """Approximate SPY return over ``yf.download(..., period=\"5d\")`` window."""
+
+    try:
+        raw = yf.download(
+            "SPY",
+            period="5d",
+            progress=False,
+            auto_adjust=True,
+            threads=False,
+        )
+        if raw is None or len(raw) < 2:
+            return None
+        df = raw
+        try:
+            df = df.copy()
+            df.columns = df.columns.get_level_values(0)
+        except (AttributeError, TypeError, ValueError):
+            pass
+        closes = df["Close"].dropna()
+        if len(closes) < 2:
+            return None
+        first = float(closes.iloc[0])
+        last = float(closes.iloc[-1])
+        if first <= 0:
+            return None
+        return (last - first) / first * 100.0
+    except Exception:
+        return None
+
+
+def _rolling_7d_closed_sell_pnls(portfolio: Portfolio) -> list[tuple[str, float]]:
+    """Symbol and realized P&L % for each SELL in the last 7 days (vs prior BUY)."""
+
+    cutoff = datetime.now() - timedelta(days=7)
+    out: list[tuple[str, float]] = []
+    for trade in portfolio.trade_history:
+        if trade.get("action") != "SELL":
+            continue
+        tstr = str(trade.get("time") or "")
+        try:
+            tnorm = tstr.replace("Z", "+00:00")
+            tt = datetime.fromisoformat(tnorm)
+            if tt.tzinfo:
+                tt = tt.replace(tzinfo=None)
+        except ValueError:
+            try:
+                tt = datetime.fromisoformat(tstr[:19])
+            except ValueError:
+                continue
+        if tt < cutoff:
+            continue
+        symbol = trade.get("symbol")
+        try:
+            sp = float(trade.get("price"))
+        except (TypeError, ValueError):
+            continue
+        buy_trade = next(
+            (
+                x
+                for x in reversed(portfolio.trade_history)
+                if x.get("action") == "BUY" and x.get("symbol") == symbol
+            ),
+            None,
+        )
+        if not buy_trade:
+            continue
+        try:
+            bp = float(buy_trade.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if bp > 0 and symbol:
+            out.append((str(symbol), (sp - bp) / bp * 100.0))
+    return out
+
+
+def _week_agent_ranking() -> list[dict]:
+    """Per-agent accuracy (evaluated votes) and activity in the rolling 7-day window."""
+
+    rows_acc = _db_read(
+        "SELECT agent_name, AVG(was_correct), COUNT(*) FROM agent_memory "
+        "WHERE date(timestamp) >= date('now', '-7 days') AND was_correct IS NOT NULL "
+        "GROUP BY agent_name"
+    )
+    rows_vol = _db_read(
+        "SELECT agent_name, COUNT(*) FROM agent_memory "
+        "WHERE date(timestamp) >= date('now', '-7 days') GROUP BY agent_name"
+    )
+    vol_by = {str(r[0]): int(r[1]) for r in rows_vol}
+    ranking: list[dict] = []
+    seen: set[str] = set()
+    for r in rows_acc:
+        name = str(r[0])
+        seen.add(name)
+        ranking.append(
+            {
+                "name": name,
+                "accuracy": float(r[1]),
+                "trades": vol_by.get(name, int(r[2])),
+            }
+        )
+    for name, cnt in vol_by.items():
+        if name not in seen:
+            ranking.append({"name": name, "accuracy": None, "trades": cnt})
+    for agent in WEIGHTS:
+        if not any(x["name"] == agent for x in ranking):
+            ranking.append({"name": agent, "accuracy": None, "trades": 0})
+    ranking.sort(key=lambda x: (x["accuracy"] is None, -(x["accuracy"] or 0.0)))
+    return ranking
+
+
+def run_weekly_report(portfolio: Portfolio) -> None:
+    """Build and send the Discord weekly performance report (skipped in simulation)."""
+
+    if _sim_mode["enabled"]:
+        return
+
+    try:
+        from core.notifications import alert_weekly_report
+    except Exception:
+        return
+
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    week_start = monday.isoformat()
+    week_end = today.isoformat()
+
+    prices = portfolio.fetch_prices()
+    portfolio_value = float(portfolio.total_value(prices))
+
+    wval, wkey = get_weekly_start_value()
+    if wval is not None and wkey == week_start:
+        baseline = float(wval)
+        pnl_usd = portfolio_value - baseline
+        pnl_pct = (pnl_usd / baseline * 100.0) if baseline > 0 else 0.0
+    else:
+        pnl_usd = 0.0
+        pnl_pct = 0.0
+
+    exec_rows = _db_read(
+        "SELECT COUNT(*) FROM trades WHERE date(timestamp) >= date('now', '-7 days')"
+    )
+    total_trades = int(exec_rows[0][0]) if exec_rows else 0
+
+    closed = _rolling_7d_closed_sell_pnls(portfolio)
+    wins = sum(1 for _, p in closed if p > 0)
+    n_closed = len(closed)
+    win_rate = (wins / n_closed) if n_closed else 0.0
+
+    best_trade: dict | None = None
+    worst_trade: dict | None = None
+    if closed:
+        best_sym, best_p = max(closed, key=lambda x: x[1])
+        worst_sym, worst_p = min(closed, key=lambda x: x[1])
+        best_trade = {"symbol": best_sym, "pnl_pct": round(best_p, 2)}
+        worst_trade = {"symbol": worst_sym, "pnl_pct": round(worst_p, 2)}
+
+    agent_ranking = _week_agent_ranking()
+    spy_pct = _spy_week_return_pct()
+
+    mode = get_runtime_mode()
+    mode_label = mode.upper() if mode else "LIVE"
+
+    alert_weekly_report(
+        week_start=week_start,
+        week_end=week_end,
+        pnl_usd=pnl_usd,
+        pnl_pct=pnl_pct,
+        portfolio_value=portfolio_value,
+        total_trades=total_trades,
+        win_rate=win_rate,
+        win_count=wins,
+        closed_trades=n_closed,
+        best_trade=best_trade,
+        worst_trade=worst_trade,
+        agent_ranking=agent_ranking,
+        spy_pct=spy_pct,
+        mode=mode_label,
     )
 
 

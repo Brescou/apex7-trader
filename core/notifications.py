@@ -293,3 +293,90 @@ def alert_daily_digest(
         color=color,
         fields=fields,
     )
+
+
+def _format_weekly_agent_ranking(ranking: list[dict]) -> str:
+    lines: list[str] = []
+    for i, row in enumerate(ranking, 1):
+        name = str(row.get("name", "?"))
+        acc = row.get("accuracy")
+        ntr = int(row.get("trades", 0))
+        if acc is None:
+            lines.append(f"{i}. `{name}` — ⏳ (n={ntr})")
+        else:
+            lines.append(f"{i}. `{name}` — **{float(acc):.0%}** (n={ntr})")
+    text = "\n".join(lines)
+    return text[:1024] + ("…" if len(text) > 1024 else "")
+
+
+def alert_weekly_report(
+    *,
+    week_start: str,
+    week_end: str,
+    pnl_usd: float,
+    pnl_pct: float,
+    portfolio_value: float,
+    total_trades: int,
+    win_rate: float,
+    best_trade: dict | None,
+    worst_trade: dict | None,
+    agent_ranking: list[dict],
+    spy_pct: float | None,
+    mode: str,
+    win_count: int | None = None,
+    closed_trades: int | None = None,
+) -> None:
+    """Weekly summary embed (Sundays at ``POSTMORTEM_HOUR``, live / paper only).
+
+    ``win_count`` / ``closed_trades`` optional counts for the win-rate line
+    (e.g. ``8/12`` closed round-trips).
+    """
+
+    if pnl_usd >= 0:
+        pnl_field = f"+${pnl_usd:,.2f} (+{pnl_pct:.1f}%)"
+    else:
+        pnl_field = f"-${-pnl_usd:,.2f} ({pnl_pct:.1f}%)"
+    color = _COLOR_GREEN if pnl_usd >= 0 else _COLOR_RED
+
+    if win_count is not None and closed_trades is not None and closed_trades > 0:
+        wr_line = f"{win_rate:.0%} ({win_count}/{closed_trades} trades)"
+    else:
+        wr_line = f"{win_rate:.0%}" if (closed_trades or 0) > 0 else "— (no closes)"
+
+    if best_trade and worst_trade:
+        bw = (
+            f"Best `{best_trade.get('symbol')}` **{float(best_trade['pnl_pct']):+.2f}%** · "
+            f"Worst `{worst_trade.get('symbol')}` **{float(worst_trade['pnl_pct']):+.2f}%**"
+        )
+    elif best_trade:
+        bw = f"Best `{best_trade.get('symbol')}` **{float(best_trade['pnl_pct']):+.2f}%**"
+    else:
+        bw = "—"
+
+    if spy_pct is None:
+        vs_spy = "SPY data unavailable"
+    else:
+        tag = "outperformed" if pnl_pct >= spy_pct else "underperformed"
+        vs_spy = f"APEX-7: **{pnl_pct:+.1f}%** vs SPY: **{spy_pct:+.1f}%** ({tag})"
+
+    fields: list[dict[str, Any]] = [
+        {"name": "P&L (week)", "value": pnl_field, "inline": True},
+        {"name": "Portfolio", "value": f"${portfolio_value:,.2f}", "inline": True},
+        {
+            "name": "Activity",
+            "value": f"{total_trades} executions (7d window)",
+            "inline": True,
+        },
+        {"name": "Win rate", "value": wr_line, "inline": False},
+        {"name": "Best / Worst", "value": bw, "inline": False},
+        {
+            "name": "Agent ranking",
+            "value": _format_weekly_agent_ranking(agent_ranking),
+            "inline": False,
+        },
+        {"name": "vs SPY", "value": vs_spy[:1024], "inline": False},
+        {"name": "Mode", "value": mode[:256], "inline": True},
+    ]
+
+    title = f"📈 APEX-7 Weekly Report — {week_start} → {week_end}"
+    send_discord_alert(title, "", color=color, fields=fields)

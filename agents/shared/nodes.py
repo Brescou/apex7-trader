@@ -138,6 +138,37 @@ def get_daily_start_value() -> tuple[float | None, str | None]:
         )
 
 
+def _week_monday(d: date) -> date:
+    """Monday of the ISO calendar week containing ``d`` (``weekday()`` Mon=0)."""
+
+    return d - timedelta(days=d.weekday())
+
+
+_weekly_start_value: dict = {"value": None, "week_key": None}
+_weekly_start_lock = threading.Lock()
+
+
+def maybe_update_weekly_start(portfolio: Portfolio, prices: dict[str, float]) -> None:
+    """Record ``total_value`` on the first ``execute`` cycle of each ISO week."""
+
+    monday = _week_monday(date.today())
+    wk = monday.isoformat()
+    with _weekly_start_lock:
+        if _weekly_start_value["week_key"] != wk:
+            _weekly_start_value["week_key"] = wk
+            _weekly_start_value["value"] = float(portfolio.total_value(prices))
+
+
+def get_weekly_start_value() -> tuple[float | None, str | None]:
+    """Return ``(start_value, monday_iso)`` for the current week's baseline, if any."""
+
+    with _weekly_start_lock:
+        return (
+            _weekly_start_value["value"],
+            _weekly_start_value["week_key"],
+        )
+
+
 # ── HOLD stagnation (Finding 3.5) ──────────────────────────────────────────────
 
 _consecutive_holds = 0
@@ -612,6 +643,7 @@ def make_execute_node(portfolio: Portfolio):
         sell_pct = float(decision.get("sell_pct", 100))
         prices = state["prices"]
         maybe_update_daily_start(portfolio, prices)
+        maybe_update_weekly_start(portfolio, prices)
         pv = portfolio.total_value(prices)
         logs = [_entry(f"execute: {action} {symbol}")]
 
