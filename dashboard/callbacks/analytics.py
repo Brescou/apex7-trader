@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from dash import Input, Output, State, dcc, html, no_update
 from dash.dash_table import DataTable
 
-from dashboard.layout import _load_trades_db
+from dashboard.layout import _load_postmortem, _load_trades_db
 from dashboard.server import (
     BG_CARD,
     BG_DEEP,
@@ -27,6 +27,222 @@ from dashboard.server import (
 )
 
 
+def _analytics_postmortem_section(post: list[dict]) -> html.Div:
+    """Bloc « Trade postmortem » — colonnes date, symbole, entrée, sortie, P&L, leçon."""
+    pm_rows = []
+    for pm in post[:12]:
+        pnl = float(pm.get("pnl_pct") or 0.0)
+        pnl_c = GREEN if pnl >= 0 else RED
+        sym = pm.get("symbol") or "—"
+        ts_raw = str(pm.get("timestamp") or "")[:19]
+        date_s = ts_raw[:10] if len(ts_raw) >= 10 else "—"
+        try:
+            bp = float(pm.get("buy_price") or 0)
+            entry_s = f"{bp:.2f}" if bp > 0 else "—"
+        except (TypeError, ValueError):
+            entry_s = "—"
+        try:
+            sp = float(pm.get("sell_price") or 0)
+            exit_s = f"{sp:.2f}" if sp > 0 else "—"
+        except (TypeError, ValueError):
+            exit_s = "—"
+        summary_txt = (pm.get("summary") or "")[:160]
+        sym_chip = html.Span(
+            sym,
+            style={
+                "fontSize": "9px",
+                "fontWeight": "700",
+                "color": BLUE,
+                "background": f"{BLUE}11",
+                "border": f"1px solid {BLUE}33",
+                "borderRadius": "2px",
+                "padding": "2px 6px",
+                "flexShrink": "0",
+            },
+        )
+        pm_rows.append(
+            html.Div(
+                [
+                    html.Span(
+                        date_s,
+                        style={
+                            "fontSize": "10px",
+                            "color": TEXT_DIM,
+                            "width": "86px",
+                            "flexShrink": "0",
+                        },
+                    ),
+                    sym_chip,
+                    html.Span(
+                        entry_s,
+                        style={
+                            "fontSize": "10px",
+                            "color": TEXT_MAIN,
+                            "width": "56px",
+                            "flexShrink": "0",
+                            "textAlign": "right",
+                        },
+                    ),
+                    html.Span(
+                        exit_s,
+                        style={
+                            "fontSize": "10px",
+                            "color": TEXT_MAIN,
+                            "width": "56px",
+                            "flexShrink": "0",
+                            "textAlign": "right",
+                        },
+                    ),
+                    html.Span(
+                        f"{pnl:+.1f}%",
+                        style={
+                            "fontSize": "11px",
+                            "color": pnl_c,
+                            "fontWeight": "700",
+                            "width": "52px",
+                            "flexShrink": "0",
+                        },
+                    ),
+                    html.Span(
+                        summary_txt,
+                        style={
+                            "fontSize": "10px",
+                            "color": TEXT_DIM,
+                            "flex": "1",
+                            "overflow": "hidden",
+                            "textOverflow": "ellipsis",
+                            "whiteSpace": "nowrap",
+                            "minWidth": "80px",
+                        },
+                    ),
+                ],
+                style={
+                    "display": "flex",
+                    "alignItems": "center",
+                    "gap": "10px",
+                    "padding": "7px 12px",
+                    "background": BG_CARD,
+                    "border": f"1px solid {BORDER}",
+                    "borderLeft": f"2px solid {pnl_c}",
+                    "borderRadius": "0 3px 3px 0",
+                    "marginBottom": "4px",
+                },
+            )
+        )
+
+    hdr = html.Div(
+        [
+            html.Span(
+                "DATE",
+                style={
+                    "fontSize": "9px",
+                    "color": TEXT_DIM,
+                    "letterSpacing": "0.12em",
+                    "width": "86px",
+                    "flexShrink": "0",
+                },
+            ),
+            html.Span(
+                "SYM",
+                style={
+                    "fontSize": "9px",
+                    "color": TEXT_DIM,
+                    "letterSpacing": "0.12em",
+                    "width": "72px",
+                    "flexShrink": "0",
+                },
+            ),
+            html.Span(
+                "ENTRY",
+                style={
+                    "fontSize": "9px",
+                    "color": TEXT_DIM,
+                    "letterSpacing": "0.12em",
+                    "width": "56px",
+                    "flexShrink": "0",
+                    "textAlign": "right",
+                },
+            ),
+            html.Span(
+                "EXIT",
+                style={
+                    "fontSize": "9px",
+                    "color": TEXT_DIM,
+                    "letterSpacing": "0.12em",
+                    "width": "56px",
+                    "flexShrink": "0",
+                    "textAlign": "right",
+                },
+            ),
+            html.Span(
+                "P&L",
+                style={
+                    "fontSize": "9px",
+                    "color": TEXT_DIM,
+                    "letterSpacing": "0.12em",
+                    "width": "52px",
+                    "flexShrink": "0",
+                },
+            ),
+            html.Span(
+                "LESSON",
+                style={
+                    "fontSize": "9px",
+                    "color": TEXT_DIM,
+                    "letterSpacing": "0.12em",
+                    "flex": "1",
+                    "minWidth": "80px",
+                },
+            ),
+        ],
+        style={
+            "display": "flex",
+            "alignItems": "center",
+            "gap": "10px",
+            "padding": "6px 12px",
+            "marginBottom": "4px",
+            "borderBottom": f"1px solid {BORDER}",
+        },
+    )
+
+    body = (
+        pm_rows
+        if pm_rows
+        else [
+            html.Div(
+                "No post-mortem data yet.",
+                style={
+                    "color": TEXT_DIM,
+                    "fontSize": "11px",
+                    "fontStyle": "italic",
+                    "padding": "12px",
+                },
+            )
+        ]
+    )
+
+    return html.Div(
+        [
+            html.Div(
+                "Trade postmortem",
+                style={
+                    "fontSize": "9px",
+                    "fontWeight": "700",
+                    "letterSpacing": "0.18em",
+                    "color": TEXT_DIM,
+                    "textTransform": "uppercase",
+                    "borderBottom": f"1px solid {BORDER}",
+                    "paddingBottom": "6px",
+                    "marginBottom": "10px",
+                    "marginTop": "28px",
+                },
+            ),
+            hdr,
+            html.Div(body),
+        ]
+    )
+
+
 @app.callback(
     Output("analytics-content", "children"),
     [Input("analytics-tick", "n_intervals"), Input("btn-analytics-refresh", "n_clicks")],
@@ -37,11 +253,19 @@ def _analytics_refresh(_, __, active_tab):
     if active_tab != "analytics":
         return no_update
     trades = _load_trades_db()
+    post = _load_postmortem()
+    pm_section = _analytics_postmortem_section(post)
 
     if not trades:
         return html.Div(
-            "No trade data yet. Run the agent first.",
-            style={"color": TEXT_DIM, "fontSize": "12px", "padding": "20px"},
+            [
+                html.Div(
+                    "No trade data yet. Run the agent first.",
+                    style={"color": TEXT_DIM, "fontSize": "12px", "padding": "20px"},
+                ),
+                pm_section,
+            ],
+            style={"display": "flex", "flexDirection": "column"},
         )
 
     # ── KPIs ─────────────────────────────────────────────────────────────────
@@ -289,4 +513,4 @@ def _analytics_refresh(_, __, active_tab):
         ],
     )
 
-    return html.Div([kpi_row, charts_row, data_table])
+    return html.Div([kpi_row, charts_row, data_table, pm_section])
