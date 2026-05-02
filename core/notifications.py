@@ -15,6 +15,9 @@ _COLOR_GREEN = 0x57F287
 _COLOR_RED = 0xED4245
 _COLOR_ORANGE = 0xFEE75C
 _COLOR_GOLD = 0xF0B232
+COLOR_CORRECT = 0x2ECC71
+COLOR_INCORRECT = 0xE74C3C
+COLOR_INCONCLUSIVE = 0x95A5A6
 
 
 def _webhook_url() -> str:
@@ -159,6 +162,40 @@ def alert_trailing_stop(
         f"drawdown from high `{drawdown_pct * 100:.2f}%`",
         color=_COLOR_ORANGE,
         fields=[{"name": "Mode", "value": _runtime_mode_label(), "inline": True}],
+    )
+
+
+def alert_evaluation(
+    *,
+    symbol: str,
+    action: str,
+    entry_price: float,
+    current_price: float,
+    pct_change: float,
+    was_correct: bool | None,
+    days_held: int,
+    mode: str,
+) -> None:
+    """Discord alert when a deferred ``was_correct`` evaluation finishes."""
+
+    if was_correct is True:
+        emoji, verdict, color = "✅", "CORRECT", COLOR_CORRECT
+    elif was_correct is False:
+        emoji, verdict, color = "❌", "INCORRECT", COLOR_INCORRECT
+    else:
+        emoji, verdict, color = "⚪", "INCONCLUSIVE", COLOR_INCONCLUSIVE
+    act = (action or "HOLD").upper()
+    sym = symbol or "?"
+    send_discord_alert(
+        title=f"{emoji} {act} {sym} — {verdict}",
+        description=(
+            f"Entry: `${entry_price:.2f}` → Now: `${current_price:.2f}` " f"({pct_change:+.1%})"
+        ),
+        color=color,
+        fields=[
+            {"name": "Held", "value": f"{days_held} days", "inline": True},
+            {"name": "Mode", "value": mode[:256], "inline": True},
+        ],
     )
 
 

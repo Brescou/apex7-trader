@@ -7,6 +7,7 @@ from datetime import datetime
 import yfinance as yf
 
 from agents.shared.db import _db_read, _db_write
+from agents.shared.modes import get_runtime_mode, get_simulation_mode
 
 logger = logging.getLogger("apex7")
 
@@ -51,7 +52,8 @@ def evaluate_pending_trades(now: datetime | None = None) -> int:
 
     Returns the number of evaluations that actually completed.
     """
-    when = (now or datetime.now()).isoformat()
+    when_dt = now or datetime.now()
+    when = when_dt.isoformat()
     rows = _db_read(
         "SELECT id, trade_id, trace_id, symbol, action, entry_price, "
         "entry_date, eval_after_date FROM pending_evaluations "
@@ -64,7 +66,7 @@ def evaluate_pending_trades(now: datetime | None = None) -> int:
 
     completed = 0
     for row in rows:
-        pe_id, _trade_id, trace_id, symbol, action, entry_price, _entry_date, _eval_after = row
+        pe_id, _trade_id, trace_id, symbol, action, entry_price, entry_date, _eval_after = row
         action_u = (action or "HOLD").upper()
         if action_u not in ("BUY", "SELL"):
             _db_write(
@@ -125,6 +127,15 @@ def evaluate_pending_trades(now: datetime | None = None) -> int:
             (pe_id,),
         )
 
+        try:
+            ed_norm = str(entry_date).replace("Z", "+00:00")
+            ed_parsed = datetime.fromisoformat(ed_norm)
+            if ed_parsed.tzinfo:
+                ed_parsed = ed_parsed.replace(tzinfo=None)
+            days_held = max(0, (when_dt.date() - ed_parsed.date()).days)
+        except (ValueError, TypeError):
+            days_held = 0
+
         logger.info(
             "Evaluated %s %s @ %.4f → %.4f (%+.1f%%) → was_correct=%s",
             symbol,
@@ -134,6 +145,28 @@ def evaluate_pending_trades(now: datetime | None = None) -> int:
             pct_change * 100,
             "None" if was_correct is None else str(was_correct),
         )
+        if not get_simulation_mode():
+            try:
+                from core.notifications import alert_evaluation
+
+                if was_correct == 1:
+                    ac_bool: bool | None = True
+                elif was_correct == 0:
+                    ac_bool = False
+                else:
+                    ac_bool = None
+                alert_evaluation(
+                    symbol=str(symbol),
+                    action=action_u,
+                    entry_price=entry,
+                    current_price=float(current_price),
+                    pct_change=pct_change,
+                    was_correct=ac_bool,
+                    days_held=days_held,
+                    mode=(get_runtime_mode() or "live").upper(),
+                )
+            except Exception:
+                pass
         completed += 1
 
     return completed

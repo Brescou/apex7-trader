@@ -138,3 +138,23 @@ def test_alert_weekly_report_embed(monkeypatch) -> None:
     assert (
         "outperformed" in next(f["value"] for f in emb["fields"] if f["name"] == "vs SPY").lower()
     )
+
+
+def test_alert_evaluation_correct_embed(monkeypatch) -> None:
+    """Evaluation alert uses green embed for a correct verdict."""
+
+    monkeypatch.setattr("config.DISCORD_WEBHOOK_URL", "https://example.com/hook")
+    with patch("core.notifications.httpx.post") as post:
+        n.alert_evaluation(
+            symbol="AAPL",
+            action="BUY",
+            entry_price=100.0,
+            current_price=102.0,
+            pct_change=0.02,
+            was_correct=True,
+            days_held=7,
+            mode="LIVE",
+        )
+    emb = post.call_args.kwargs["json"]["embeds"][0]
+    assert "CORRECT" in emb["title"]
+    assert emb["color"] == n.COLOR_CORRECT

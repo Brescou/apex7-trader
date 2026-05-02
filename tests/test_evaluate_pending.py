@@ -84,10 +84,16 @@ def test_buy_correct_when_price_rises(tmp_db) -> None:
     _seed_agent_memory(db, trace_id=trace)
 
     with patch("agents.shared.eval._fast_last_price", return_value=110.0):  # +10% >>> 1% threshold
-        n = evaluate_pending_trades()
+        with patch("agents.shared.eval.get_simulation_mode", return_value=False):
+            with patch("core.notifications.alert_evaluation") as alert_ev:
+                n = evaluate_pending_trades()
     assert n == 1
     assert _agent_memory_row(db, trace)["was_correct"] == 1
     assert _pending_row(db, trace)["evaluated"] == 1
+    alert_ev.assert_called_once()
+    call_kw = alert_ev.call_args.kwargs
+    assert call_kw["symbol"] == "AAPL"
+    assert call_kw["was_correct"] is True
 
 
 def test_buy_wrong_when_price_drops(tmp_db) -> None:
@@ -191,3 +197,27 @@ def test_future_deadline_is_ignored(tmp_db) -> None:
     assert n == 0
     m.assert_not_called()
     assert _pending_row(db, trace)["evaluated"] == 0
+
+
+def test_evaluation_skips_discord_in_simulation_mode(tmp_db) -> None:
+    """No ``alert_evaluation`` when ``get_simulation_mode()`` is true."""
+
+    db = tmp_db
+    trace = "tracesimskip"
+    _seed_pending(
+        db,
+        trade_id=7,
+        trace_id=trace,
+        symbol="AAPL",
+        action="BUY",
+        entry_price=100.0,
+        eval_after=datetime.now() - timedelta(hours=1),
+    )
+    _seed_agent_memory(db, trace_id=trace)
+
+    with patch("agents.shared.eval._fast_last_price", return_value=110.0):
+        with patch("agents.shared.eval.get_simulation_mode", return_value=True):
+            with patch("core.notifications.alert_evaluation") as alert_ev:
+                evaluate_pending_trades()
+    assert _agent_memory_row(db, trace)["was_correct"] == 1
+    alert_ev.assert_not_called()
