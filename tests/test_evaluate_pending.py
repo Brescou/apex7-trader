@@ -83,7 +83,7 @@ def test_buy_correct_when_price_rises(tmp_db) -> None:
     )
     _seed_agent_memory(db, trace_id=trace)
 
-    with patch("agents.shared.nodes._fast_last_price", return_value=110.0):  # +10% >>> 1% threshold
+    with patch("agents.shared.eval._fast_last_price", return_value=110.0):  # +10% >>> 1% threshold
         n = evaluate_pending_trades()
     assert n == 1
     assert _agent_memory_row(db, trace)["was_correct"] == 1
@@ -104,7 +104,7 @@ def test_buy_wrong_when_price_drops(tmp_db) -> None:
     )
     _seed_agent_memory(db, trace_id=trace)
 
-    with patch("agents.shared.nodes._fast_last_price", return_value=90.0):
+    with patch("agents.shared.eval._fast_last_price", return_value=90.0):
         evaluate_pending_trades()
     assert _agent_memory_row(db, trace)["was_correct"] == 0
 
@@ -123,7 +123,7 @@ def test_sell_correct_when_price_drops(tmp_db) -> None:
     )
     _seed_agent_memory(db, trace_id=trace, agent_name="analyst")
 
-    with patch("agents.shared.nodes._fast_last_price", return_value=90.0):
+    with patch("agents.shared.eval._fast_last_price", return_value=90.0):
         evaluate_pending_trades()
     assert _agent_memory_row(db, trace)["was_correct"] == 1
 
@@ -143,7 +143,7 @@ def test_inconclusive_when_change_below_threshold(tmp_db) -> None:
     )
     _seed_agent_memory(db, trace_id=trace)
 
-    with patch("agents.shared.nodes._fast_last_price", return_value=100.5):
+    with patch("agents.shared.eval._fast_last_price", return_value=100.5):
         evaluate_pending_trades()
     assert _agent_memory_row(db, trace)["was_correct"] is None
     # Pending row IS marked evaluated even when the verdict is inconclusive,
@@ -166,7 +166,7 @@ def test_skip_when_price_unavailable(tmp_db) -> None:
     )
     _seed_agent_memory(db, trace_id=trace)
 
-    with patch("agents.shared.nodes._fast_last_price", return_value=None):
+    with patch("agents.shared.eval._fast_last_price", return_value=None):
         evaluate_pending_trades()
     assert _agent_memory_row(db, trace)["was_correct"] is None
     assert _pending_row(db, trace)["evaluated"] == 0
@@ -186,7 +186,7 @@ def test_future_deadline_is_ignored(tmp_db) -> None:
     )
     _seed_agent_memory(db, trace_id=trace)
 
-    with patch("agents.shared.nodes._fast_last_price", return_value=200.0) as m:
+    with patch("agents.shared.eval._fast_last_price", return_value=200.0) as m:
         n = evaluate_pending_trades()
     assert n == 0
     m.assert_not_called()
