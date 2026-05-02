@@ -21,6 +21,7 @@ from agents.shared.nodes import (
     _llm,
     _parse_json_obj,
     _no_llm_mode,
+    get_runtime_mode,
     _paper_mode,
     _portfolio_value,
     _route_risk,
@@ -198,6 +199,17 @@ def _build_vote(
     return vote
 
 
+def _record_source() -> str:
+    """Return the ``agent_memory.source`` label aligned on the runtime mode.
+
+    Keeps ``agent_memory.source`` in sync with ``trades.source`` so cross-
+    table queries (e.g. accuracy filtered by mode) stay coherent
+    (Review v5 Finding 3.3).
+    """
+    mode = get_runtime_mode()  # 'live' | 'paper' | 'sim'
+    return "simulation" if mode == "sim" else mode
+
+
 def _record_vote(
     agent_name: str,
     symbol: str,
@@ -285,7 +297,7 @@ def sim_technician(state: MultiAgentState) -> dict:
         },
     )
     logs.append(_entry(f"[SIM][TECH] {action} {sym} conf={conf:.0%} RSI={rsi_v:.1f}"))
-    _record_vote("technician", sym, action, conf, "simulation")
+    _record_vote("technician", sym, action, conf, _record_source())
     return {"agent_votes": [vote], "tech_vote": vote, "log": logs}
 
 
@@ -339,7 +351,7 @@ def sim_analyst(state: MultiAgentState) -> dict:
         },
     )
     logs.append(_entry(f"[SIM][ANLST] {action} {sym} conf={conf:.0%} sent={avg_sent:+.2f}"))
-    _record_vote("analyst", sym, action, conf, "simulation")
+    _record_vote("analyst", sym, action, conf, _record_source())
     return {"agent_votes": [vote], "analyst_vote": vote, "log": logs}
 
 
@@ -397,7 +409,7 @@ def sim_risk_manager(state: MultiAgentState) -> dict:
         },
     )
     logs.append(_entry(f"[SIM][RISK] score={risk_score}/10 sizing={sizing} VaR=${var_1d:.0f}"))
-    _record_vote("risk_manager", "", "HOLD", 0.5, "simulation")
+    _record_vote("risk_manager", "", "HOLD", 0.5, _record_source())
     return {"agent_votes": [vote], "risk_vote": vote, "log": logs}
 
 
@@ -451,7 +463,7 @@ def sim_macro_watcher(state: MultiAgentState) -> dict:
         },
     )
     logs.append(_entry(f"[SIM][MACRO] {regime} {bias} exposure={exposure}%"))
-    _record_vote("macro_watcher", "", "HOLD", 0.5, "simulation")
+    _record_vote("macro_watcher", "", "HOLD", 0.5, _record_source())
     return {"agent_votes": [vote], "macro_vote": vote, "log": logs}
 
 
@@ -586,7 +598,7 @@ def technician_node(state: MultiAgentState) -> dict:
         vote.get("symbol", ""),
         vote.get("action", "HOLD"),
         vote.get("confidence", 0.5),
-        "live",
+        _record_source(),
     )
     return {"agent_votes": [vote], "tech_vote": vote, "log": logs}
 
@@ -652,7 +664,7 @@ def analyst_node(state: MultiAgentState) -> dict:
         vote.get("symbol", ""),
         vote.get("action", "HOLD"),
         vote.get("confidence", 0.5),
-        "live",
+        _record_source(),
     )
     return {"agent_votes": [vote], "analyst_vote": vote, "log": logs}
 
@@ -735,7 +747,7 @@ def risk_manager_node(state: MultiAgentState) -> dict:
         vote.get("symbol", ""),
         vote.get("action", "HOLD"),
         vote.get("confidence", 0.5),
-        "live",
+        _record_source(),
     )
     return {"agent_votes": [vote], "risk_vote": vote, "log": logs}
 
@@ -807,7 +819,7 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
         vote.get("symbol", ""),
         vote.get("action", "HOLD"),
         vote.get("confidence", 0.5),
-        "live",
+        _record_source(),
     )
     return {"agent_votes": [vote], "macro_vote": vote, "log": logs}
 
