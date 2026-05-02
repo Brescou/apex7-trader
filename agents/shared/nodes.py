@@ -117,8 +117,12 @@ CREATE TABLE IF NOT EXISTS agent_memory (
     confidence   REAL,
     was_correct  INTEGER,
     lesson       TEXT,
-    source       TEXT DEFAULT 'simulation'
+    source       TEXT DEFAULT 'simulation',
+    trace_id     TEXT
 );
+-- The matching index ``idx_agent_memory_trace`` is created in the
+-- ``_init_db`` soft-migration block so it tolerates older DBs that
+-- still need the ALTER TABLE first.
 CREATE TABLE IF NOT EXISTS postmortem (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp       TEXT,
@@ -186,6 +190,19 @@ def _init_db() -> None:
                 pass
             try:
                 con.execute("ALTER TABLE trades ADD COLUMN sell_pct REAL")
+                con.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                con.execute("ALTER TABLE agent_memory ADD COLUMN trace_id TEXT")
+                con.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_agent_memory_trace "
+                    "ON agent_memory (trace_id)"
+                )
                 con.commit()
             except sqlite3.OperationalError:
                 pass
