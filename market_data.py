@@ -47,6 +47,10 @@ _corr_matrix_cache: dict[str, Any] = {"data": None, "ts": 0.0, "key": ""}
 _corr_matrix_lock = threading.Lock()
 _CORR_MATRIX_CACHE_SEC = 300
 
+_earnings_cache: dict[str, Any] = {"data": None, "ts": 0.0, "key": ""}
+_earnings_lock = threading.Lock()
+_EARNINGS_TTL = 300  # 5 min
+
 # SPDR sector ETFs → human labels (11 sectors, Finviz-style rotation grid).
 _SECTOR_ETFS: dict[str, str] = {
     "Tech": "XLK",
@@ -346,32 +350,61 @@ def fetch_earnings_calendar(symbols: list[str]) -> dict[str, dict[str, Any] | No
 
     Returns per symbol either ``{"earnings_date": str, "days_until": int | None}``
     or ``None`` when unavailable.
+
+    Cached 5 minutes per distinct normalized symbol set (thread-safe), to avoid
+    hammering yfinance on every terminal tick.
     """
+    cache_key = ",".join(sorted({(s or "").strip().upper() for s in symbols if (s or "").strip()}))
+    if not cache_key:
+        return {}
+
+    with _earnings_lock:
+        now = time.time()
+        cached = _earnings_cache.get("data")
+        if (
+            cached is not None
+            and _earnings_cache.get("key") == cache_key
+            and (now - float(_earnings_cache.get("ts") or 0)) < _EARNINGS_TTL
+        ):
+            return {k: None if v is None else dict(v) for k, v in cached.items()}
+
     result: dict[str, dict[str, Any] | None] = {}
     today = date.today()
     for sym in symbols:
+        raw = (sym or "").strip()
+        if not raw:
+            continue
+        usym = raw.upper()
         try:
-            cal = yf.Ticker(sym).calendar
+            cal = yf.Ticker(usym).calendar
             if cal is not None and not (getattr(cal, "empty", False)):
-                raw = _extract_next_earnings_raw(cal)
-                ed = _coerce_to_date(raw)
+                raw_ed = _extract_next_earnings_raw(cal)
+                ed = _coerce_to_date(raw_ed)
                 if ed is not None:
                     days_until = (ed - today).days
-                    result[sym] = {
+                    result[usym] = {
                         "earnings_date": str(ed),
                         "days_until": days_until,
                     }
                     continue
         except Exception:
-            logger.debug("Earnings calendar failed for %s", sym)
-        result[sym] = None
-    return result
+            logger.debug("Earnings calendar failed for %s", usym)
+        result[usym] = None
+
+    with _earnings_lock:
+        _earnings_cache["data"] = result
+        _earnings_cache["key"] = cache_key
+        _earnings_cache["ts"] = time.time()
+    return {k: None if v is None else dict(v) for k, v in result.items()}
 
 
 def is_earnings_week(symbol: str) -> bool:
     """Return True if earnings fall within the next 5 calendar days (inclusive)."""
-    cal = fetch_earnings_calendar([symbol])
-    entry = cal.get(symbol)
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return False
+    cal = fetch_earnings_calendar([sym])
+    entry = cal.get(sym)
     if entry and entry.get("days_until") is not None:
         days = entry["days_until"]
         return 0 <= days <= 5

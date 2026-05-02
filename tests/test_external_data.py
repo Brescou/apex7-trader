@@ -25,12 +25,18 @@ def _reset_external_caches() -> None:
     external_data._macro_indicators_cache["ts"] = 0.0
     external_data._fear_greed_cache["data"] = None
     external_data._fear_greed_cache["ts"] = 0.0
+    market_data._earnings_cache["data"] = None
+    market_data._earnings_cache["ts"] = 0.0
+    market_data._earnings_cache["key"] = ""
     yield
     external_data._fred_series_cache.clear()
     external_data._macro_indicators_cache["data"] = None
     external_data._macro_indicators_cache["ts"] = 0.0
     external_data._fear_greed_cache["data"] = None
     external_data._fear_greed_cache["ts"] = 0.0
+    market_data._earnings_cache["data"] = None
+    market_data._earnings_cache["ts"] = 0.0
+    market_data._earnings_cache["key"] = ""
 
 
 def _httpx_client_context_mock(
