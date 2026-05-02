@@ -519,6 +519,75 @@ def _tab_terminal() -> html.Div:
                                     "marginBottom": "12px",
                                 },
                             ),
+                            html.Div(
+                                [
+                                    _section_label("CORRELATION MATRIX"),
+                                    html.Div(
+                                        [
+                                            html.Span(
+                                                "PERIOD",
+                                                style={
+                                                    "fontSize": "9px",
+                                                    "color": TEXT_DIM,
+                                                    "letterSpacing": "0.1em",
+                                                    "marginRight": "8px",
+                                                },
+                                            ),
+                                            dcc.Dropdown(
+                                                id="correlation-period-dropdown",
+                                                options=[
+                                                    {"label": "1M", "value": "1mo"},
+                                                    {"label": "3M", "value": "3mo"},
+                                                    {"label": "6M", "value": "6mo"},
+                                                ],
+                                                value="3mo",
+                                                clearable=False,
+                                                style={
+                                                    "width": "100px",
+                                                    "background": BG_CARD,
+                                                    "color": TEXT_MAIN,
+                                                    "fontFamily": FONT,
+                                                    "fontSize": "11px",
+                                                },
+                                            ),
+                                        ],
+                                        style={
+                                            "display": "flex",
+                                            "alignItems": "center",
+                                            "marginBottom": "8px",
+                                            "flexWrap": "wrap",
+                                            "gap": "6px",
+                                        },
+                                    ),
+                                    html.Div(
+                                        id="correlation-matrix-warning",
+                                        style={"marginBottom": "8px"},
+                                    ),
+                                    html.Div(
+                                        id="correlation-matrix-content",
+                                        style={
+                                            "overflowX": "auto",
+                                            "marginBottom": "8px",
+                                        },
+                                    ),
+                                    html.Div(
+                                        "🔴 >0.8 correlated  🟡 0.4–0.8 moderate  🟢 <0.4 diversified",
+                                        style={
+                                            "fontSize": "9px",
+                                            "color": TEXT_DIM,
+                                            "lineHeight": "1.4",
+                                            "letterSpacing": "0.03em",
+                                        },
+                                    ),
+                                ],
+                                style={
+                                    "background": BG_CARD,
+                                    "border": f"1px solid {BORDER}",
+                                    "borderRadius": "4px",
+                                    "padding": "12px 14px",
+                                    "marginBottom": "12px",
+                                },
+                            ),
                             # News feed
                             html.Div(
                                 [

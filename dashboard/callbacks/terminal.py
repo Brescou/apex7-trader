@@ -1,5 +1,6 @@
-"""APEX-7 — Terminal tab callbacks (18 callbacks)."""
+"""APEX-7 — Terminal tab callbacks (19 callbacks)."""
 
+import math
 import time
 
 import dash
@@ -11,6 +12,7 @@ from dashboard.controller import _state
 from market_data import (
     build_economic_calendar_rows,
     fetch_comparison,
+    fetch_correlation_matrix,
     fetch_macro,
     fetch_news,
     fetch_ohlcv,
@@ -312,6 +314,145 @@ def _update_sector_rotation(_):
         },
     )
     return table
+
+
+def _corr_matrix_cell_colors(val: float, i: int, j: int) -> tuple[str, str]:
+    """Background and text hex for one correlation cell (heatmap + gray diagonal)."""
+    if i == j:
+        return (BG_HOVER, TEXT_DIM)
+    if not math.isfinite(val):
+        return (BG_DEEP, TEXT_DIM)
+    if val > 0.8:
+        return ("#7f1d1d8c", "#fecaca")
+    if val >= 0.4:
+        return ("#713f128c", "#fde047")
+    return ("#14532d8c", "#86efac")
+
+
+def _portfolio_all_pairs_correlated(matrix: list, n: int, *, threshold: float = 0.8) -> bool:
+    """True iff every upper-triangle pair is strictly above ``threshold``."""
+    if n < 2:
+        return False
+    for i in range(n):
+        for j in range(i + 1, n):
+            try:
+                v = float(matrix[i][j])
+            except (IndexError, TypeError, ValueError):
+                return False
+            if not math.isfinite(v) or v <= threshold:
+                return False
+    return True
+
+
+@app.callback(
+    Output("correlation-matrix-warning", "children"),
+    Output("correlation-matrix-content", "children"),
+    Input("correlation-period-dropdown", "value"),
+    Input("sector-heatmap-interval", "n_intervals"),
+    State("terminal-watchlist", "data"),
+    prevent_initial_call=False,
+)
+def _update_correlation_matrix(period, _tick, wl_data):
+    period = period or "3mo"
+    wl = wl_data if isinstance(wl_data, list) and wl_data else get_watchlist()
+    syms = [str(s).strip().upper() for s in wl if s][:10]
+
+    empty_warn = html.Div()
+    if len(syms) < 2:
+        return (
+            empty_warn,
+            html.Div(
+                "Add at least two symbols to the watchlist for a correlation grid.",
+                style={"fontSize": "11px", "color": TEXT_DIM},
+            ),
+        )
+
+    try:
+        payload = fetch_correlation_matrix(syms, period=period)
+    except Exception:
+        payload = {"symbols": syms, "matrix": []}
+
+    symbols = payload.get("symbols") or []
+    mat = payload.get("matrix") or []
+    if not mat or len(symbols) != len(mat):
+        return (
+            empty_warn,
+            html.Div(
+                "Could not compute correlations (insufficient data).",
+                style={"fontSize": "11px", "color": TEXT_DIM},
+            ),
+        )
+
+    n = len(symbols)
+    warn = empty_warn
+    if _portfolio_all_pairs_correlated(mat, n):
+        warn = html.Div(
+            "⚠️ Portfolio highly correlated — consider diversifying",
+            style={
+                "fontSize": "11px",
+                "color": YELLOW,
+                "fontWeight": "600",
+                "padding": "6px 8px",
+                "border": f"1px solid {YELLOW}",
+                "borderRadius": "4px",
+                "background": f"{YELLOW}14",
+            },
+        )
+
+    cell_base = {
+        "fontSize": "10px",
+        "fontFamily": FONT,
+        "textAlign": "center",
+        "padding": "6px 4px",
+        "border": f"1px solid {BORDER}",
+        "fontVariantNumeric": "tabular-nums",
+        "minWidth": "44px",
+    }
+    head = {
+        **cell_base,
+        "background": BG_HOVER,
+        "color": TEXT_DIM,
+        "fontSize": "9px",
+        "fontWeight": "700",
+    }
+
+    header_cells = [html.Th("", style={**head, "minWidth": "52px"})] + [
+        html.Th(s, style=head) for s in symbols
+    ]
+    body_rows = []
+    for i, sym in enumerate(symbols):
+        row_cells = [
+            html.Td(
+                sym,
+                style={
+                    **cell_base,
+                    "textAlign": "left",
+                    "color": TEXT_DIM,
+                    "background": BG_HOVER,
+                    "fontWeight": "600",
+                },
+            )
+        ]
+        for j in range(n):
+            v = float(mat[i][j])
+            bg, fg = _corr_matrix_cell_colors(v, i, j)
+            row_cells.append(
+                html.Td(
+                    f"{v:.2f}",
+                    style={**cell_base, "background": bg, "color": fg, "fontWeight": "600"},
+                )
+            )
+        body_rows.append(html.Tr(row_cells))
+
+    table = html.Table(
+        [html.Thead(html.Tr(header_cells)), html.Tbody(body_rows)],
+        style={
+            "width": "100%",
+            "borderCollapse": "collapse",
+            "tableLayout": "fixed",
+        },
+    )
+    return warn, table
 
 
 @app.callback(
