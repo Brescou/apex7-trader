@@ -1,4 +1,4 @@
-"""APEX-7 — Analytics-related tab layouts (analytics, backtest, leaderboard, heatmap, agents)."""
+"""APEX-7 — Analytics-related tab layouts (analytics, backtest, leaderboard, agents)."""
 
 from dash import dcc, html
 
@@ -194,57 +194,6 @@ def _tab_backtest() -> html.Div:
             "display": "flex",
             "flexDirection": "column",
             "height": "calc(100vh - 96px)",
-        },
-    )
-
-
-def _tab_heatmap() -> html.Div:
-    return html.Div(
-        [
-            html.Div(
-                [
-                    html.Button(
-                        "⟳ REFRESH",
-                        id="btn-heatmap-refresh",
-                        n_clicks=0,
-                        style={
-                            "background": "transparent",
-                            "border": f"1px solid {BORDER}",
-                            "color": TEXT_DIM,
-                            "fontFamily": FONT,
-                            "fontSize": "10px",
-                            "letterSpacing": "0.12em",
-                            "padding": "4px 12px",
-                            "cursor": "pointer",
-                            "borderRadius": "3px",
-                        },
-                    ),
-                    html.Span(
-                        id="heatmap-updated",
-                        style={
-                            "fontSize": "9px",
-                            "color": TEXT_DIM,
-                            "marginLeft": "12px",
-                            "letterSpacing": "0.08em",
-                        },
-                    ),
-                ],
-                style={"padding": "12px 16px", "borderBottom": f"1px solid {BORDER}"},
-            ),
-            html.Div(
-                id="heatmap-content",
-                style={
-                    "flex": "1",
-                    "overflowY": "auto",
-                    "padding": "16px",
-                },
-            ),
-        ],
-        style={
-            "display": "flex",
-            "flexDirection": "column",
-            "height": "calc(100vh - 96px)",
-            "overflow": "hidden",
         },
     )
 

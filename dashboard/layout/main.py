@@ -7,7 +7,6 @@ from dashboard.layout.analytics_tab import (
     _tab_agents,
     _tab_analytics,
     _tab_backtest,
-    _tab_heatmap,
     _tab_leaderboard,
 )
 from dashboard.layout.live_tab import _tab_live
@@ -220,16 +219,6 @@ def setup_layout() -> None:
                 },
             ),
             html.Div(
-                id="tab-heatmap",
-                children=_tab_heatmap(),
-                style={
-                    "flex": "1",
-                    "minHeight": "0",
-                    "overflow": "hidden",
-                    "display": "none",
-                },
-            ),
-            html.Div(
                 id="tab-agents",
                 children=_tab_agents(),
                 style={
@@ -294,7 +283,6 @@ def _tabs_bar() -> dcc.Tabs:
             dcc.Tab(label="ANALYTICS", value="analytics", style=ts, selected_style=ss),
             dcc.Tab(label="BACKTEST", value="backtest", style=ts, selected_style=ss),
             dcc.Tab(label="LEADERBOARD", value="leaderboard", style=ts, selected_style=ss),
-            dcc.Tab(label="HEATMAP", value="heatmap", style=ts, selected_style=ss),
             dcc.Tab(label="AGENTS", value="agents", style=ts, selected_style=ss),
             dcc.Tab(
                 label="TERMINAL",
