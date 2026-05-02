@@ -1,4 +1,4 @@
-"""APEX-7 — Live tab callbacks + tab routing (5 tabs; HEATMAP/LEADERBOARD removed)."""
+"""APEX-7 — Live tab callbacks + tab routing (4 tabs)."""
 
 from dash import Input, Output, State, ctx, html, no_update, MATCH
 from dash.exceptions import PreventUpdate
@@ -72,7 +72,7 @@ def _mode_palette(mode: str) -> tuple[str, str, str]:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-_TABS = ["live", "analytics", "backtest", "agents", "terminal"]
+_TABS = ["live", "analytics", "backtest", "terminal"]
 _TAB_SHOW = {"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "block"}
 _TAB_HIDE = {"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "none"}
 
@@ -81,7 +81,6 @@ _TAB_HIDE = {"flex": "1", "minHeight": "0", "overflow": "hidden", "display": "no
     Output("tab-live", "style"),
     Output("tab-analytics", "style"),
     Output("tab-backtest", "style"),
-    Output("tab-agents", "style"),
     Output("tab-terminal", "style"),
     Input("main-tabs", "value"),
     prevent_initial_call=True,

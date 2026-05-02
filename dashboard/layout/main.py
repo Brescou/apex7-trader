@@ -4,7 +4,6 @@ from dash import dcc, html
 
 from agents.shared.nodes import get_runtime_mode
 from dashboard.layout.analytics_tab import (
-    _tab_agents,
     _tab_analytics,
     _tab_backtest,
 )
@@ -45,7 +44,6 @@ def setup_layout() -> None:
             ),
             dcc.Interval(id="tick", interval=2000, n_intervals=0),
             dcc.Interval(id="analytics-tick", interval=30000, n_intervals=0),
-            dcc.Interval(id="agents-tick", interval=60000, n_intervals=0),
             dcc.Interval(id="macro-interval", interval=60000, n_intervals=0),
             dcc.Interval(id="watchlist-interval", interval=10000, n_intervals=0),
             dcc.Interval(id="news-interval", interval=120000, n_intervals=0),
@@ -208,16 +206,6 @@ def setup_layout() -> None:
                 },
             ),
             html.Div(
-                id="tab-agents",
-                children=_tab_agents(),
-                style={
-                    "flex": "1",
-                    "minHeight": "0",
-                    "overflow": "hidden",
-                    "display": "none",
-                },
-            ),
-            html.Div(
                 id="tab-terminal",
                 children=_tab_terminal(),
                 style={
@@ -271,7 +259,6 @@ def _tabs_bar() -> dcc.Tabs:
             dcc.Tab(label="LIVE", value="live", style=ts, selected_style=ss),
             dcc.Tab(label="ANALYTICS", value="analytics", style=ts, selected_style=ss),
             dcc.Tab(label="BACKTEST", value="backtest", style=ts, selected_style=ss),
-            dcc.Tab(label="AGENTS", value="agents", style=ts, selected_style=ss),
             dcc.Tab(
                 label="TERMINAL",
                 value="terminal",

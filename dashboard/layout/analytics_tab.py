@@ -1,4 +1,4 @@
-"""APEX-7 — Analytics-related tab layouts (analytics, backtest, agents)."""
+"""APEX-7 — Analytics-related tab layouts (analytics, backtest)."""
 
 from dash import dcc, html
 
@@ -193,47 +193,5 @@ def _tab_backtest() -> html.Div:
             "display": "flex",
             "flexDirection": "column",
             "height": "calc(100vh - 96px)",
-        },
-    )
-
-
-def _tab_agents() -> html.Div:
-    return html.Div(
-        [
-            html.Div(
-                [
-                    html.Button(
-                        "⟳ REFRESH",
-                        id="btn-agents-refresh",
-                        n_clicks=0,
-                        style={
-                            "background": "transparent",
-                            "border": f"1px solid {BORDER}",
-                            "color": TEXT_DIM,
-                            "fontFamily": FONT,
-                            "fontSize": "10px",
-                            "letterSpacing": "0.12em",
-                            "padding": "4px 12px",
-                            "cursor": "pointer",
-                            "borderRadius": "3px",
-                        },
-                    ),
-                ],
-                style={"padding": "12px 16px", "borderBottom": f"1px solid {BORDER}"},
-            ),
-            html.Div(
-                id="agents-content",
-                style={
-                    "flex": "1",
-                    "overflowY": "auto",
-                    "padding": "16px",
-                },
-            ),
-        ],
-        style={
-            "display": "flex",
-            "flexDirection": "column",
-            "height": "calc(100vh - 96px)",
-            "overflow": "hidden",
         },
     )
