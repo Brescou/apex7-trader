@@ -1061,7 +1061,9 @@ def make_execute_node(portfolio: Portfolio):
 
         result: dict = {"success": False, "error": "no-op"}
 
-        # Stop-loss check on all open positions before executing the agent decision
+        portfolio.update_watermarks(prices)
+
+        # Trailing stop-loss on all open positions (drawdown from high watermark).
         for sl_sym, sl_pos in list(portfolio.positions.items()):
             sl_price = prices.get(sl_sym, 0.0)
             sl_avg = sl_pos.get("avg_price", sl_pos.get("avg_cost", 0))
@@ -1099,13 +1101,20 @@ def make_execute_node(portfolio: Portfolio):
                     )
                 )
                 continue
-            sl_pct = (sp - savg) / savg
-            if sl_pct < -STOP_LOSS_PCT:
+            try:
+                high = float(portfolio.high_watermarks.get(sl_sym, savg))
+            except (TypeError, ValueError):
+                high = savg
+            if math.isnan(high) or high <= 0:
+                high = savg
+            trail_dd = (high - sp) / high if high > 0 else 0.0
+            if trail_dd >= STOP_LOSS_PCT:
                 sl_slip = 1 + random.uniform(-0.001, 0.001)
                 portfolio.sell(sl_sym, 100, sp * sl_slip)
                 logs.append(
                     _entry(
-                        f"STOP-LOSS triggered: {sl_sym} @ ${sp:.2f} (loss: {sl_pct:.1%})",
+                        f"[TRAILING STOP] triggered: {sl_sym} @ ${sp:.2f} "
+                        f"(high ${high:.2f}, drawdown {trail_dd:.1%})",
                         "warning",
                     )
                 )

@@ -16,6 +16,7 @@ def _portfolio_aapl_10_at_150() -> Portfolio:
     p = Portfolio()
     with p._lock:
         p.positions["AAPL"] = {"shares": 10.0, "avg_price": 150.0}
+        p.high_watermarks["AAPL"] = 150.0
         p.cash = 400.0
     return p
 
@@ -52,7 +53,7 @@ def test_stoploss_ignores_zero_price(caplog):
 
 
 def test_stoploss_triggers_on_real_drop():
-    """Realistic drop below ``STOP_LOSS_PCT`` triggers liquidation."""
+    """Drawdown from high watermark beyond ``STOP_LOSS_PCT`` triggers liquidation."""
     p = _portfolio_aapl_10_at_150()
     execute = make_execute_node(p)
 
@@ -61,7 +62,7 @@ def test_stoploss_triggers_on_real_drop():
 
     assert out["alive"] is True
     assert "AAPL" not in p.positions
-    assert any("STOP-LOSS triggered" in e.get("message", "") for e in out["log"])
+    assert any("TRAILING STOP" in e.get("message", "") for e in out["log"])
 
 
 def test_stoploss_ignores_nan(caplog):

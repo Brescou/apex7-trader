@@ -41,6 +41,7 @@ class Portfolio:
         self.peak_value: float = float(INITIAL_BALANCE)
         self._livefeed: "LiveFeed | None" = None
         self._livefeed_symbols: list[str] = []
+        self.high_watermarks: dict[str, float] = {}
 
     def fetch_prices(self, symbols: list[str] | None = None) -> dict[str, float]:
         symbols = symbols or WATCHLIST
@@ -99,6 +100,9 @@ class Portfolio:
             shares = amount_usd / price
             self.cash -= amount_usd
             self.positions[symbol] = {"shares": shares, "avg_price": price}
+            fp = float(price)
+            if not math.isnan(fp) and fp > 0:
+                self.high_watermarks[symbol] = max(self.high_watermarks.get(symbol, fp), fp)
             trade = {
                 "time": datetime.now().isoformat(),
                 "action": "BUY",
@@ -139,6 +143,7 @@ class Portfolio:
             self.cash += amount
             if sell_pct >= 100:
                 del self.positions[symbol]
+                self.high_watermarks.pop(symbol, None)
             else:
                 self.positions[symbol]["shares"] -= shares
             trade = {
@@ -185,6 +190,20 @@ class Portfolio:
                 pass
         return dead_now
 
+    def update_watermarks(self, prices: dict[str, float]) -> None:
+        """Raise per-symbol high watermark for open positions (trailing stop-loss)."""
+        with self._lock:
+            for sym in list(self.positions.keys()):
+                raw = prices.get(sym)
+                try:
+                    q = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                if math.isnan(q) or q <= 0:
+                    continue
+                prev = self.high_watermarks.get(sym, q)
+                self.high_watermarks[sym] = max(prev, q)
+
     def log(self, message: str, level: str = "info"):
         entry = {"time": datetime.now().isoformat(), "message": message, "level": level}
         with self._lock:
@@ -207,6 +226,11 @@ class Portfolio:
                 "trade_history": list(self.trade_history[-50:]),
                 "value_history": list(self.value_history[-200:]),
                 "peak_value": self.peak_value,
+                "high_watermarks": {
+                    sym: self.high_watermarks[sym]
+                    for sym in self.positions
+                    if sym in self.high_watermarks
+                },
             }
         tmp_path = path + ".tmp"
         try:
@@ -232,6 +256,11 @@ class Portfolio:
             self.trade_history = state.get("trade_history", self.trade_history)[-50:]
             self.value_history = state.get("value_history", self.value_history)[-200:]
             self.peak_value = float(state.get("peak_value", self.peak_value))
+            hw = state.get("high_watermarks") or {}
+            if isinstance(hw, dict):
+                self.high_watermarks = {k: float(v) for k, v in hw.items() if k in self.positions}
+            else:
+                self.high_watermarks = {}
         return True
 
 
