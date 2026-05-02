@@ -17,6 +17,7 @@ from agents.shared.nodes import (
     _db_write,
     _entry,
     _live_price_history,
+    _get_trace_id,
     _llm,
     _parse_json_obj,
     _no_llm_mode,
@@ -204,12 +205,26 @@ def _record_vote(
     confidence: float,
     source: str,
 ) -> None:
-    """Record a specialist vote in agent_memory."""
+    """Record a specialist vote in ``agent_memory``.
+
+    ``trace_id`` is captured from the current cycle so
+    ``evaluate_pending_trades`` can later resolve ``was_correct`` against
+    the matching trade. Without it, the UPDATE matches zero rows and
+    accuracy stays NULL forever (Review v5 Finding 3.2).
+    """
     _db_write(
         "INSERT INTO agent_memory "
-        "(timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source) "
-        "VALUES (?,?,?,?,?,NULL,NULL,?)",
-        (_ts(), agent_name, symbol, action, float(confidence), source),
+        "(timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source,trace_id) "
+        "VALUES (?,?,?,?,?,NULL,NULL,?,?)",
+        (
+            _ts(),
+            agent_name,
+            symbol,
+            action,
+            float(confidence),
+            source,
+            _get_trace_id(),
+        ),
     )
 
 
