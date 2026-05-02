@@ -65,21 +65,33 @@ def _http_get_json(url: str, *, headers: dict[str, str] | None = None) -> Any:
         return response.json()
 
 
-def fetch_fred_latest(series_id: str, api_key: str = "") -> dict[str, Any] | None:
+def fetch_fred_latest(
+    series_id: str,
+    api_key: str = "",
+    *,
+    max_cache_sec: float | None = None,
+) -> dict[str, Any] | None:
     """Fetch the latest observation for one FRED series.
 
     Free tier: ``api_key`` optional for many JSON requests; set ``FRED_API_KEY``
     in the environment for reliable access and higher limits.
+
+    Args:
+        series_id: FRED series id (e.g. ``DGS10``).
+        api_key: Optional API key; defaults to env.
+        max_cache_sec: If set, refresh when cache is older than this many seconds
+            (defaults to ``_FRED_SERIES_CACHE_SEC``).
 
     Returns:
         ``{"value": float, "date": "YYYY-MM-DD"}`` or ``None`` on failure /
         missing value.
     """
     key = _fred_api_key(api_key)
+    ttl = float(max_cache_sec) if max_cache_sec is not None else float(_FRED_SERIES_CACHE_SEC)
     now = time.time()
     with _fred_series_lock:
         cached = _fred_series_cache.get(series_id)
-        if cached is not None and (now - cached["ts"]) < _FRED_SERIES_CACHE_SEC:
+        if cached is not None and (now - cached["ts"]) < ttl:
             return cached["data"]
 
     url = f"{_FRED_BASE}?series_id={series_id}&sort_order=desc&limit=1&file_type=json"
@@ -132,18 +144,20 @@ def fetch_macro_indicators() -> dict[str, dict[str, Any] | None]:
     return out
 
 
-def fetch_fear_greed() -> dict[str, Any] | None:
+def fetch_fear_greed(*, max_cache_sec: float | None = None) -> dict[str, Any] | None:
     """Fetch the CNN Fear & Greed Index.
+
+    Args:
+        max_cache_sec: If set, refresh when cache is older than this many seconds
+            (defaults to ``_FEAR_GREED_CACHE_SEC``).
 
     Returns:
         ``{"score": int 0–100, "label": str}`` or ``None`` on failure.
     """
+    ttl = float(max_cache_sec) if max_cache_sec is not None else float(_FEAR_GREED_CACHE_SEC)
     with _fear_greed_lock:
         now = time.time()
-        if (
-            _fear_greed_cache["data"] is not None
-            and (now - _fear_greed_cache["ts"]) < _FEAR_GREED_CACHE_SEC
-        ):
+        if _fear_greed_cache["data"] is not None and (now - _fear_greed_cache["ts"]) < ttl:
             return _fear_greed_cache["data"]
 
     payload: dict[str, Any] | None = None

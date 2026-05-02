@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 from dash import ALL, Input, Output, State, ctx, dcc, html, no_update
 
 from core.watchlist import add_to_watchlist, get_watchlist, remove_from_watchlist
+from core.external_data import fetch_fear_greed, fetch_fred_latest
 from dashboard.controller import _state
 from market_data import (
     build_economic_calendar_rows,
@@ -44,9 +45,25 @@ from dashboard.server import (
 BG_PANEL = "#0d1424"
 
 _MACRO_KEYS = {"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}
+_MACRO_BAR_EXTRA_CACHE_SEC = 60.0
+_FEAR_GREED_GREEN_LIGHT = "#86efac"
+_FEAR_GREED_GREEN_DARK = "#15803d"
 
 # Dot color palette for symbol cards (by position)
 _DOT_PALETTE = [YELLOW, BLUE, GREEN, PURPLE]
+
+
+def _fear_greed_bar_bucket(score: int) -> tuple[str, str]:
+    """Return (mood label, color) for CNN Fear & Greed score bands."""
+    if score < 25:
+        return ("Extreme Fear", RED)
+    if score < 45:
+        return ("Fear", ORANGE)
+    if score <= 55:
+        return ("Neutral", GRAY)
+    if score <= 75:
+        return ("Greed", _FEAR_GREED_GREEN_LIGHT)
+    return ("Extreme Greed", _FEAR_GREED_GREEN_DARK)
 
 
 def _fallback_active_symbol(symbol) -> str:
@@ -100,7 +117,25 @@ def _update_macro_bar(_):
     except Exception:
         data = {}
 
-    blocs = []
+    _lbl = {
+        "fontSize": "10px",
+        "color": TEXT_DIM,
+        "letterSpacing": "2px",
+        "textTransform": "uppercase",
+        "display": "block",
+    }
+    _cell = {
+        "flex": "1",
+        "display": "flex",
+        "flexDirection": "column",
+        "alignItems": "center",
+        "justifyContent": "center",
+        "padding": "0 18px",
+        "minWidth": "0",
+    }
+
+    bar_divs: list[html.Div] = []
+
     for key in ("VIX", "SPY", "DXY"):
         yf_sym = _MACRO_KEYS[key]
         d = data.get(key, {})
@@ -126,20 +161,10 @@ def _update_macro_bar(_):
 
         mini = _mini_macro_chart(spark, float(chg) if chg is not None else None)
 
-        is_last = key == "DXY"
-        blocs.append(
+        bar_divs.append(
             html.Div(
                 [
-                    html.Span(
-                        key,
-                        style={
-                            "fontSize": "10px",
-                            "color": TEXT_DIM,
-                            "letterSpacing": "2px",
-                            "textTransform": "uppercase",
-                            "display": "block",
-                        },
-                    ),
+                    html.Span(key, style=_lbl),
                     html.Div(
                         [
                             html.Span(
@@ -165,17 +190,86 @@ def _update_macro_bar(_):
                     ),
                     mini,
                 ],
-                style={
-                    "flex": "1",
-                    "display": "flex",
-                    "flexDirection": "column",
-                    "alignItems": "center",
-                    "justifyContent": "center",
-                    "padding": "0 24px",
-                    "borderRight": "none" if is_last else f"1px solid {BORDER}",
-                },
+                style=_cell,
             )
         )
+
+    try:
+        fg = fetch_fear_greed(max_cache_sec=_MACRO_BAR_EXTRA_CACHE_SEC)
+    except Exception:
+        fg = None
+    if fg and fg.get("score") is not None:
+        sc = int(fg["score"])
+        mood, fg_col = _fear_greed_bar_bucket(sc)
+        fg_main = f"F&G: {sc} ({mood})"
+        fg_color = fg_col
+    else:
+        fg_main = "F&G: —"
+        fg_color = TEXT_DIM
+
+    bar_divs.append(
+        html.Div(
+            [
+                html.Span("F&G", style=_lbl),
+                html.Span(
+                    fg_main,
+                    style={
+                        "fontSize": "17px",
+                        "fontWeight": "bold",
+                        "color": fg_color,
+                        "fontFamily": FONT,
+                    },
+                ),
+            ],
+            style={**_cell, "padding": "0 14px"},
+        )
+    )
+
+    try:
+        fed_obs = fetch_fred_latest("FEDFUNDS", max_cache_sec=_MACRO_BAR_EXTRA_CACHE_SEC)
+        y10_obs = fetch_fred_latest("DGS10", max_cache_sec=_MACRO_BAR_EXTRA_CACHE_SEC)
+    except Exception:
+        fed_obs = y10_obs = None
+
+    fed_val = fed_obs.get("value") if fed_obs else None
+    y10_val = y10_obs.get("value") if y10_obs else None
+    fed_str = f"FED: {float(fed_val):.2f}%" if fed_val is not None else "FED: —"
+    y10_str = f"10Y: {float(y10_val):.2f}%" if y10_val is not None else "10Y: —"
+
+    bar_divs.append(
+        html.Div(
+            [
+                html.Span("FED", style=_lbl),
+                html.Span(
+                    fed_str,
+                    style={
+                        "fontSize": "17px",
+                        "fontWeight": "bold",
+                        "color": TEXT_MAIN,
+                        "fontFamily": FONT,
+                    },
+                ),
+            ],
+            style={**_cell, "padding": "0 14px"},
+        )
+    )
+    bar_divs.append(
+        html.Div(
+            [
+                html.Span("10Y", style=_lbl),
+                html.Span(
+                    y10_str,
+                    style={
+                        "fontSize": "17px",
+                        "fontWeight": "bold",
+                        "color": TEXT_MAIN,
+                        "fontFamily": FONT,
+                    },
+                ),
+            ],
+            style={**_cell, "padding": "0 14px"},
+        )
+    )
 
     ts = data.get("updated_at", "")
     ts_el = html.Span(
@@ -185,10 +279,18 @@ def _update_macro_bar(_):
             "color": TEXT_DIM,
             "marginLeft": "auto",
             "paddingRight": "16px",
+            "flexShrink": "0",
         },
     )
 
-    return blocs + [ts_el]
+    n_cells = len(bar_divs)
+
+    def _cell_with_right_rule(div: html.Div, idx: int) -> html.Div:
+        st = dict(div.style) if isinstance(div.style, dict) else {}
+        st["borderRight"] = f"1px solid {BORDER}" if idx < n_cells - 1 else "none"
+        return html.Div(div.children, style=st)
+
+    return [_cell_with_right_rule(d, i) for i, d in enumerate(bar_divs)] + [ts_el]
 
 
 def _calendar_event_line(row: dict) -> str:
