@@ -95,5 +95,8 @@ def test_get_watchlist_fallback(tmp_db) -> None:
 
 def test_add_idempotent(tmp_db) -> None:
     """Already-listed symbol returns success without duplicate INSERT."""
-    sym = get_watchlist()[0]
-    assert add_to_watchlist(sym) is True
+    add_to_watchlist("AAPL")
+    count_before = len(get_watchlist())
+    add_to_watchlist("AAPL")  # 2ème ajout du même symbol
+    count_after = len(get_watchlist())
+    assert count_after == count_before, "Duplicate symbol inserted"
