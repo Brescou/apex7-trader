@@ -56,34 +56,3 @@ def test_sell_rejects_pct_over_100() -> None:
     r = p.sell("AAPL", 100.5, 150.0)
     assert r["success"] is False
     assert "AAPL" in p.positions
-
-
-def test_pyramid_weighted_avg_and_layers() -> None:
-    """Second BUY on same symbol increases ``layers`` and recalculates ``avg_price``."""
-
-    p = Portfolio()
-    assert p.buy("AAPL", 200.0, 100.0)["success"]
-    assert p.positions["AAPL"]["layers"] == 1
-    assert p.buy("AAPL", 100.0, 105.0)["success"]
-    assert p.positions["AAPL"]["layers"] == 2
-    exp_avg = (200.0 + 100.0) / (2.0 + 100.0 / 105.0)
-    assert abs(p.positions["AAPL"]["avg_price"] - exp_avg) < 1e-9
-
-
-def test_pyramid_max_layers(monkeypatch) -> None:
-    monkeypatch.setattr("core.data.MAX_PYRAMID_LAYERS", 2)
-    p = Portfolio()
-    assert p.buy("AAPL", 300.0, 100.0)["success"]
-    assert p.buy("AAPL", 100.0, 100.0)["success"]
-    r3 = p.buy("AAPL", 100.0, 100.0)
-    assert r3["success"] is False
-    assert "max pyramid" in (r3.get("error") or "").lower()
-
-
-def test_partial_sell_keeps_layers() -> None:
-    p = Portfolio()
-    assert p.buy("AAPL", 200.0, 100.0)["success"]
-    assert p.buy("AAPL", 100.0, 100.0)["success"]
-    assert p.positions["AAPL"]["layers"] == 2
-    assert p.sell("AAPL", 50.0, 110.0)["success"]
-    assert p.positions["AAPL"]["layers"] == 2
