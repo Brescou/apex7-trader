@@ -210,7 +210,7 @@ def _controls(_, __, ___, store):
 )
 def _refresh(_, store, active_tab):
     if active_tab != "live":
-        return [no_update] * 24
+        return [no_update] * 25
     with _controller_lock:
         p = _state.get("portfolio")
         votes = _state.get("last_votes", [])
