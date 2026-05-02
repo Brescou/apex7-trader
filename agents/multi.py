@@ -786,6 +786,12 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
         system += "\nTes erreurs récentes :\n" + "\n".join(
             f"  • {lesson}" for lesson in recent_lessons
         )
+    macro_indicators = state.get("macro_indicators") or {}
+    fear_greed = state.get("fear_greed")
+    system += (
+        f"\n\nDonnées macro FRED : {json.dumps(macro_indicators, default=str)}. "
+        f"Fear & Greed Index : {json.dumps(fear_greed, default=str) if fear_greed else 'N/A'}."
+    )
     user = (
         f"MACRO ANALYSIS — Cycle #{state['round']}\n\n"
         f"PORTFOLIO HEALTH: ${pv:.2f} ({pv/INITIAL_BALANCE:.0%} of initial)\n"
@@ -1185,6 +1191,14 @@ def run_daily_digest(portfolio: Portfolio) -> None:
     mode = get_runtime_mode()
     mode_label = mode.upper() if mode else "LIVE"
 
+    fg: dict | None = None
+    try:
+        from core.external_data import fetch_fear_greed as _fetch_fg
+
+        fg = _fetch_fg()
+    except Exception:
+        pass
+
     alert_daily_digest(
         date=date_str,
         pnl_usd=pnl_usd,
@@ -1196,6 +1210,7 @@ def run_daily_digest(portfolio: Portfolio) -> None:
         consecutive_holds=get_consecutive_hold_cycles(),
         mode=mode_label,
         realized_pnl_pcts=_today_realized_pnl_pcts(portfolio),
+        fear_greed=fg,
     )
 
 

@@ -63,7 +63,7 @@ def test_posts_use_five_second_timeout(monkeypatch) -> None:
 
 
 def test_daily_digest_fields(monkeypatch) -> None:
-    """Daily digest embed exposes P&L, Trades, Portfolio, and Mode."""
+    """Daily digest embed exposes P&L, Trades, Portfolio, Mode, Fear & Greed."""
 
     monkeypatch.setattr("config.DISCORD_WEBHOOK_URL", "https://example.com/hook")
     with patch("core.notifications.httpx.post") as post:
@@ -85,6 +85,7 @@ def test_daily_digest_fields(monkeypatch) -> None:
             consecutive_holds=0,
             mode="LIVE",
             realized_pnl_pcts=None,
+            fear_greed={"score": 42, "label": "Fear"},
         )
     emb = post.call_args.kwargs["json"]["embeds"][0]
     names = {f["name"] for f in emb["fields"]}
@@ -92,6 +93,7 @@ def test_daily_digest_fields(monkeypatch) -> None:
     assert "Trades" in names
     assert "Portfolio" in names
     assert "Mode" in names
+    assert "Fear & Greed" in names
 
 
 def test_daily_digest_color_green(monkeypatch) -> None:

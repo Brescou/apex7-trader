@@ -33,7 +33,9 @@ from config import (
     X_BEARER_TOKEN,
 )
 from core.data import Portfolio
+from core.external_data import fetch_fear_greed, fetch_macro_indicators
 from core.watchlist import get_watchlist
+from market_data import fetch_earnings_calendar, is_earnings_week
 from agents.shared.state import AgentState
 from agents.shared.prompts import PROMPT_VERSION
 from agents.shared.llm import (
@@ -292,6 +294,26 @@ def _portfolio_value(state) -> float:
     )
 
 
+def _fetch_cycle_external_data(watchlist: list[str]) -> tuple[dict, dict | None, dict]:
+    """Load FRED bundle, CNN Fear & Greed, and earnings calendar (best-effort)."""
+    try:
+        macro = fetch_macro_indicators()
+    except Exception:
+        logger.debug("fetch_macro_indicators failed", exc_info=True)
+        macro = {}
+    try:
+        fg = fetch_fear_greed()
+    except Exception:
+        logger.debug("fetch_fear_greed failed", exc_info=True)
+        fg = None
+    try:
+        cal = fetch_earnings_calendar(watchlist)
+    except Exception:
+        logger.debug("fetch_earnings_calendar failed", exc_info=True)
+        cal = {}
+    return macro, fg, cal
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SIMULATION ENGINE
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -432,6 +454,9 @@ def sim_fetch_data(state: AgentState, portfolio: Portfolio) -> dict:
         "prices": prices,
         "news": news,
         "sentiment": sentiment,
+        "macro_indicators": {},
+        "fear_greed": None,
+        "earnings_calendar": {},
         "skip_research": flat,
         "log": logs,
     }
@@ -538,6 +563,8 @@ def make_fetch_data_node(portfolio: Portfolio):
             news = "Fetch failed"
             sentiment = {s: 0.0 for s in wl}
 
+        macro_indicators, fear_greed, earnings_calendar = _fetch_cycle_external_data(wl)
+
         flat = _is_flat(prices)
         _prev_prices.update(prices)
 
@@ -553,6 +580,9 @@ def make_fetch_data_node(portfolio: Portfolio):
             "prices": prices,
             "news": news,
             "sentiment": sentiment,
+            "macro_indicators": macro_indicators,
+            "fear_greed": fear_greed,
+            "earnings_calendar": earnings_calendar,
             "skip_research": flat,
             "log": logs,
         }
@@ -606,6 +636,15 @@ def risk_check_node(state: AgentState) -> dict:
         if alloc > MAX_ALLOC_PCT:
             decision = {**decision, "allocation_pct": MAX_ALLOC_PCT}
             alloc = MAX_ALLOC_PCT
+        if symbol and is_earnings_week(symbol):
+            logger.warning(
+                "Earnings week for %s — allocation reduced (earnings guard)",
+                symbol,
+            )
+            damped = max(5.0, alloc * 0.65)
+            if damped < alloc:
+                decision = {**decision, "allocation_pct": damped}
+                alloc = damped
         amount = pv * (alloc / 100)
         if amount > balance:
             failures.append(f"cash insuffisant (besoin ${amount:.0f} > dispo ${balance:.0f})")

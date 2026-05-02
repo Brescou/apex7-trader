@@ -279,6 +279,7 @@ def alert_daily_digest(
     consecutive_holds: int,
     mode: str,
     realized_pnl_pcts: list[float] | None = None,
+    fear_greed: dict[str, Any] | None = None,
 ) -> None:
     """End-of-day summary embed at ``POSTMORTEM_HOUR`` (live / paper only).
 
@@ -298,17 +299,29 @@ def alert_daily_digest(
             "value": f"${portfolio_value:,.2f}",
             "inline": True,
         },
-        {
-            "name": "Trades",
-            "value": _format_digest_trades_line(trades_summary),
-            "inline": False,
-        },
-        {
-            "name": "Positions",
-            "value": _format_digest_positions(positions),
-            "inline": False,
-        },
     ]
+    if fear_greed and fear_greed.get("score") is not None:
+        fields.append(
+            {
+                "name": "Fear & Greed",
+                "value": f"{fear_greed['score']} ({fear_greed.get('label', '?')})",
+                "inline": True,
+            }
+        )
+    fields.extend(
+        [
+            {
+                "name": "Trades",
+                "value": _format_digest_trades_line(trades_summary),
+                "inline": False,
+            },
+            {
+                "name": "Positions",
+                "value": _format_digest_positions(positions),
+                "inline": False,
+            },
+        ]
+    )
 
     rp = realized_pnl_pcts or []
     if rp:

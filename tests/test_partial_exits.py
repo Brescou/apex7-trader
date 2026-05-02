@@ -121,6 +121,23 @@ def test_arbitrate_pyramid_flag_and_confidence_discount() -> None:
     assert pyr["decision"]["confidence"] == pytest.approx(base["decision"]["confidence"] * 0.8)
 
 
+def test_risk_check_earnings_week_damps_allocation(monkeypatch) -> None:
+    """Earnings guard reduces BUY allocation (option B), without failing the check."""
+    from agents.shared import nodes as nodes_mod
+
+    monkeypatch.setattr(nodes_mod, "is_earnings_week", lambda _s: True)
+    sym = "AAPL"
+    state = {
+        "decision": {"action": "BUY", "symbol": sym, "allocation_pct": 20.0, "sell_pct": 100},
+        "prices": {sym: 100.0},
+        "positions": {},
+        "balance": 5000.0,
+    }
+    out = risk_check_node(state)
+    assert out["decision"].get("_risk_passed") is True
+    assert out["decision"]["allocation_pct"] == pytest.approx(13.0)
+
+
 def test_risk_check_allows_pyramid_buy_under_cap() -> None:
     """Existing position + layers below max + cumulative allocation ≤ 1.5 × MAX → PASS."""
     sym = "AAPL"

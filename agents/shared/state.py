@@ -18,6 +18,9 @@ class AgentState(TypedDict):
     prices: dict  # {symbol: float}
     news: str
     sentiment: dict  # {symbol: float -1..1}
+    macro_indicators: dict  # FRED bundle from ``core.external_data``
+    fear_greed: dict | None  # CNN Fear & Greed or None on failure
+    earnings_calendar: dict  # per-symbol next earnings from ``market_data``
 
     # Memory
     past_trades: List[dict]
@@ -47,6 +50,9 @@ class MultiAgentState(TypedDict):
     prices: dict
     news: str
     sentiment: dict
+    macro_indicators: dict
+    fear_greed: dict | None
+    earnings_calendar: dict
     past_trades: List[dict]
     known_patterns: List[str]
     round: int
