@@ -12,8 +12,8 @@ import anthropic
 import httpx
 import pytest
 
-import agents.shared.nodes as nodes
-from agents.shared.nodes import _llm
+import agents.shared.llm as llm
+from agents.shared.llm import _llm
 
 
 def _api_status_error(status: int = 500) -> anthropic.APIStatusError:
@@ -47,16 +47,16 @@ def _success_response(text: str = "ok") -> SimpleNamespace:
 @pytest.fixture(autouse=True)
 def reset_llm_guard_state():
     """Isolate circuit breaker / token counter between tests."""
-    nodes._circuit_breaker["consecutive_failures"] = 0
-    nodes._circuit_breaker["paused_until"] = 0.0
-    nodes._token_counter["input"] = 0
-    nodes._token_counter["output"] = 0
-    nodes._token_counter["reset_date"] = ""
-    nodes._clear_llm_degradation()
+    llm._circuit_breaker["consecutive_failures"] = 0
+    llm._circuit_breaker["paused_until"] = 0.0
+    llm._token_counter["input"] = 0
+    llm._token_counter["output"] = 0
+    llm._token_counter["reset_date"] = ""
+    llm._clear_llm_degradation()
     yield
-    nodes._circuit_breaker["consecutive_failures"] = 0
-    nodes._circuit_breaker["paused_until"] = 0.0
-    nodes._clear_llm_degradation()
+    llm._circuit_breaker["consecutive_failures"] = 0
+    llm._circuit_breaker["paused_until"] = 0.0
+    llm._clear_llm_degradation()
 
 
 def test_breaker_opens_after_3_failures():
@@ -67,15 +67,15 @@ def test_breaker_opens_after_3_failures():
     for _ in range(3):
         assert _llm(client, "claude", [{"role": "user", "content": "x"}]) == ""
 
-    assert nodes._circuit_breaker["consecutive_failures"] == 3
-    assert nodes._circuit_breaker["paused_until"] > time.time()
+    assert llm._circuit_breaker["consecutive_failures"] == 3
+    assert llm._circuit_breaker["paused_until"] > time.time()
     assert client.messages.create.call_count == 3
 
 
 def test_breaker_returns_empty_when_open():
     """When the breaker is open, ``_llm`` returns "" without calling the API."""
-    nodes._circuit_breaker["consecutive_failures"] = 3
-    nodes._circuit_breaker["paused_until"] = nodes.time.time() + 3600.0
+    llm._circuit_breaker["consecutive_failures"] = 3
+    llm._circuit_breaker["paused_until"] = time.time() + 3600.0
 
     client = MagicMock()
     out = _llm(client, "claude", [{"role": "user", "content": "x"}])
@@ -86,18 +86,18 @@ def test_breaker_returns_empty_when_open():
 
 def test_breaker_closes_after_pause():
     """After ``paused_until``, the next call resets failures and a successful response clears state."""
-    nodes._circuit_breaker["consecutive_failures"] = 3
-    nodes._circuit_breaker["paused_until"] = 1000.0
+    llm._circuit_breaker["consecutive_failures"] = 3
+    llm._circuit_breaker["paused_until"] = 1000.0
 
     client = MagicMock()
     client.messages.create.return_value = _success_response("recovered")
 
     fixed_now = 5000.0
-    with patch("agents.shared.nodes.time.time", return_value=fixed_now):
+    with patch("agents.shared.llm.time.time", return_value=fixed_now):
         out = _llm(client, "claude", [{"role": "user", "content": "x"}])
 
     assert out == "recovered"
-    assert nodes._circuit_breaker["consecutive_failures"] == 0
+    assert llm._circuit_breaker["consecutive_failures"] == 0
     assert client.messages.create.call_count == 1
 
 
@@ -107,10 +107,10 @@ def test_rate_limit_respects_retry_after():
     client.messages.create.side_effect = _rate_limit_error("30")
 
     fixed_now = 10_000.0
-    with patch("agents.shared.nodes.time.time", return_value=fixed_now):
+    with patch("agents.shared.llm.time.time", return_value=fixed_now):
         assert _llm(client, "claude", [{"role": "user", "content": "x"}]) == ""
 
-    assert nodes._circuit_breaker["paused_until"] == pytest.approx(fixed_now + 30.0)
+    assert llm._circuit_breaker["paused_until"] == pytest.approx(fixed_now + 30.0)
 
 
 def test_first_429_blocks_subsequent_calls():
@@ -118,19 +118,19 @@ def test_first_429_blocks_subsequent_calls():
     client = MagicMock()
     client.messages.create.side_effect = _rate_limit_error("30")
     t0 = 10_000.0
-    with patch("agents.shared.nodes.time.time", return_value=t0):
+    with patch("agents.shared.llm.time.time", return_value=t0):
         assert _llm(client, "claude", [{"role": "user", "content": "x"}]) == ""
 
-    assert nodes._circuit_breaker["consecutive_failures"] == nodes._CIRCUIT_BREAKER_THRESHOLD
+    assert llm._circuit_breaker["consecutive_failures"] == llm._CIRCUIT_BREAKER_THRESHOLD
 
-    with patch("agents.shared.nodes.time.time", return_value=t0 + 5.0):
+    with patch("agents.shared.llm.time.time", return_value=t0 + 5.0):
         assert _llm(client, "claude", [{"role": "user", "content": "x"}]) == ""
 
     assert client.messages.create.call_count == 1
 
     client.messages.create.side_effect = None
     client.messages.create.return_value = _success_response("ok")
-    with patch("agents.shared.nodes.time.time", return_value=t0 + 31.0):
+    with patch("agents.shared.llm.time.time", return_value=t0 + 31.0):
         assert _llm(client, "claude", [{"role": "user", "content": "x"}]) == "ok"
 
     assert client.messages.create.call_count == 2
