@@ -411,6 +411,13 @@ def _record_hold_stagnation(final_action: str) -> None:
             "HOLD stagnation: %d consecutive HOLD cycles — consider pausing agent",
             n,
         )
+        if n == 10:
+            try:
+                from core.notifications import alert_stagnation
+
+                alert_stagnation(hold_cycles=n)
+            except Exception:
+                pass
 
 
 def _retry_after_seconds(exc: anthropic.RateLimitError) -> float:
@@ -520,6 +527,12 @@ def _llm(
             "Rate-limited — circuit breaker forced open for %.0fs",
             wait_s,
         )
+        try:
+            from core.notifications import alert_circuit_breaker
+
+            alert_circuit_breaker("Rate limited", int(max(wait_s, 1.0)))
+        except Exception:
+            pass
         _set_llm_degradation("circuit_breaker")
         return ""
     except (anthropic.APIStatusError, anthropic.APITimeoutError, httpx.TimeoutException) as e:
@@ -1149,6 +1162,42 @@ def make_execute_node(portfolio: Portfolio):
     return execute_node
 
 
+def _discord_votes_summary(state: AgentState) -> str | None:
+    """Short multi-line summary of specialist votes for Discord (compact)."""
+    arb = state.get("arbitration")
+    if isinstance(arb, dict):
+        votes = arb.get("_votes")
+        if votes:
+            lines = [
+                f"{v.get('agent', '?')}: {v.get('action', '?')} "
+                f"{v.get('symbol', '')} ({float(v.get('confidence', 0)):+.0%})"
+                for v in votes
+            ]
+            return "\n".join(lines)[:1024]
+    votes = state.get("agent_votes") or []
+    if votes:
+        lines = [
+            f"{v.get('agent', '?')}: {v.get('action', '?')} "
+            f"{v.get('symbol', '')} ({float(v.get('confidence', 0)):+.0%})"
+            for v in votes
+        ]
+        return "\n".join(lines)[:1024]
+    parts: list[str] = []
+    for key, label in (
+        ("tech_vote", "technician"),
+        ("analyst_vote", "analyst"),
+        ("risk_vote", "risk_manager"),
+        ("macro_vote", "macro_watcher"),
+    ):
+        v = state.get(key)
+        if isinstance(v, dict):
+            parts.append(
+                f"{label}: {v.get('action', '?')} {v.get('symbol', '')} "
+                f"({float(v.get('confidence', 0)):+.0%})"
+            )
+    return "\n".join(parts)[:1024] if parts else None
+
+
 def make_save_memory_node(portfolio: Portfolio):
     def save_memory_node(state: AgentState) -> dict:
         decision = state.get("decision") or {}
@@ -1219,6 +1268,21 @@ def make_save_memory_node(portfolio: Portfolio):
         if trade_id is None:
             logs.append(_entry("save_memory: trades INSERT failed", "error"))
         else:
+            try:
+                from core.notifications import alert_trade
+
+                summary = _discord_votes_summary(state)
+                alert_trade(
+                    symbol=symbol,
+                    action=action,
+                    price=float(price),
+                    amount_usd=float(amount) if amount else None,
+                    sell_pct=float(decision.get("sell_pct", 100.0)) if action == "SELL" else None,
+                    confidence=float(decision.get("confidence", 0.0)),
+                    votes_summary=summary,
+                )
+            except Exception:
+                pass
             entry_dt = datetime.fromisoformat(ts) if "T" in ts else datetime.now()
             eval_after = (entry_dt + timedelta(days=EVAL_HORIZON_CALENDAR_DAYS)).isoformat()
             ok_pending = _db_write(

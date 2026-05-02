@@ -166,6 +166,12 @@ def start_controller() -> None:
             name="apex7-postmortem",
         ).start()
         _controller_started = True
+    try:
+        from core.notifications import alert_startup
+
+        alert_startup()
+    except Exception:
+        pass
 
 
 def _postmortem_loop(p: Portfolio) -> None:

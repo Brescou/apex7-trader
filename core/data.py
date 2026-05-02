@@ -170,10 +170,20 @@ class Portfolio:
                 self.peak_value = val
 
     def check_death(self, prices: dict[str, float]) -> bool:
+        # Portfolio dies exactly once — Discord alert on transition only.
         with self._lock:
             val = self._total_value_unlocked(prices)
+            was_dead = self.is_dead
             self.is_dead = val < DEATH_THRESHOLD
-            return self.is_dead
+            dead_now = self.is_dead
+        if dead_now and not was_dead:
+            try:
+                from core.notifications import alert_death
+
+                alert_death(portfolio_value=val)
+            except Exception:
+                pass
+        return dead_now
 
     def log(self, message: str, level: str = "info"):
         entry = {"time": datetime.now().isoformat(), "message": message, "level": level}
