@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import dash
-from config import DEATH_THRESHOLD, INITIAL_BALANCE, WATCHLIST  # noqa: F401
+from config import DEATH_THRESHOLD, INITIAL_BALANCE  # noqa: F401
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DESIGN TOKENS
@@ -132,15 +132,15 @@ app.index_string = """<!DOCTYPE html>
 @server.route("/health")
 def _health():
     """Health check endpoint for monitoring."""
-    from agents.shared.nodes import get_runtime_mode
+    from agents.shared.nodes import get_runtime_mode, get_simulation_mode
     from dashboard.controller import _controller_lock, _ctrl, _state
 
     with _controller_lock:
         portfolio = _state.get("portfolio")
         cycle = _ctrl.get("cycle", 0)
-        sim = _ctrl.get("sim_mode", False)
-        mode = _ctrl.get("mode") or get_runtime_mode()
         consecutive_holds = _state.get("consecutive_holds", 0)
+    mode = get_runtime_mode()
+    sim = get_simulation_mode()
     alive = not portfolio.is_dead if portfolio else False
     body = {
         "status": "ok" if alive else "dead",

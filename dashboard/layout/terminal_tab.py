@@ -2,6 +2,7 @@
 
 from dash import dcc, html
 
+from core.watchlist import get_watchlist
 from dashboard.layout.helpers import _section_label
 from dashboard.server import (
     BG_CARD,
@@ -14,11 +15,11 @@ from dashboard.server import (
     PURPLE,
     TEXT_DIM,
     TEXT_MAIN,
-    WATCHLIST,
 )
 
 
 def _tab_terminal() -> html.Div:
+    _wl_compare = get_watchlist()
     _input_style = {
         "background": BG_DEEP,
         "border": f"1px solid {BORDER}",
@@ -168,7 +169,7 @@ def _tab_terminal() -> html.Div:
                                                                 id="compare-symbols",
                                                                 options=[
                                                                     {"label": f" {s}", "value": s}
-                                                                    for s in WATCHLIST
+                                                                    for s in _wl_compare
                                                                 ],
                                                                 value=[],
                                                                 inline=True,

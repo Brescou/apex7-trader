@@ -144,11 +144,20 @@ def alert_circuit_breaker(reason: str, wait_seconds: int) -> None:
 
 def alert_startup() -> None:
     """Dashboard / controller started."""
+    try:
+        from core.watchlist import get_watchlist
+
+        wl = ", ".join(get_watchlist())
+    except Exception:
+        wl = "(indisponible)"
     send_discord_alert(
         "APEX-7 startup",
         "Controller started.",
         color=_COLOR_GREEN,
-        fields=[{"name": "Mode", "value": _runtime_mode_label(), "inline": True}],
+        fields=[
+            {"name": "Mode", "value": _runtime_mode_label(), "inline": True},
+            {"name": "Watchlist", "value": wl[:1024], "inline": False},
+        ],
     )
 
 

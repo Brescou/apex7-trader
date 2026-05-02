@@ -21,8 +21,8 @@ from config import (
     PORTFOLIO_SAVE_ENABLED,
     PORTFOLIO_STATE_PATH,
     USE_LIVEFEED,
-    WATCHLIST,
 )
+from core.watchlist import get_watchlist
 
 logger = logging.getLogger("apex7.portfolio")
 
@@ -45,7 +45,7 @@ class Portfolio:
         self.high_watermarks: dict[str, float] = {}
 
     def fetch_prices(self, symbols: list[str] | None = None) -> dict[str, float]:
-        symbols = symbols or WATCHLIST
+        symbols = symbols or get_watchlist()
         prices = {}
 
         if USE_LIVEFEED:

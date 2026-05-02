@@ -5,6 +5,7 @@ import sqlite3
 import threading
 import time
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 
 from agents.shared.modes import _paper_mode, _sim_mode
@@ -86,6 +87,11 @@ CREATE TABLE IF NOT EXISTS pending_evaluations (
     eval_after_date TEXT NOT NULL,
     evaluated       INTEGER DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS watchlist (
+    symbol   TEXT PRIMARY KEY,
+    added_at TEXT NOT NULL,
+    source   TEXT DEFAULT 'manual'
+);
 CREATE INDEX IF NOT EXISTS idx_pending_eval_due
     ON pending_evaluations (evaluated, eval_after_date);
 """
@@ -93,6 +99,24 @@ CREATE INDEX IF NOT EXISTS idx_pending_eval_due
 
 _db_init_lock = threading.Lock()
 _db_initialized = False
+
+
+def _seed_watchlist_if_empty(con: sqlite3.Connection) -> None:
+    """Insert default tickers once per DB file when the watchlist table is empty."""
+    try:
+        row = con.execute("SELECT COUNT(*) FROM watchlist").fetchone()
+        if row and row[0] > 0:
+            return
+    except sqlite3.OperationalError:
+        return
+    from config import WATCHLIST as _default_symbols
+
+    ts = datetime.now(timezone.utc).isoformat()
+    for sym in _default_symbols:
+        con.execute(
+            "INSERT INTO watchlist (symbol, added_at, source) VALUES (?,?,?)",
+            (sym, ts, "seed"),
+        )
 
 
 def _init_db() -> None:
@@ -113,6 +137,8 @@ def _init_db() -> None:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("PRAGMA busy_timeout=5000")
             con.executescript(_SCHEMA)
+            _seed_watchlist_if_empty(con)
+            con.commit()
             try:
                 con.execute("ALTER TABLE trades ADD COLUMN source TEXT DEFAULT 'live'")
                 con.commit()

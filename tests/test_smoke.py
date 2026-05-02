@@ -191,7 +191,7 @@ def test_sqlite_schema():
     tables = {row[0] for row in cursor.fetchall()}
     con.close()
 
-    required_tables = {"trades", "patterns", "agent_memory", "postmortem"}
+    required_tables = {"trades", "patterns", "agent_memory", "postmortem", "watchlist"}
     for table in required_tables:
         assert table in tables, f"Missing table '{table}'. Found: {tables}"
 

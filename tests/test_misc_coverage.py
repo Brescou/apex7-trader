@@ -12,6 +12,7 @@ def test_seed_live_price_history_uses_yfinance() -> None:
     import pandas as pd
 
     import agents.shared.nodes as nodes
+    from core.watchlist import get_watchlist
 
     idx = pd.date_range("2026-01-01", periods=20, freq="D")
     df = pd.DataFrame({"Close": [100.0 + i * 0.1 for i in range(20)]}, index=idx)
@@ -22,7 +23,7 @@ def test_seed_live_price_history_uses_yfinance() -> None:
         nodes._seed_live_price_history()
     try:
         assert nodes._live_price_history_seeded
-        for sym in nodes.WATCHLIST:
+        for sym in get_watchlist():
             assert len(nodes._live_price_history.get(sym, [])) >= 1
     finally:
         nodes._live_price_history.clear()

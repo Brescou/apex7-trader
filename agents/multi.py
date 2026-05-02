@@ -60,10 +60,10 @@ from config import (
     INITIAL_BALANCE,
     MAX_ALLOC_PCT,
     MAX_POSITIONS,
-    WATCHLIST,
 )
 from core.data import Portfolio
 from core.indicators import rsi as _rsi
+from core.watchlist import get_watchlist
 
 logger = logging.getLogger("apex7.multi")
 
@@ -256,11 +256,12 @@ def _record_vote(
 def sim_technician(state: MultiAgentState) -> dict:
     prices = state["prices"]
     pos = state["positions"]
+    wl = get_watchlist()
     logs = [_entry("[SIM][TECH] RSI-based technical analysis")]
 
     rsi_map = {
         sym: _rsi(_sim_price_history.get(sym, [prices.get(sym, 100.0)]))
-        for sym in WATCHLIST
+        for sym in wl
         if sym in prices
     }
 
@@ -280,7 +281,7 @@ def sim_technician(state: MultiAgentState) -> dict:
         reason = f"RSI={rsi_v:.1f} oversold — technical bounce setup"
         macd, bb, trend = "bullish", "lower", "up"
     else:
-        sym = WATCHLIST[0] if WATCHLIST else ""
+        sym = wl[0] if wl else ""
         action, conf, alloc = "HOLD", 0.58, 0
         rsi_v = rsi_map.get(sym, 50.0)
         reason = f"RSI={rsi_v:.1f} — neutral zone, no setup"
@@ -313,13 +314,14 @@ def sim_analyst(state: MultiAgentState) -> dict:
     prices = state["prices"]
     pos = state["positions"]
     sentiment = state.get("sentiment", {})
+    wl = get_watchlist()
     logs = [_entry("[SIM][ANLST] sentiment-based fundamental analysis")]
 
     avg_sent = sum(sentiment.values()) / max(len(sentiment), 1)
 
     if avg_sent > 0.15 and len(pos) < MAX_POSITIONS:
-        candidates = [s for s in WATCHLIST if s not in pos and s in prices]
-        sym = random.choice(candidates) if candidates else (WATCHLIST[0] if WATCHLIST else "")
+        candidates = [s for s in wl if s not in pos and s in prices]
+        sym = random.choice(candidates) if candidates else (wl[0] if wl else "")
         action = "BUY"
         conf = min(0.65 + abs(avg_sent) * 0.2, 0.85)
         alloc = random.randint(10, 30)
@@ -333,7 +335,7 @@ def sim_analyst(state: MultiAgentState) -> dict:
         reason = f"Negative sentiment ({avg_sent:+.2f}) — bearish pressure building"
         catalysts = ["[SIM] negative news flow", "[SIM] sentiment deterioration"]
     else:
-        sym = WATCHLIST[0] if WATCHLIST else ""
+        sym = wl[0] if wl else ""
         action = "HOLD"
         conf = 0.55
         alloc = 0
@@ -541,6 +543,7 @@ def technician_node(state: MultiAgentState) -> dict:
 
     prices = state["prices"]
     pos = state["positions"]
+    wl = get_watchlist()
     logs = [_entry("technician: technical analysis")]
 
     _rows = _db_read(
@@ -551,7 +554,7 @@ def technician_node(state: MultiAgentState) -> dict:
 
     rsi_map = {
         sym: _rsi(_live_price_history.get(sym, [prices.get(sym, 100.0)]))
-        for sym in WATCHLIST
+        for sym in wl
         if sym in prices
     }
     positions_display = {
@@ -574,7 +577,7 @@ def technician_node(state: MultiAgentState) -> dict:
         f"PRIX ACTUELS:\n{json.dumps({s: f'${p:.2f}' for s, p in prices.items()}, indent=2)}\n\n"
         f"RSI(14) par symbole:\n{json.dumps({s: round(r, 1) for s, r in rsi_map.items()}, indent=2)}\n\n"
         f"POSITIONS ACTUELLES:\n{json.dumps(positions_display, indent=2)}\n\n"
-        f"WATCHLIST: {WATCHLIST}\n"
+        f"WATCHLIST: {wl}\n"
         f"POSITIONS MAX: {MAX_POSITIONS} | ACTUELLES: {len(pos)}\n\n"
         "Retourne ce JSON uniquement :\n"
         '{\n  "agent": "technician",\n  "action": "BUY|SELL|HOLD",\n'
@@ -617,6 +620,7 @@ def analyst_node(state: MultiAgentState) -> dict:
 
     pos = state["positions"]
     sentiment = state.get("sentiment", {})
+    wl = get_watchlist()
     logs = [_entry("analyst: fundamental + sentiment analysis")]
 
     _rows = _db_read(
@@ -636,7 +640,7 @@ def analyst_node(state: MultiAgentState) -> dict:
         f"SENTIMENT TWITTER (-1=baissier → +1=haussier):\n"
         f"{json.dumps(sentiment, indent=2)}\n\n"
         f"POSITIONS ACTUELLES: {list(pos.keys())}\n"
-        f"WATCHLIST: {WATCHLIST} | POSITIONS MAX: {MAX_POSITIONS}\n\n"
+        f"WATCHLIST: {wl} | POSITIONS MAX: {MAX_POSITIONS}\n\n"
         f"BRIEF SUPERVISEUR:\n{state.get('supervisor_brief', '')}\n\n"
         "Retourne ce JSON uniquement :\n"
         '{\n  "agent": "analyst",\n  "action": "BUY|SELL|HOLD",\n'

@@ -9,6 +9,7 @@ from dashboard.layout.analytics_tab import (
 )
 from dashboard.layout.live_tab import _tab_live
 from dashboard.layout.terminal_tab import _tab_terminal
+from core.watchlist import get_watchlist
 from dashboard.server import (
     BG_CARD,
     BG_DEEP,
@@ -18,13 +19,13 @@ from dashboard.server import (
     GRAY,
     GREEN,
     TEXT_DIM,
-    WATCHLIST,
     app,
 )
 
 
 def setup_layout() -> None:
     """Assign app.layout with all stores, intervals, top bar, tabs, and tab content."""
+    _wl_startup = get_watchlist()
     app.layout = html.Div(
         id="page-bg",
         style={
@@ -47,8 +48,11 @@ def setup_layout() -> None:
             dcc.Interval(id="macro-interval", interval=60000, n_intervals=0),
             dcc.Interval(id="watchlist-interval", interval=10000, n_intervals=0),
             dcc.Interval(id="news-interval", interval=120000, n_intervals=0),
-            dcc.Store(id="terminal-watchlist", data=list(WATCHLIST)),
-            dcc.Store(id="terminal-active-symbol", data=WATCHLIST[0] if WATCHLIST else "AAPL"),
+            dcc.Store(id="terminal-watchlist", data=list(_wl_startup)),
+            dcc.Store(
+                id="terminal-active-symbol",
+                data=_wl_startup[0] if _wl_startup else "AAPL",
+            ),
             dcc.Store(id="price-alerts-store", data=[]),
             dcc.Store(id="screener-results-store", data=[]),
             dcc.Store(id="screener-active-store", data=False),

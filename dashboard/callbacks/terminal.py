@@ -6,7 +6,8 @@ import dash
 import plotly.graph_objects as go
 from dash import ALL, Input, Output, State, ctx, dcc, html, no_update
 
-from config import WATCHLIST
+from core.watchlist import add_to_watchlist, get_watchlist, remove_from_watchlist
+from dashboard.controller import _state
 from market_data import (
     fetch_comparison,
     fetch_macro,
@@ -42,6 +43,13 @@ _MACRO_KEYS = {"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}
 
 # Dot color palette for symbol cards (by position)
 _DOT_PALETTE = [YELLOW, BLUE, GREEN, PURPLE]
+
+
+def _fallback_active_symbol(symbol) -> str:
+    if symbol:
+        return symbol
+    wl = get_watchlist()
+    return wl[0] if wl else "AAPL"
 
 
 def _mini_macro_chart(spark_data, chg):
@@ -183,31 +191,51 @@ def _update_macro_bar(_):
     Output("terminal-watchlist", "data"),
     Input("btn-watchlist-add", "n_clicks"),
     State("watchlist-add-input", "value"),
-    State("terminal-watchlist", "data"),
     prevent_initial_call=True,
 )
-def _add_symbol(_, symbol, watchlist):
+def _add_symbol(_, symbol):
     if not symbol:
-        return watchlist or []
+        return no_update
     sym = symbol.strip().upper()
-    wl = list(watchlist or [])
-    if sym and sym not in wl:
-        wl.append(sym)
-    return wl
+    if not sym:
+        return no_update
+    if add_to_watchlist(sym, source="manual"):
+        return get_watchlist()
+    return no_update
 
 
 @app.callback(
     Output("terminal-watchlist", "data", allow_duplicate=True),
     Input({"type": "watchlist-remove", "index": ALL}, "n_clicks"),
-    State("terminal-watchlist", "data"),
     prevent_initial_call=True,
 )
-def _remove_symbol(n_clicks_list, watchlist):
+def _remove_symbol(n_clicks_list):
     if not any(n_clicks_list):
-        return watchlist or []
+        return no_update
     sym = ctx.triggered_id["index"]
-    wl = [s for s in (watchlist or []) if s != sym]
-    return wl
+    open_syms = frozenset()
+    port = _state.get("portfolio")
+    if port is not None:
+        with port._lock:
+            open_syms = frozenset(port.positions.keys())
+    if remove_from_watchlist(sym, open_symbols=open_syms):
+        return get_watchlist()
+    return no_update
+
+
+@app.callback(
+    Output("compare-symbols", "options"),
+    Output("compare-symbols", "value"),
+    Input("terminal-watchlist", "data"),
+    State("compare-symbols", "value"),
+    prevent_initial_call=False,
+)
+def _sync_compare_checklist(watchlist, cur_vals):
+    wl = watchlist or []
+    opts = [{"label": f" {s}", "value": s} for s in wl]
+    allowed = set(wl)
+    val = [v for v in (cur_vals or []) if v in allowed]
+    return opts, val
 
 
 @app.callback(
@@ -493,7 +521,7 @@ def _select_symbol(n_clicks_list):
     Input("news-interval", "n_intervals"),
 )
 def _update_news(symbol, _):
-    sym = symbol or (WATCHLIST[0] if WATCHLIST else "AAPL")
+    sym = _fallback_active_symbol(symbol)
     header = f"NEWS — {sym}"
 
     try:
@@ -594,7 +622,7 @@ def _update_news(symbol, _):
 def _update_news_content(symbol, _, active_tab):
     if active_tab != "terminal":
         return no_update
-    sym = symbol or (WATCHLIST[0] if WATCHLIST else "AAPL")
+    sym = _fallback_active_symbol(symbol)
 
     try:
         items = fetch_news(sym)

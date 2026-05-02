@@ -30,10 +30,10 @@ from config import (
     SIM_DRIFT,
     SIM_VOLATILITY,
     STOP_LOSS_PCT,
-    WATCHLIST,
     X_BEARER_TOKEN,
 )
 from core.data import Portfolio
+from core.watchlist import get_watchlist
 from agents.shared.state import AgentState
 from agents.shared.prompts import PROMPT_VERSION
 from agents.shared.llm import (
@@ -255,12 +255,14 @@ def _fetch_sentiment_sync(symbols: list[str]) -> dict[str, float]:
     return {sym: round(random.uniform(-0.3, 0.3), 2) for sym in symbols}
 
 
-async def _gather_data(portfolio: Portfolio, news_syms: list[str]) -> tuple[dict, str, dict]:
+async def _gather_data(
+    portfolio: Portfolio, news_syms: list[str], watchlist_syms: list[str]
+) -> tuple[dict, str, dict]:
     loop = asyncio.get_running_loop()
     prices, news, sentiment = await asyncio.gather(
         loop.run_in_executor(None, _fetch_prices_sync, portfolio),
         loop.run_in_executor(None, _fetch_news_sync, news_syms),
-        loop.run_in_executor(None, _fetch_sentiment_sync, WATCHLIST),
+        loop.run_in_executor(None, _fetch_sentiment_sync, watchlist_syms),
     )
     return prices, news, sentiment
 
@@ -329,7 +331,7 @@ def _seed_live_price_history() -> None:
     with _live_price_history_lock:
         if _live_price_history_seeded:
             return
-        for sym in WATCHLIST:
+        for sym in get_watchlist():
             try:
                 df = yf.download(
                     sym,
@@ -368,9 +370,7 @@ def _record_live_prices_for_rsi(prices: dict[str, float]) -> None:
     if not _live_price_history_seeded:
         _seed_live_price_history()
     today = date.today().isoformat()
-    for sym in WATCHLIST:
-        if sym not in prices:
-            continue
+    for sym in prices:
         try:
             pf = float(prices[sym])
         except (TypeError, ValueError):
@@ -409,15 +409,16 @@ def _sim_seed_prices(watchlist: list[str], last_known: dict[str, float]) -> dict
 def sim_fetch_data(state: AgentState, portfolio: Portfolio) -> dict:
     """Simulation version of fetch_data — zero network calls."""
     logs = [_entry("fetch_data: using simulation")]
+    wl = get_watchlist()
 
     current = dict(portfolio.last_prices) or {}
-    if not all(s in current for s in WATCHLIST):
-        current = _sim_seed_prices(WATCHLIST, current)
+    if not all(s in current for s in wl):
+        current = _sim_seed_prices(wl, current)
 
     prices = _sim_step_prices(current)
-    news_syms = list(state["positions"].keys())[:3] or WATCHLIST[:3]
+    news_syms = list(state["positions"].keys())[:3] or wl[:3]
     news = "\n".join(random.choice(_SIM_NEWS_TEMPLATES).format(sym=s) for s in news_syms)
-    sentiment = {s: round(random.uniform(-1, 1), 2) for s in WATCHLIST}
+    sentiment = {s: round(random.uniform(-1, 1), 2) for s in wl}
 
     # Update portfolio's cached prices so execute_node has values
     with portfolio._lock:
@@ -520,21 +521,22 @@ def make_fetch_data_node(portfolio: Portfolio):
         logs = [_entry("fetch_data: using LiveFeed")]
 
         pos = state["positions"]
+        wl = get_watchlist()
         news_syms = (
             sorted(pos, key=lambda s: pos[s]["shares"] * state["prices"].get(s, 0), reverse=True)[
                 :3
             ]
             if pos
-            else WATCHLIST[:3]
+            else wl[:3]
         )
 
         try:
-            prices, news, sentiment = _run_async(_gather_data(portfolio, news_syms))
+            prices, news, sentiment = _run_async(_gather_data(portfolio, news_syms, wl))
         except Exception as e:
             logs.append(_entry(f"fetch_data error: {e}", "error"))
             prices = dict(portfolio.last_prices)
             news = "Fetch failed"
-            sentiment = {s: 0.0 for s in WATCHLIST}
+            sentiment = {s: 0.0 for s in wl}
 
         flat = _is_flat(prices)
         _prev_prices.update(prices)
