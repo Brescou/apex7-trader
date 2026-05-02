@@ -112,6 +112,32 @@ def _parse_json_obj(text: str) -> dict:
     return {}
 
 
+# ── Daily P&L baseline (first agent cycle per calendar day) ─────────────────
+
+_daily_start_value: dict = {"value": None, "date": None}
+_daily_start_lock = threading.Lock()
+
+
+def maybe_update_daily_start(portfolio: Portfolio, prices: dict[str, float]) -> None:
+    """Record ``total_value`` on the first ``execute`` cycle of each calendar day."""
+
+    today = date.today().isoformat()
+    with _daily_start_lock:
+        if _daily_start_value["date"] != today:
+            _daily_start_value["date"] = today
+            _daily_start_value["value"] = float(portfolio.total_value(prices))
+
+
+def get_daily_start_value() -> tuple[float | None, str | None]:
+    """Return ``(start_value, date_iso)`` for today's daily P&L baseline, if any."""
+
+    with _daily_start_lock:
+        return (
+            _daily_start_value["value"],
+            _daily_start_value["date"],
+        )
+
+
 # ── HOLD stagnation (Finding 3.5) ──────────────────────────────────────────────
 
 _consecutive_holds = 0
@@ -585,6 +611,7 @@ def make_execute_node(portfolio: Portfolio):
         alloc = float(decision.get("allocation_pct", 10))
         sell_pct = float(decision.get("sell_pct", 100))
         prices = state["prices"]
+        maybe_update_daily_start(portfolio, prices)
         pv = portfolio.total_value(prices)
         logs = [_entry(f"execute: {action} {symbol}")]
 

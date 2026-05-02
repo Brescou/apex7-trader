@@ -160,3 +160,136 @@ def alert_trailing_stop(
         color=_COLOR_ORANGE,
         fields=[{"name": "Mode", "value": _runtime_mode_label(), "inline": True}],
     )
+
+
+_AGENT_DIGEST_SHORT = {
+    "technician": "TECH",
+    "analyst": "ANLST",
+    "risk_manager": "RISK",
+    "macro_watcher": "MACRO",
+}
+
+
+def _format_digest_trades_line(trades_summary: list[dict]) -> str:
+    """Build a compact BUY / SELL summary for the digest embed."""
+    n_buy = sum(1 for t in trades_summary if (t.get("action") or "").upper() == "BUY")
+    sells = [t for t in trades_summary if (t.get("action") or "").upper() == "SELL"]
+    parts: list[str] = []
+    if n_buy:
+        parts.append(f"{n_buy} BUY")
+    full_sells = 0
+    partial_labels: list[str] = []
+    for t in sells:
+        sp = t.get("sell_pct")
+        if sp is not None and float(sp) < 100.0:
+            partial_labels.append(f"SELL {float(sp):.0f}%")
+        else:
+            full_sells += 1
+    if full_sells:
+        parts.append(f"{full_sells} SELL")
+    parts.extend(partial_labels)
+    return " · ".join(parts) if parts else "None"
+
+
+def _format_digest_positions(positions: dict[str, dict]) -> str:
+    """Multi-line open positions + unrealized P&L (truncated for Discord)."""
+    if not positions:
+        return "None"
+    lines: list[str] = []
+    for sym, pos in sorted(positions.items()):
+        cur = float(pos.get("current", 0))
+        avg = float(pos.get("avg_price", 0))
+        pnl = float(pos.get("pnl_pct", 0))
+        sh = float(pos.get("shares", 0))
+        lines.append(f"`{sym}` {sh:.4f} sh @ ${avg:.2f} → ${cur:.2f} (**{pnl:+.1f}%**)")
+    text = "\n".join(lines)
+    return text[:1000] + ("…" if len(text) > 1000 else "")
+
+
+def _format_digest_agent_accuracy(agent_accuracy: dict[str, float | None]) -> str:
+    chips: list[str] = []
+    for key, short in _AGENT_DIGEST_SHORT.items():
+        acc = agent_accuracy.get(key)
+        if acc is None:
+            chips.append(f"⏳ {short}")
+        else:
+            chips.append(f"{short} {acc:.0%}")
+    return " · ".join(chips)
+
+
+def alert_daily_digest(
+    *,
+    date: str,
+    pnl_usd: float,
+    pnl_pct: float,
+    portfolio_value: float,
+    trades_summary: list[dict],
+    positions: dict[str, dict],
+    agent_accuracy: dict[str, float | None],
+    consecutive_holds: int,
+    mode: str,
+    realized_pnl_pcts: list[float] | None = None,
+) -> None:
+    """End-of-day summary embed at ``POSTMORTEM_HOUR`` (live / paper only).
+
+    ``realized_pnl_pcts`` holds percent P&L for each same-day SELL vs its entry
+    (computed in ``run_daily_digest``); used for Best / Worst field.
+    """
+    if pnl_usd >= 0:
+        pnl_field = f"+${pnl_usd:,.2f} (+{pnl_pct:.1f}%)"
+    else:
+        pnl_field = f"-${-pnl_usd:,.2f} ({pnl_pct:.1f}%)"
+    color = _COLOR_GREEN if pnl_usd >= 0 else _COLOR_RED
+
+    fields: list[dict[str, Any]] = [
+        {"name": "P&L", "value": pnl_field, "inline": True},
+        {
+            "name": "Portfolio",
+            "value": f"${portfolio_value:,.2f}",
+            "inline": True,
+        },
+        {
+            "name": "Trades",
+            "value": _format_digest_trades_line(trades_summary),
+            "inline": False,
+        },
+        {
+            "name": "Positions",
+            "value": _format_digest_positions(positions),
+            "inline": False,
+        },
+    ]
+
+    rp = realized_pnl_pcts or []
+    if rp:
+        best = max(rp)
+        worst = min(rp)
+        bw = f"Best **{best:+.2f}%** · Worst **{worst:+.2f}%**"
+    else:
+        bw = "— (no closed trades today)"
+    fields.append({"name": "Best / Worst", "value": bw, "inline": False})
+
+    fields.append(
+        {
+            "name": "Agent accuracy",
+            "value": _format_digest_agent_accuracy(agent_accuracy),
+            "inline": False,
+        }
+    )
+    if consecutive_holds > 0:
+        fields.append(
+            {
+                "name": "Holds",
+                "value": f"{consecutive_holds} consecutive",
+                "inline": True,
+            }
+        )
+    fields.append({"name": "Mode", "value": mode[:256], "inline": True})
+
+    title = f"📊 APEX-7 Daily Digest — {date}"
+    send_discord_alert(
+        title,
+        "",
+        color=color,
+        fields=fields,
+    )

@@ -12,7 +12,7 @@ from agents.shared.nodes import (
     get_runtime_mode,
     get_simulation_mode,
 )
-from agents.multi import run_daily_postmortem
+from agents.multi import run_daily_digest, run_daily_postmortem
 from config import AGENT_INTERVAL, POSTMORTEM_HOUR
 from core.data import Portfolio
 from core.registry import get_graph
@@ -196,6 +196,10 @@ def _postmortem_loop(p: Portfolio) -> None:
         if now.hour == POSTMORTEM_HOUR and _last_postmortem_date != today:
             try:
                 run_daily_postmortem(p)
-                _last_postmortem_date = today
             except Exception as _e:
                 p.log(f"Postmortem error: {_e}", "error")
+            try:
+                run_daily_digest(p)
+            except Exception as _e:
+                p.log(f"Daily digest error: {_e}", "error")
+            _last_postmortem_date = today

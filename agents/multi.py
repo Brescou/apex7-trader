@@ -94,6 +94,25 @@ _WEIGHTS_CACHE_TTL_SEC = 600
 _MIN_EVALUATED_VOTES = 5
 
 
+def _read_agent_accuracies() -> dict[str, float | None]:
+    """Evaluated vote accuracy per specialist (same basis as dynamic weights)."""
+
+    agents = list(WEIGHTS.keys())
+    accuracy: dict[str, float | None] = {}
+    for agent in agents:
+        rows = _db_read(
+            "SELECT was_correct FROM agent_memory "
+            "WHERE agent_name=? AND was_correct IS NOT NULL "
+            "ORDER BY timestamp DESC LIMIT 50",
+            (agent,),
+        )
+        if len(rows) >= _MIN_EVALUATED_VOTES:
+            accuracy[agent] = sum(r[0] for r in rows) / len(rows)
+        else:
+            accuracy[agent] = None
+    return accuracy
+
+
 def _compute_dynamic_weights() -> dict:
     """Compute agent weights blended with historical accuracy from agent_memory.
 
@@ -114,20 +133,8 @@ def _compute_dynamic_weights() -> dict:
             return dict(_cached_weights)
 
         agents = list(WEIGHTS.keys())
-        accuracy: dict[str, float | None] = {}
-
         try:
-            for agent in agents:
-                rows = _db_read(
-                    "SELECT was_correct FROM agent_memory "
-                    "WHERE agent_name=? AND was_correct IS NOT NULL "
-                    "ORDER BY timestamp DESC LIMIT 50",
-                    (agent,),
-                )
-                if len(rows) >= _MIN_EVALUATED_VOTES:
-                    accuracy[agent] = sum(r[0] for r in rows) / len(rows)
-                else:
-                    accuracy[agent] = None
+            accuracy = _read_agent_accuracies()
         except Exception as exc:
             logger.warning(
                 "Dynamic weights: agent_memory read failed (%s) — falling back to static",
@@ -146,7 +153,6 @@ def _compute_dynamic_weights() -> dict:
         )
 
         if evaluated == 0:
-            # No agent has any market-evaluated vote yet — pure static.
             _cached_weights = dict(WEIGHTS)
             _weights_computed_at = time.time()
             return dict(_cached_weights)
@@ -1045,6 +1051,138 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         "skip_research": skip_res,
         "log": logs,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DAILY DIGEST (Discord)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _today_realized_pnl_pcts(portfolio: Portfolio) -> list[float]:
+    """Percent P&L for each SELL executed today (vs most recent prior BUY per symbol)."""
+
+    today = date.today().isoformat()
+    pnls: list[float] = []
+    for trade in portfolio.trade_history:
+        if trade.get("action") != "SELL":
+            continue
+        t = str(trade.get("time") or "")
+        if not t.startswith(today):
+            continue
+        symbol = trade.get("symbol")
+        try:
+            sp = float(trade.get("price"))
+        except (TypeError, ValueError):
+            continue
+        buy_trade = next(
+            (
+                x
+                for x in reversed(portfolio.trade_history)
+                if x.get("action") == "BUY" and x.get("symbol") == symbol
+            ),
+            None,
+        )
+        if not buy_trade:
+            continue
+        try:
+            bp = float(buy_trade.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if bp > 0:
+            pnls.append((sp - bp) / bp * 100.0)
+    return pnls
+
+
+def run_daily_digest(portfolio: Portfolio) -> None:
+    """Build and send the Discord daily digest (skipped in simulation mode)."""
+
+    if _sim_mode["enabled"]:
+        return
+
+    from agents.shared.nodes import get_consecutive_hold_cycles, get_daily_start_value
+
+    try:
+        from core.notifications import alert_daily_digest
+    except Exception:
+        return
+
+    prices = portfolio.fetch_prices()
+    portfolio_value = float(portfolio.total_value(prices))
+    today = date.today()
+    date_str = today.isoformat()
+
+    start_val, start_date = get_daily_start_value()
+    if start_val is not None and start_date == date_str:
+        baseline = float(start_val)
+        pnl_usd = portfolio_value - baseline
+        pnl_pct = (pnl_usd / baseline * 100.0) if baseline > 0 else 0.0
+    else:
+        pnl_usd = 0.0
+        pnl_pct = 0.0
+
+    rows = _db_read(
+        "SELECT action, symbol, price, sell_pct FROM trades "
+        "WHERE substr(timestamp, 1, 10) = ? ORDER BY id ASC",
+        (date_str,),
+    )
+    trades_summary: list[dict] = []
+    for row in rows:
+        action, symbol, price, sell_pct = row[0], row[1], row[2], row[3]
+        au = (action or "").upper()
+        sp_out: float | None = None
+        if au == "SELL" and sell_pct is not None:
+            try:
+                spv = float(sell_pct)
+            except (TypeError, ValueError):
+                spv = 100.0
+            if spv < 100.0:
+                sp_out = spv
+        try:
+            px = float(price) if price is not None else 0.0
+        except (TypeError, ValueError):
+            px = 0.0
+        trades_summary.append(
+            {
+                "action": au or "HOLD",
+                "symbol": symbol or "",
+                "price": px,
+                "sell_pct": sp_out,
+            }
+        )
+
+    positions: dict[str, dict] = {}
+    for sym, pos in portfolio.positions.items():
+        avg = float(pos.get("avg_price", pos.get("avg_cost", 0)))
+        sh = float(pos.get("shares", 0))
+        cur = float(prices.get(sym, avg))
+        pnl_p = ((cur - avg) / avg * 100.0) if avg > 0 else 0.0
+        positions[sym] = {
+            "shares": sh,
+            "avg_price": avg,
+            "current": cur,
+            "pnl_pct": round(pnl_p, 2),
+        }
+
+    try:
+        agent_accuracy = _read_agent_accuracies()
+    except Exception:
+        agent_accuracy = {k: None for k in WEIGHTS}
+
+    mode = get_runtime_mode()
+    mode_label = mode.upper() if mode else "LIVE"
+
+    alert_daily_digest(
+        date=date_str,
+        pnl_usd=pnl_usd,
+        pnl_pct=pnl_pct,
+        portfolio_value=portfolio_value,
+        trades_summary=trades_summary,
+        positions=positions,
+        agent_accuracy=agent_accuracy,
+        consecutive_holds=get_consecutive_hold_cycles(),
+        mode=mode_label,
+        realized_pnl_pcts=_today_realized_pnl_pcts(portfolio),
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
