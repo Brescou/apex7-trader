@@ -1,5 +1,6 @@
-"""APEX-7 — Live tab layout (Apex7.html design reference)."""
+"""APEX-7 — Live tab layout with DMC v2 components."""
 
+import dash_mantine_components as dmc
 from dash import dcc, html
 
 from dashboard.server import (
@@ -16,50 +17,18 @@ from dashboard.server import (
     TEXT_GHOST,
 )
 
-_SIDE_W = "165px"
-
-
-def _section(label: str, children, pip_color: str = GREEN, border_top: bool = True) -> html.Div:
-    return html.Div(
-        style={
-            "borderBottom": f"1px solid {BORDER_INNER}",
-            "padding": "6px 8px",
-        },
-        children=[
-            html.Div(
-                style={
-                    "display": "flex",
-                    "alignItems": "center",
-                    "gap": "5px",
-                    "marginBottom": "4px",
-                },
-                children=[
-                    html.Div(
-                        className="sec-pip",
-                        style={"background": pip_color},
-                    ),
-                    html.Span(
-                        label,
-                        className="sec-ttl",
-                    ),
-                ],
-            ),
-            *([children] if not isinstance(children, list) else children),
-        ],
-    )
+_SIDE_W = "200px"
 
 
 def _agent_card(
-    card_id: str,
     hdr_id: str,
     body_id: str,
     toggle_id: dict,
     collapse_id: dict,
-    border_color: str,
     bg_color: str,
 ) -> html.Div:
     return html.Div(
-        style={"marginBottom": "4px"},
+        style={"marginBottom": "3px"},
         children=[
             html.Div(
                 style={
@@ -68,7 +37,8 @@ def _agent_card(
                     "background": f"{bg_color}0a",
                     "border": f"1px solid {bg_color}22",
                     "borderLeft": f"2px solid {bg_color}",
-                    "padding": "5px 7px",
+                    "padding": "4px 7px",
+                    "cursor": "pointer",
                 },
                 children=[
                     html.Div(
@@ -78,10 +48,11 @@ def _agent_card(
                             "alignItems": "center",
                             "flex": "1",
                             "overflow": "hidden",
+                            "minWidth": "0",
                         },
                     ),
                     html.Button(
-                        "▼",
+                        "▼ Reasoning",
                         id=toggle_id,
                         n_clicks=0,
                         style={
@@ -89,10 +60,11 @@ def _agent_card(
                             "border": "none",
                             "color": TEXT_FAINT,
                             "fontFamily": FONT,
-                            "fontSize": "8px",
+                            "fontSize": "7px",
                             "cursor": "pointer",
                             "flexShrink": "0",
                             "padding": "0 0 0 6px",
+                            "letterSpacing": "0.1em",
                         },
                     ),
                 ],
@@ -105,7 +77,7 @@ def _agent_card(
                         "border": f"1px solid {bg_color}18",
                         "borderLeft": f"2px solid {bg_color}",
                         "borderTop": "none",
-                        "padding": "6px 8px",
+                        "padding": "5px 7px",
                     },
                 ),
                 id=collapse_id,
@@ -119,112 +91,126 @@ def _tab_live() -> html.Div:
     return html.Div(
         style={
             "display": "flex",
-            "height": "calc(100vh - 60px)",
+            "height": "calc(100vh - 30px)",
             "overflow": "hidden",
         },
         children=[
-            # ── LEFT SIDEBAR ─────────────────────────────────────────────────
+            # ── LEFT SIDEBAR (200px) ──────────────────────────────────────────
             html.Div(
                 style={
                     "width": _SIDE_W,
                     "minWidth": _SIDE_W,
                     "flexShrink": "0",
                     "borderRight": f"1px solid {BORDER}",
+                    "background": BG_BASE,
                     "display": "flex",
                     "flexDirection": "column",
-                    "overflowY": "auto",
-                    "background": BG_BASE,
+                    "overflow": "hidden",
                 },
                 children=[
-                    # PORTFOLIO VALUE
-                    html.Div(
-                        id="sec-portfolio",
-                        style={"padding": "8px", "borderBottom": f"1px solid {BORDER_INNER}"},
-                    ),
-                    # EMOTION / STATUS
-                    html.Div(
-                        id="sec-emotion",
-                        style={"padding": "6px 8px", "borderBottom": f"1px solid {BORDER_INNER}"},
-                    ),
-                    # AGENT STATE section label + cards
-                    html.Div(
-                        style={"borderBottom": f"1px solid {BORDER_INNER}", "padding": "6px 8px"},
+                    dmc.ScrollArea(
+                        style={"flex": "1"},
                         children=[
+                            # PORTFOLIO VALUE
+                            html.Div(
+                                id="sec-portfolio",
+                                style={
+                                    "padding": "8px",
+                                    "borderBottom": f"1px solid {BORDER_INNER}",
+                                },
+                            ),
+                            # AGENT STATE / EMOTION
+                            html.Div(
+                                id="sec-emotion",
+                                style={
+                                    "padding": "6px 8px",
+                                    "borderBottom": f"1px solid {BORDER_INNER}",
+                                },
+                            ),
+                            # AGENTS section
                             html.Div(
                                 style={
-                                    "display": "flex",
-                                    "alignItems": "center",
-                                    "gap": "5px",
-                                    "marginBottom": "5px",
+                                    "borderBottom": f"1px solid {BORDER_INNER}",
+                                    "padding": "6px 8px",
                                 },
                                 children=[
-                                    html.Div(className="sec-pip", style={"background": BLUE}),
-                                    html.Span("AGENTS", className="sec-ttl"),
+                                    html.Div(
+                                        style={
+                                            "display": "flex",
+                                            "alignItems": "center",
+                                            "gap": "5px",
+                                            "marginBottom": "5px",
+                                        },
+                                        children=[
+                                            html.Div(
+                                                className="sec-pip",
+                                                style={"background": BLUE},
+                                            ),
+                                            html.Span("AGENTS", className="sec-ttl"),
+                                        ],
+                                    ),
+                                    html.Div(
+                                        id="sec-agent-cards",
+                                        children=[
+                                            _agent_card(
+                                                "card-tech-hdr",
+                                                "card-tech-body",
+                                                {"type": "reasoning-toggle", "index": "tech"},
+                                                {"type": "reasoning-collapse", "index": "tech"},
+                                                BLUE,
+                                            ),
+                                            _agent_card(
+                                                "card-analyst-hdr",
+                                                "card-analyst-body",
+                                                {"type": "reasoning-toggle", "index": "analyst"},
+                                                {"type": "reasoning-collapse", "index": "analyst"},
+                                                GREEN,
+                                            ),
+                                            _agent_card(
+                                                "card-risk-hdr",
+                                                "card-risk-body",
+                                                {"type": "reasoning-toggle", "index": "risk"},
+                                                {"type": "reasoning-collapse", "index": "risk"},
+                                                ORANGE,
+                                            ),
+                                            _agent_card(
+                                                "card-macro-hdr",
+                                                "card-macro-body",
+                                                {"type": "reasoning-toggle", "index": "macro"},
+                                                {"type": "reasoning-collapse", "index": "macro"},
+                                                PURPLE,
+                                            ),
+                                            html.Div(id="card-arb"),
+                                        ],
+                                    ),
                                 ],
                             ),
+                            # TRACK RECORDS
                             html.Div(
-                                id="sec-agent-cards",
-                                children=[
-                                    _agent_card(
-                                        "tech",
-                                        "card-tech-hdr",
-                                        "card-tech-body",
-                                        {"type": "reasoning-toggle", "index": "tech"},
-                                        {"type": "reasoning-collapse", "index": "tech"},
-                                        BLUE,
-                                        BLUE,
-                                    ),
-                                    _agent_card(
-                                        "analyst",
-                                        "card-analyst-hdr",
-                                        "card-analyst-body",
-                                        {"type": "reasoning-toggle", "index": "analyst"},
-                                        {"type": "reasoning-collapse", "index": "analyst"},
-                                        GREEN,
-                                        GREEN,
-                                    ),
-                                    _agent_card(
-                                        "risk",
-                                        "card-risk-hdr",
-                                        "card-risk-body",
-                                        {"type": "reasoning-toggle", "index": "risk"},
-                                        {"type": "reasoning-collapse", "index": "risk"},
-                                        ORANGE,
-                                        ORANGE,
-                                    ),
-                                    _agent_card(
-                                        "macro",
-                                        "card-macro-hdr",
-                                        "card-macro-body",
-                                        {"type": "reasoning-toggle", "index": "macro"},
-                                        {"type": "reasoning-collapse", "index": "macro"},
-                                        PURPLE,
-                                        PURPLE,
-                                    ),
-                                    # ARBITRATION
-                                    html.Div(id="card-arb"),
-                                ],
+                                id="live-track-records",
+                                style={
+                                    "padding": "6px 8px",
+                                    "borderBottom": f"1px solid {BORDER_INNER}",
+                                },
+                            ),
+                            # METRICS
+                            html.Div(
+                                id="sec-stats",
+                                style={
+                                    "padding": "6px 8px",
+                                    "borderBottom": f"1px solid {BORDER_INNER}",
+                                },
+                            ),
+                            # OPEN POSITIONS
+                            html.Div(
+                                id="sec-positions",
+                                style={"padding": "6px 8px"},
                             ),
                         ],
                     ),
-                    # TRADE RECORDS
-                    html.Div(
-                        id="live-track-records",
-                        style={"padding": "6px 8px", "borderBottom": f"1px solid {BORDER_INNER}"},
-                    ),
-                    # STATS (balance, drawdown, etc.)
-                    html.Div(
-                        id="sec-stats",
-                        style={"padding": "6px 8px", "borderBottom": f"1px solid {BORDER_INNER}"},
-                    ),
-                    # OPEN POSITIONS
-                    html.Div(
-                        id="sec-positions",
-                        style={"padding": "6px 8px", "flex": "1"},
-                    ),
                 ],
             ),
-            # ── MAIN (chart + log) ───────────────────────────────────────────
+            # ── MAIN AREA (chart + log) ───────────────────────────────────────
             html.Div(
                 style={
                     "flex": "1",
@@ -234,7 +220,7 @@ def _tab_live() -> html.Div:
                     "height": "100%",
                 },
                 children=[
-                    # Equity curve section
+                    # Equity curve
                     html.Div(
                         style={
                             "flexShrink": "0",
@@ -262,7 +248,8 @@ def _tab_live() -> html.Div:
                                         ],
                                     ),
                                     html.Div(
-                                        id="chart-vals", style={"display": "flex", "gap": "14px"}
+                                        id="chart-vals",
+                                        style={"display": "flex", "gap": "14px"},
                                     ),
                                 ],
                             ),
@@ -273,7 +260,7 @@ def _tab_live() -> html.Div:
                             ),
                         ],
                     ),
-                    # Activity log section
+                    # Activity log
                     html.Div(
                         style={
                             "flex": "1",
@@ -316,13 +303,9 @@ def _tab_live() -> html.Div:
                                     ),
                                 ],
                             ),
-                            html.Div(
+                            dmc.ScrollArea(
                                 id="activity-log",
-                                style={
-                                    "flex": "1",
-                                    "overflowY": "auto",
-                                    "padding": "2px 0",
-                                },
+                                style={"flex": "1"},
                             ),
                         ],
                     ),
