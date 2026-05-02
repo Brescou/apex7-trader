@@ -21,12 +21,6 @@ import agents.multi as multi_mod
 from agents.multi import WEIGHTS, _compute_dynamic_weights
 
 
-def _agent_memory_has_trace_id(db_path) -> bool:
-    with sqlite3.connect(db_path) as con:
-        cols = {row[1] for row in con.execute("PRAGMA table_info(agent_memory)").fetchall()}
-    return "trace_id" in cols
-
-
 @pytest.fixture
 def fresh_cache():
     """Reset the module-level cache before each test."""
@@ -39,9 +33,6 @@ def fresh_cache():
 
 def _seed_votes(db_path, agent: str, results: list[int]) -> None:
     """Insert ``len(results)`` evaluated votes for ``agent``."""
-    if not _agent_memory_has_trace_id(db_path):
-        with sqlite3.connect(db_path) as con:
-            con.execute("ALTER TABLE agent_memory ADD COLUMN trace_id TEXT")
     with sqlite3.connect(db_path) as con:
         for i, val in enumerate(results):
             con.execute(

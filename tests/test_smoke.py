@@ -193,6 +193,22 @@ def test_sqlite_schema():
         assert table in tables, f"Missing table '{table}'. Found: {tables}"
 
 
+def test_agent_memory_has_trace_id(tmp_db):
+    """Native schema must include ``trace_id`` so tests need no ALTER workaround.
+
+    Regression guard for Review v5 Finding 5.2 — the previous schema lacked
+    the column, which silently broke ``evaluate_pending_trades``.
+    """
+    import sqlite3
+
+    with sqlite3.connect(str(tmp_db)) as con:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(agent_memory)").fetchall()}
+    assert "trace_id" in cols, (
+        "agent_memory schema must include trace_id natively — "
+        "remove any ALTER TABLE workaround in test fixtures."
+    )
+
+
 def test_app_import():
     from dashboard import create_app
 

@@ -13,8 +13,6 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
-
 from agents.shared.nodes import evaluate_pending_trades
 
 
@@ -71,24 +69,8 @@ def _pending_row(db_path, trace_id: str) -> dict:
     return dict(rows[0]) if rows else {}
 
 
-def _agent_memory_has_trace_id(db_path) -> bool:
-    """The legacy schema may lack the ``trace_id`` column; tests need it."""
-    with sqlite3.connect(db_path) as con:
-        cols = {row[1] for row in con.execute("PRAGMA table_info(agent_memory)").fetchall()}
-    return "trace_id" in cols
-
-
-@pytest.fixture
-def db_with_trace_id(tmp_db):
-    """Add ``trace_id`` to ``agent_memory`` if absent (soft migration in tests)."""
-    if not _agent_memory_has_trace_id(tmp_db):
-        with sqlite3.connect(tmp_db) as con:
-            con.execute("ALTER TABLE agent_memory ADD COLUMN trace_id TEXT")
-    return tmp_db
-
-
-def test_buy_correct_when_price_rises(db_with_trace_id) -> None:
-    db = db_with_trace_id
+def test_buy_correct_when_price_rises(tmp_db) -> None:
+    db = tmp_db
     trace = "tracebuy1"
     _seed_pending(
         db,
@@ -108,8 +90,8 @@ def test_buy_correct_when_price_rises(db_with_trace_id) -> None:
     assert _pending_row(db, trace)["evaluated"] == 1
 
 
-def test_buy_wrong_when_price_drops(db_with_trace_id) -> None:
-    db = db_with_trace_id
+def test_buy_wrong_when_price_drops(tmp_db) -> None:
+    db = tmp_db
     trace = "tracebuy2"
     _seed_pending(
         db,
@@ -127,8 +109,8 @@ def test_buy_wrong_when_price_drops(db_with_trace_id) -> None:
     assert _agent_memory_row(db, trace)["was_correct"] == 0
 
 
-def test_sell_correct_when_price_drops(db_with_trace_id) -> None:
-    db = db_with_trace_id
+def test_sell_correct_when_price_drops(tmp_db) -> None:
+    db = tmp_db
     trace = "tracesell1"
     _seed_pending(
         db,
@@ -146,9 +128,9 @@ def test_sell_correct_when_price_drops(db_with_trace_id) -> None:
     assert _agent_memory_row(db, trace)["was_correct"] == 1
 
 
-def test_inconclusive_when_change_below_threshold(db_with_trace_id) -> None:
+def test_inconclusive_when_change_below_threshold(tmp_db) -> None:
     """Move smaller than 1% → was_correct stays NULL (inconclusive)."""
-    db = db_with_trace_id
+    db = tmp_db
     trace = "traceflat"
     _seed_pending(
         db,
@@ -169,9 +151,9 @@ def test_inconclusive_when_change_below_threshold(db_with_trace_id) -> None:
     assert _pending_row(db, trace)["evaluated"] == 1
 
 
-def test_skip_when_price_unavailable(db_with_trace_id) -> None:
+def test_skip_when_price_unavailable(tmp_db) -> None:
     """If fast_info returns None, leave the pending row for the next tick."""
-    db = db_with_trace_id
+    db = tmp_db
     trace = "traceskip"
     _seed_pending(
         db,
@@ -190,8 +172,8 @@ def test_skip_when_price_unavailable(db_with_trace_id) -> None:
     assert _pending_row(db, trace)["evaluated"] == 0
 
 
-def test_future_deadline_is_ignored(db_with_trace_id) -> None:
-    db = db_with_trace_id
+def test_future_deadline_is_ignored(tmp_db) -> None:
+    db = tmp_db
     trace = "tracefuture"
     _seed_pending(
         db,

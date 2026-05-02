@@ -23,14 +23,6 @@ from core.data import Portfolio
 # ── Fixtures helpers ────────────────────────────────────────────────────────
 
 
-def _ensure_trace_id_column(db_path) -> None:
-    """Soft-add the ``trace_id`` column on ``agent_memory`` if missing."""
-    with sqlite3.connect(db_path) as con:
-        cols = {row[1] for row in con.execute("PRAGMA table_info(agent_memory)").fetchall()}
-        if "trace_id" not in cols:
-            con.execute("ALTER TABLE agent_memory ADD COLUMN trace_id TEXT")
-
-
 def _seed_pending(
     db_path,
     *,
@@ -164,7 +156,6 @@ def test_trade_creates_pending_evaluation(tmp_db) -> None:
 
 def test_was_correct_not_set_immediately(tmp_db) -> None:
     """Inserting an agent_memory row with NULL ``was_correct`` must remain NULL."""
-    _ensure_trace_id_column(tmp_db)
     _seed_agent_memory(tmp_db, trace_id="t-fresh")
 
     assert _was_correct(tmp_db, "t-fresh") is None
@@ -174,7 +165,6 @@ def test_was_correct_not_set_immediately(tmp_db) -> None:
 
 
 def _setup_eval(db_path, trace: str, action: str, entry: float) -> None:
-    _ensure_trace_id_column(db_path)
     _seed_pending(
         db_path,
         trade_id=1,
@@ -230,7 +220,6 @@ def test_evaluate_inconclusive(tmp_db) -> None:
 
 
 def test_evaluate_skips_future_dates(tmp_db) -> None:
-    _ensure_trace_id_column(tmp_db)
     _seed_pending(
         tmp_db,
         trade_id=99,
