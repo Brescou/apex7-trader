@@ -50,11 +50,11 @@ def portfolio():
 def tmp_db(tmp_path, monkeypatch):
     """Route SQLite to a temp file (no writes to project ``trades*.db``)."""
     db = tmp_path / "test.db"
-    monkeypatch.setattr("agents.shared.nodes._get_db_path", lambda: str(db))
+    monkeypatch.setattr("agents.shared.db._get_db_path", lambda: db)
 
-    import agents.shared.nodes as _nodes
+    import agents.shared.db as db_mod
 
-    _nodes._db_initialized = False
-    _nodes._ensure_db()
+    db_mod._db_initialized = False
+    db_mod._ensure_db()
     yield db
-    _nodes._db_initialized = False
+    db_mod._db_initialized = False
