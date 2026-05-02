@@ -5,6 +5,8 @@ load_dotenv()
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN", "")
+# FRED (Federal Reserve Economic Data) — optional; improves reliability/limits.
+FRED_API_KEY = os.getenv("FRED_API_KEY", "").strip()
 
 WATCHLIST = [
     "AAPL",
