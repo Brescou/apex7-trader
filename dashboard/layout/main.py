@@ -57,6 +57,7 @@ def setup_layout() -> None:
             dcc.Store(id="screener-results-store", data=[]),
             dcc.Store(id="screener-active-store", data=False),
             dcc.Interval(id="check-alerts-interval", interval=10000, n_intervals=0),
+            dcc.Interval(id="sector-heatmap-interval", interval=300000, n_intervals=0),
             # ── TOP BAR (48px) ───────────────────────────────────────────────
             html.Div(
                 id="top-bar",

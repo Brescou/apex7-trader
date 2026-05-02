@@ -1,4 +1,4 @@
-"""APEX-7 — Terminal tab callbacks (17 callbacks)."""
+"""APEX-7 — Terminal tab callbacks (18 callbacks)."""
 
 import time
 
@@ -14,6 +14,7 @@ from market_data import (
     fetch_macro,
     fetch_news,
     fetch_ohlcv,
+    fetch_sector_performance,
     fetch_sparkline,
     fetch_watchlist_prices,
     run_screener,
@@ -211,6 +212,106 @@ def _calendar_badge(days: int) -> tuple[str, str | None]:
     if days <= 30:
         return ("THIS MONTH", YELLOW)
     return ("", None)
+
+
+_SECTOR_HEAT_PERIODS = ["1d", "5d", "1mo"]
+_SECTOR_HEAT_LABELS = {"1d": "1D", "5d": "1W", "1mo": "1MO"}
+
+
+def _sector_heatmap_cell_colors(pct: float | None) -> tuple[str, str]:
+    """Return (background, text) hex colors for a performance cell (Finviz-style)."""
+    if pct is None:
+        return (BG_DEEP, TEXT_DIM)
+    if pct > 2:
+        return ("#14532d", "#86efac")
+    if pct > 0:
+        return ("#16653459", "#bbf7d0")
+    if pct == 0:
+        return (BG_DEEP, TEXT_DIM)
+    if pct >= -2:
+        return ("#7f1d1d59", "#fecaca")
+    return ("#7f1d1d", "#fca5a5")
+
+
+@app.callback(
+    Output("sector-rotation-content", "children"),
+    Input("sector-heatmap-interval", "n_intervals"),
+    prevent_initial_call=False,
+)
+def _update_sector_rotation(_):
+    periods = _SECTOR_HEAT_PERIODS
+    try:
+        grid = fetch_sector_performance(periods)
+    except Exception:
+        grid = {}
+
+    if not grid:
+        return html.Div(
+            "Sector data unavailable.",
+            style={"fontSize": "11px", "color": TEXT_DIM, "padding": "6px 0"},
+        )
+
+    cell = {
+        "fontSize": "11px",
+        "fontFamily": FONT,
+        "textAlign": "center",
+        "padding": "8px 6px",
+        "border": f"1px solid {BORDER}",
+        "fontVariantNumeric": "tabular-nums",
+    }
+    head = {
+        **cell,
+        "fontSize": "9px",
+        "color": TEXT_DIM,
+        "letterSpacing": "0.12em",
+        "fontWeight": "700",
+        "background": BG_HOVER,
+    }
+    row_label = {
+        **cell,
+        "textAlign": "left",
+        "color": TEXT_DIM,
+        "fontSize": "10px",
+        "background": BG_HOVER,
+        "maxWidth": "102px",
+    }
+
+    header_cells = [
+        html.Th("", style={**head, "minWidth": "96px"}),
+        *[html.Th(_SECTOR_HEAT_LABELS[p], style=head) for p in periods],
+    ]
+    body_rows = []
+    for sector, cols in grid.items():
+        row_tds = [
+            html.Td(sector, style=row_label),
+        ]
+        for p in periods:
+            raw = cols.get(p)
+            pct = float(raw) if raw is not None else None
+            bg, fg = _sector_heatmap_cell_colors(pct)
+            disp = "—" if pct is None else f"{pct:+.2f}%"
+            row_tds.append(
+                html.Td(
+                    disp,
+                    style={
+                        **cell,
+                        "background": bg,
+                        "color": fg,
+                        "fontWeight": "600",
+                    },
+                )
+            )
+        body_rows.append(html.Tr(row_tds))
+
+    table = html.Table(
+        [html.Thead(html.Tr(header_cells)), html.Tbody(body_rows)],
+        style={
+            "width": "100%",
+            "borderCollapse": "collapse",
+            "tableLayout": "fixed",
+        },
+    )
+    return table
 
 
 @app.callback(

@@ -500,6 +500,25 @@ def _tab_terminal() -> html.Div:
                                     "marginBottom": "12px",
                                 },
                             ),
+                            html.Div(
+                                [
+                                    _section_label("SECTOR ROTATION"),
+                                    html.Div(
+                                        id="sector-rotation-content",
+                                        style={
+                                            "overflowX": "auto",
+                                            "marginTop": "4px",
+                                        },
+                                    ),
+                                ],
+                                style={
+                                    "background": BG_CARD,
+                                    "border": f"1px solid {BORDER}",
+                                    "borderRadius": "4px",
+                                    "padding": "12px 14px",
+                                    "marginBottom": "12px",
+                                },
+                            ),
                             # News feed
                             html.Div(
                                 [
