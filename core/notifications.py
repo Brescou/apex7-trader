@@ -18,10 +18,10 @@ _COLOR_GOLD = 0xF0B232
 
 
 def _webhook_url() -> str:
-    """Return trimmed ``DISCORD_WEBHOOK_URL`` or empty when unset."""
-    import os
+    """Return trimmed webhook URL from config (empty when unset)."""
+    from config import DISCORD_WEBHOOK_URL
 
-    return (os.getenv("DISCORD_WEBHOOK_URL") or "").strip()
+    return DISCORD_WEBHOOK_URL or ""
 
 
 def discord_notifications_enabled() -> bool:

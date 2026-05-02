@@ -54,6 +54,7 @@ apex7-trader/
 ├── core/
 │   ├── __init__.py
 │   ├── data.py            ← Portfolio, LiveFeed
+│   ├── notifications.py   ← optional Discord webhook alerts
 │   ├── backtest.py        ← run_backtest, compare_strategies (yfinance history)
 │   ├── indicators.py      ← Shared RSI implementation
 │   └── registry.py        ← single graph builder + UI metadata
@@ -130,6 +131,7 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `agents/shared/nodes.py` | Shared nodes: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`; also `_llm()` helper, `_db_write()`, simulation engine |
 | `agents/shared/schemas.py` | Pydantic validation models for LLM decision outputs |
 | `core/data.py` | `Portfolio` — thread-safe state; `LiveFeed` — multi-symbol yfinance wrapper |
+| `core/notifications.py` | Optional Discord webhook alerts (`httpx.post`, 5s timeout, fail-silent) |
 | `core/backtest.py` | Functional API (`fetch_historical`, `compute_indicators`, `run_backtest`, `compare_strategies`) |
 | `core/indicators.py` | Shared `rsi()` implementation used across agents, backtest, and market_data |
 | `core/registry.py` | Single `get_graph(p)` + `get_graph_info()` UI metadata |
@@ -267,6 +269,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 | `USE_LIVEFEED` | `true` | Delegate Portfolio.fetch_prices() to LiveFeed; set `false` in tests |
 | `PORTFOLIO_STATE_PATH` | `portfolio_state.json` | Path for JSON portfolio persistence |
 | `PORTFOLIO_SAVE_ENABLED` | `true` | Enable/disable Portfolio save_state(); set `false` in unit tests |
+| `DISCORD_WEBHOOK_URL` | — | Optional Discord webhook for `core.notifications` (trades, death, stagnation, rate-limit, startup) |
 | `MACRO_SYMBOLS` | `{"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}` | Symbols for the TERMINAL macro header bar |
 | `MARKET_DATA_CACHE_SEC` | `60` | TTL for macro data cache in `market_data.py` |
 | `WATCHLIST_CACHE_SEC` | `10` | TTL for watchlist prices cache in `market_data.py` |
@@ -276,6 +279,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 
 ## Known pitfalls
 
+- **Discord webhook alerts** — `core.notifications` uses fire-and-forget `httpx.post` (5s timeout). Fail-silent on errors; never blocks the agent loop. Wire points use lazy imports (`core.data` ↔ `agents.shared.nodes`). Leave `DISCORD_WEBHOOK_URL` unset to disable.
 - **CI jobs** — `.github/workflows/ci.yml`: job `lint` runs `uv run black --check .` only; job `test` runs ruff + pytest + coverage. Failing `lint` on push: reproduce with `uv run black --check --diff .`.
 - **`README.md`** — root `README.md` is a symlink to `docs/README.md`; commit `docs/README.md` when updating user-facing README.
 - **`_init_db()` test DB path** — if `_get_db_path()` is not the repo `trades.db` / `trades_sim.db` (e.g. `tmp_db` monkeypatch), `_init_db()` initializes only that file — avoids writing project DBs during tests.

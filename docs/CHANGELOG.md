@@ -76,6 +76,9 @@
 - ANALYTICS: **Trade postmortem** block under KPI/charts/table (`_load_postmortem`, columns date / symbol / entry / exit / P&L / lesson).
 - LIVE: each specialist card shows accuracy + calibration via `_live_agent_eval_banner` + `_agent_eval_metrics` in `dashboard/layout/helpers.py`.
 
+#### Added (Discord)
+- `DISCORD_WEBHOOK_URL` in `config.py` / `.env.example`; `core/notifications.py` embed alerts (trades, death transition, 10th consecutive HOLD stagnation, Anthropic rate-limit, startup). Lazy imports at wire sites; `httpx` POST timeout 5s; errors swallowed. Tests: `tests/test_notifications.py`.
+
 ## [2026-04-12] — Remediation Sprint (Full)
 
 ## [2026-04-12] — Remediation Sprint (Full)

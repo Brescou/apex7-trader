@@ -42,3 +42,6 @@ NEWS_MAX_ITEMS = 8
 USE_LIVEFEED = os.getenv("USE_LIVEFEED", "true").lower() == "true"
 PORTFOLIO_STATE_PATH = os.getenv("PORTFOLIO_STATE_PATH", "portfolio_state.json")
 PORTFOLIO_SAVE_ENABLED = os.getenv("PORTFOLIO_SAVE_ENABLED", "true").lower() == "true"
+
+# Discord webhook (optional — ``core.notifications``)
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
