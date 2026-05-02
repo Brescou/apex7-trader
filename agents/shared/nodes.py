@@ -1116,9 +1116,12 @@ def make_execute_node(portfolio: Portfolio):
             price = prices.get(symbol, 0) * slip
             result = portfolio.sell(symbol, sell_pct, price)
             if result["success"]:
+                # Surface partial-exit percentage in the activity log
+                # (Review v5 Finding 6.3). Full exits keep the compact form.
+                sym_label = f"{sell_pct:.0f}% {symbol}" if sell_pct < 100 else symbol
                 logs.append(
                     _entry(
-                        f"SELL {symbol} {sell_pct:.0f}% @ ${price:.2f} "
+                        f"SELL {sym_label} @ ${price:.2f} "
                         f"= ${result['amount']:.2f}  slip={slip-1:+.3%}"
                     )
                 )

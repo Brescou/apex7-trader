@@ -421,7 +421,14 @@ def _sim_chip() -> html.Span:
 
 
 def _card_hdr_standard(
-    icon: str, label: str, color: str, action: str, symbol: str, conf: float, is_sim: bool
+    icon: str,
+    label: str,
+    color: str,
+    action: str,
+    symbol: str,
+    conf: float,
+    is_sim: bool,
+    sell_pct: float | None = None,
 ) -> list:
     children = [
         html.Span(
@@ -446,17 +453,44 @@ def _card_hdr_standard(
                 "whiteSpace": "nowrap",
             },
         ),
-        _conf_bar_inline(conf, color),
-        html.Span(
-            f"{conf:.0%}",
-            style={
-                "fontSize": "9px",
-                "color": color,
-                "marginLeft": "5px",
-                "flexShrink": "0",
-            },
-        ),
     ]
+    # Surface partial-exit recommendation for SELL votes (Review v5 Finding 6.3).
+    if action.upper() == "SELL" and sell_pct is not None:
+        try:
+            sp = float(sell_pct)
+        except (TypeError, ValueError):
+            sp = 100.0
+        if 0 < sp < 100:
+            children.append(
+                html.Span(
+                    f"{sp:.0f}%",
+                    title=f"Recommended exit: {sp:.0f}%",
+                    style={
+                        "fontSize": "8px",
+                        "fontWeight": "700",
+                        "color": RED,
+                        "background": f"{RED}22",
+                        "padding": "1px 4px",
+                        "borderRadius": "2px",
+                        "marginRight": "5px",
+                        "flexShrink": "0",
+                    },
+                )
+            )
+    children.extend(
+        [
+            _conf_bar_inline(conf, color),
+            html.Span(
+                f"{conf:.0%}",
+                style={
+                    "fontSize": "9px",
+                    "color": color,
+                    "marginLeft": "5px",
+                    "flexShrink": "0",
+                },
+            ),
+        ]
+    )
     if is_sim:
         children.append(_sim_chip())
     return children
@@ -798,10 +832,14 @@ def _arb_card_children(arb: dict) -> list:
     action = arb.get("action", "HOLD")
     symbol = arb.get("symbol", "")
     alloc_pct = float(arb.get("allocation_pct", 0))
+    sell_pct = float(arb.get("sell_pct", 100))
     reasoning = arb.get("reasoning", "")
     dissenting = arb.get("dissenting_agents", []) or []
     thoughts = arb.get("thoughts", "")
     action_c = {"BUY": BLUE, "SELL": RED, "HOLD": GRAY}.get(action, GRAY)
+    # SELL → exit %, else allocation % (BUY/HOLD).
+    pct_label = "EXIT" if action == "SELL" else "ALLOC"
+    pct_value = sell_pct if action == "SELL" else alloc_pct
 
     cons_style = {
         "fontSize": "9px",
@@ -847,7 +885,23 @@ def _arb_card_children(arb: dict) -> list:
                         "marginRight": "8px",
                     },
                 ),
-                html.Span(f"{alloc_pct:.0f}%", style={"fontSize": "10px", "color": TEXT_DIM}),
+                html.Span(
+                    pct_label,
+                    style={
+                        "fontSize": "8px",
+                        "color": TEXT_DIM,
+                        "letterSpacing": "0.1em",
+                        "marginRight": "3px",
+                    },
+                ),
+                html.Span(
+                    f"{pct_value:.0f}%",
+                    style={
+                        "fontSize": "10px",
+                        "color": action_c if action == "SELL" else TEXT_DIM,
+                        "fontWeight": "700" if action == "SELL" else "400",
+                    },
+                ),
             ],
             style={"display": "flex", "alignItems": "baseline", "marginBottom": "7px"},
         ),

@@ -615,6 +615,7 @@ def _refresh(_, store, active_tab):
             tv.get("symbol", ""),
             float(tv.get("confidence", 0.5)),
             is_sim,
+            sell_pct=tv.get("sell_pct"),
         )
         hdr_anlst = _card_hdr_standard(
             "📊",
@@ -624,6 +625,7 @@ def _refresh(_, store, active_tab):
             av.get("symbol", ""),
             float(av.get("confidence", 0.5)),
             is_sim,
+            sell_pct=av.get("sell_pct"),
         )
         sizing = rv.get("sizing_recommendation", "?")
         risk_s = rv.get("risk_score", "?")
