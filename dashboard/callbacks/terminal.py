@@ -676,13 +676,15 @@ def _remove_symbol(n_clicks_list):
     Output("compare-symbols", "options"),
     Output("compare-symbols", "value"),
     Input("terminal-watchlist", "data"),
+    Input("watchlist-interval", "n_intervals"),
     State("compare-symbols", "value"),
     prevent_initial_call=False,
 )
-def _sync_compare_checklist(watchlist, cur_vals):
-    wl = watchlist or []
-    opts = [{"label": f" {s}", "value": s} for s in wl]
-    allowed = set(wl)
+def _sync_compare_checklist(_watchlist, _n_interval, cur_vals):
+    """Options follow SQLite watchlist (``get_watchlist``), not layout-time snapshot."""
+    syms = get_watchlist()
+    opts = [{"label": s, "value": s} for s in syms]
+    allowed = set(syms)
     val = [v for v in (cur_vals or []) if v in allowed]
     return opts, val
 
