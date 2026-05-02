@@ -16,7 +16,11 @@ apex7-trader/
 │   └── shared/
 │       ├── __init__.py
 │       ├── state.py       ← AgentState, MultiAgentState TypedDicts
-│       ├── nodes.py       ← shared nodes, _db_write, _llm, sim engine
+│       ├── nodes.py       ← LangGraph nodes + sim engine (re-exports)
+│       ├── db.py          ← SQLite, _db_write / _db_read
+│       ├── modes.py       ← live / paper / sim
+│       ├── llm.py         ← Anthropic clients, _llm, circuit breaker
+│       ├── eval.py        ← evaluate_pending_trades
 │       ├── prompts.py     ← versioned system prompts (PROMPT_VERSION)
 │       └── schemas.py     ← Pydantic validation for LLM outputs
 ├── core/
@@ -173,9 +177,9 @@ tautological — it just measured consensus). The new pipeline:
 1. `save_memory_node` inserts a `pending_evaluations` row alongside the trade
    (`evaluated=0`, `eval_after_date = entry_date + EVAL_HORIZON_CALENDAR_DAYS`,
    default 7 calendar days ≈ 5 trading days).
-2. The postmortem thread calls `evaluate_pending_trades(now)` every 60 s
+2. The postmortem thread calls `evaluate_pending_trades(now)` (from `agents/shared/eval.py`) every 60 s
    (skipped in SIM, runs in LIVE and PAPER).
-3. For each due row, `_fast_last_price(symbol)` queries `yfinance.Ticker.fast_info`.
+3. For each due row, `_fast_last_price(symbol)` in `eval.py` queries `yfinance.Ticker.fast_info`.
    The verdict for every `agent_memory` row sharing that `trace_id`:
    - **BUY**: `was_correct=1` if price moved up by more than `EVAL_SIGNIFICANCE_PCT`
      (1 %), `0` if it moved down by more than 1 %, `NULL` otherwise (inconclusive).
@@ -230,7 +234,7 @@ three modes; the routing happens inside each node):
 | `save_memory` | `execute` | END |
 | `skip` | `risk_check` | END |
 
-Shared nodes are defined in `agents/shared/nodes.py` and reused by `agents/multi.py`: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`.
+Shared nodes are implemented in `agents/shared/nodes.py` (with SQLite in `agents/shared/db.py`, `_llm` in `agents/shared/llm.py`, deferred evaluation in `agents/shared/eval.py`) and reused by `agents/multi.py`: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`.
 
 `core/registry.py` exposes a single `get_graph(portfolio)` returning the compiled multi-agent graph and `get_graph_info()` returning UI metadata.
 
@@ -448,7 +452,7 @@ Wired into `Portfolio.fetch_prices()` when `USE_LIVEFEED=True`. If `LiveFeed.fet
 - Agent loop thread (`apex7-agent`, daemon): mutates Portfolio via `buy()`, `sell()`, `record_value()` — launched by `start_controller()` in `dashboard/controller.py`
 - Postmortem thread (`apex7-postmortem`, daemon): runs every 60 s; calls `evaluate_pending_trades(now)` to resolve due `was_correct` rows in LIVE/PAPER (skipped in SIM), and `run_daily_postmortem()` once per day at `POSTMORTEM_HOUR`. Reads `portfolio.trade_history`, writes to SQLite — no Portfolio mutations.
 - All Portfolio mutations use `with self._lock` (RLock)
-- SQLite writes go through `_db_write()` in `agents/shared/nodes.py` — handles WAL mode, retries (3 attempts with backoff), and structured logging
+- SQLite writes go through `_db_write()` in `agents/shared/db.py` (re-exported from `agents.shared.nodes`) — handles WAL mode, retries (3 attempts with backoff), and structured logging
 - Sim and live use separate databases (`trades_sim.db` / `trades.db`) via `_get_db_path()`
 - `_ctrl` and `_state` in `dashboard/controller.py` share one **`threading.RLock()`** (`_controller_lock`) — all mutations and reads use `with _controller_lock`.
 - Reset: agent thread is stopped (`portfolio.is_dead = True`), new Portfolio + thread created

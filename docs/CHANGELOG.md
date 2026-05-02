@@ -2,6 +2,10 @@
 
 ## [Unreleased] — Feature Sprint v1
 
+### Sprint Features v2 — summary (2026-05)
+
+Dashboard réduit à **4 onglets** (LIVE, ANALYTICS, BACKTEST, TERMINAL) sans HEATMAP / LEADERBOARD / AGENTS ; postmortems sous ANALYTICS ; badges d’accuracy agents sur LIVE. **Discord** (`DISCORD_WEBHOOK_URL`) : alertes trades, mort, stagnation, rate-limit, démarrage. **Stop-loss trailing** depuis `high_watermarks` + alerte Discord dédiée. **Refactor agents** : `db.py`, `modes.py`, `llm.py`, `eval.py` avec réexports dans `nodes.py`. Voir section *Dashboard consolidation* ci-dessous pour le détail fichier par fichier.
+
 ### Feature 1 — Decommission of the simple graph
 
 #### Removed
@@ -33,7 +37,7 @@
 
 #### Added
 - `pending_evaluations` SQLite table with `idx_pending_eval_due` index; populated by `save_memory_node` for every BUY/SELL trade.
-- `evaluate_pending_trades(now)` in `agents/shared/nodes.py`: pulls due rows, fetches the spot price via `_fast_last_price` (yfinance `fast_info`), updates `agent_memory.was_correct` for matching `trace_id`. 1 % significance threshold (`EVAL_SIGNIFICANCE_PCT`).
+- `evaluate_pending_trades(now)` in `agents/shared/eval.py` (re-exported from `nodes`): pulls due rows, fetches the spot price via `_fast_last_price` (yfinance `fast_info`), updates `agent_memory.was_correct` for matching `trace_id`. 1 % significance threshold (`EVAL_SIGNIFICANCE_PCT`).
 - `_db_write_returning_id()` helper to capture `cursor.lastrowid` after INSERT.
 - `EVAL_HORIZON_DAYS` (5) / `EVAL_HORIZON_CALENDAR_DAYS` (7) in `config.py`.
 - `dashboard/controller.py` postmortem thread now calls `evaluate_pending_trades(now)` every 60 s (skipped in SIM).
@@ -62,7 +66,7 @@
 - `trades_paper.db` added to `.gitignore` and `.dockerignore`.
 
 ### CI / coverage
-- Test count: **131 passing** (was 80 at sprint start).
+- Test count: **139 passing** (was 80 at sprint start).
 
 ### Dashboard consolidation — Sprint Features v2
 
@@ -75,11 +79,14 @@
 - **Four tabs**: LIVE, ANALYTICS, BACKTEST, TERMINAL — static divs `tab-live`, `tab-analytics`, `tab-backtest`, `tab-terminal`; `_show_tab` routing in `dashboard/callbacks/live.py`.
 - ANALYTICS: **Trade postmortem** block under KPI/charts/table (`_load_postmortem`, columns date / symbol / entry / exit / P&L / lesson).
 - LIVE: each specialist card shows accuracy + calibration via `_live_agent_eval_banner` + `_agent_eval_metrics` in `dashboard/layout/helpers.py`.
+- Trailing stop-loss from `Portfolio.high_watermarks` in `execute_node`; dashboard position cards show high / trail vs high; `alert_trailing_stop` in `core/notifications.py`; tests `test_trailing_stop.py`, `test_stoploss.py` updated.
+- `tests/conftest.py` `tmp_db` patches `agents.shared.db._get_db_path`; `nodes._get_db_path()` delegates to `db`. `pyproject.toml`: Ruff `per-file-ignores` F401 on `agents/shared/nodes.py`. Circuit breaker tests target `agents.shared.llm`; evaluate tests patch `agents.shared.eval._fast_last_price`.
 
 #### Added (Discord)
 - `DISCORD_WEBHOOK_URL` in `config.py` / `.env.example`; `core/notifications.py` embed alerts (trades, death transition, 10th consecutive HOLD stagnation, Anthropic rate-limit, startup). Lazy imports at wire sites; `httpx` POST timeout 5s; errors swallowed. Tests: `tests/test_notifications.py`.
 
-## [2026-04-12] — Remediation Sprint (Full)
+#### Added (agents/shared split)
+- `agents/shared/db.py` — schema, `_ensure_db`, `_db_read` / `_db_write` / `_db_write_multi`; `agents/shared/modes.py` — runtime mode flags; `agents/shared/llm.py` — `_llm`, token budget, circuit breaker; `agents/shared/eval.py` — `evaluate_pending_trades`, `_fast_last_price`. `nodes.py` keeps LangGraph nodes and re-exports compatibility symbols.
 
 ## [2026-04-12] — Remediation Sprint (Full)
 

@@ -48,7 +48,11 @@ apex7-trader/
 │   └── shared/
 │       ├── __init__.py
 │       ├── state.py       ← AgentState, MultiAgentState TypedDicts
-│       ├── nodes.py       ← shared nodes (load_memory, execute, etc.)
+│       ├── nodes.py       ← graph nodes, fetch_data, execute, sim engine (re-exports)
+│       ├── db.py          ← SQLite schema, _db_read/_db_write, _get_db_path
+│       ├── modes.py       ← live/paper/sim toggles, _no_llm_mode
+│       ├── llm.py         ← Anthropic clients, _llm, token budget, circuit breaker
+│       ├── eval.py        ← evaluate_pending_trades, _fast_last_price
 │       ├── prompts.py     ← system prompts versionnés (PROMPT_VERSION)
 │       └── schemas.py     ← Pydantic validation for LLM outputs
 ├── core/
@@ -128,7 +132,11 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `dashboard/callbacks/` | All `@app.callback` handlers (`live`, `analytics`, `backtest_tab`, `terminal`) |
 | `agents/multi.py` | Unique LangGraph: 4 specialized agents + arbitration + `run_daily_postmortem()` |
 | `agents/shared/state.py` | `AgentState`, `MultiAgentState` TypedDicts |
-| `agents/shared/nodes.py` | Shared nodes: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`; also `_llm()` helper, `_db_write()`, simulation engine |
+| `agents/shared/nodes.py` | LangGraph nodes: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`; simulation price engine; re-exports from `db` / `llm` / `eval` / `modes` |
+| `agents/shared/db.py` | SQLite schema, `_get_db_path`, `_ensure_db`, `_db_write` / `_db_read` |
+| `agents/shared/modes.py` | `_sim_mode` / `_paper_mode`, setters, `_no_llm_mode`, `get_runtime_mode` |
+| `agents/shared/llm.py` | Sonnet/Haiku clients, `_llm()`, token budget, circuit breaker, degradation flags |
+| `agents/shared/eval.py` | `evaluate_pending_trades`, `_fast_last_price`, `EVAL_SIGNIFICANCE_PCT` |
 | `agents/shared/schemas.py` | Pydantic validation models for LLM decision outputs |
 | `core/data.py` | `Portfolio` — thread-safe state; `LiveFeed` — multi-symbol yfinance wrapper |
 | `core/notifications.py` | Optional Discord webhook alerts (`httpx.post`, 5s timeout, fail-silent) |
@@ -161,14 +169,14 @@ Shared nodes (defined in `agents/shared/nodes.py`, used by `agents/multi.py`): `
 - `claude-sonnet-4-5` — `analyst_node`, `arbitrate_node` (complex reasoning + web search)
 - `claude-haiku-4-5-20251001` — `load_memory_node` (pattern extraction), `save_memory_node` (lesson generation), `technician_node`, `risk_manager_node`, `macro_watcher_node`, `supervisor_node`
 
-The `_llm()` helper in `agents/shared/nodes.py` handles the agentic web-search tool loop (up to 8 iterations) using Claude's `web_search_20250305` tool directly via the Anthropic SDK. It includes a daily token budget cap and circuit breaker (3 consecutive failures → 5-minute pause). On `anthropic.RateLimitError`, the breaker opens immediately so later `_llm()` calls respect `Retry-After` / pause.
+The `_llm()` helper in `agents/shared/llm.py` handles the agentic web-search tool loop (up to 8 iterations) using Claude's `web_search_20250305` tool directly via the Anthropic SDK. It includes a daily token budget cap and circuit breaker (3 consecutive failures → 5-minute pause). On `anthropic.RateLimitError`, the breaker opens immediately so later `_llm()` calls respect `Retry-After` / pause.
 
 ### Runtime modes (LIVE / PAPER / SIM)
 
 The agent can run in one of three mutually-exclusive modes, switched live
 from the topbar radio (`mode-radio`) or by env var on startup. Backend
 helpers `set_simulation_mode()` / `set_paper_mode()` / `get_runtime_mode()`
-in `agents/shared/nodes.py` enforce mutual exclusion.
+in `agents/shared/modes.py` (re-exported from `agents/shared/nodes.py`) enforce mutual exclusion.
 
 | Mode | Prices | Decisions | DB | Cycle | LLM cost |
 |------|--------|-----------|----|-------|----------|
@@ -230,7 +238,7 @@ g.add_edge("my_node", "risk_check")
 |-------|-------------|
 | `trades` | One row per executed BUY/SELL trade (HOLD not persisted); includes `trace_id`, `prompt_version`, `sell_pct`, `source` |
 | `patterns` | Lessons extracted by Haiku after each trade (template in sim/paper) |
-| `agent_memory` | One row per agent vote per cycle; `was_correct` is **NULL until evaluated** by `evaluate_pending_trades` (NOT by arbitration) |
+| `agent_memory` | One row per agent vote per cycle; `was_correct` is **NULL until evaluated** by `evaluate_pending_trades` in `agents/shared/eval.py` (NOT by arbitration) |
 | `postmortem` | One row per closed trade (SELL); written by `run_daily_postmortem()` |
 | `pending_evaluations` | One row per executed trade scheduled for outcome evaluation (`eval_after_date = entry_date + EVAL_HORIZON_CALENDAR_DAYS`, default 7 calendar days) |
 
@@ -246,7 +254,7 @@ The `source` column on `trades`, `agent_memory`, and `postmortem` is one of `'li
    - Otherwise `was_correct` stays `NULL` (inconclusive) but the pending row is marked `evaluated=1` to avoid retry loops.
 3. `_compute_dynamic_weights` only blends accuracy when an agent has ≥ 5 evaluated votes (`_MIN_EVALUATED_VOTES`). Until then it returns the static `WEIGHTS` dict — the dashboard surfaces this as `⏳ Calibrating` / `✓ Market-validated` badges.
 
-All SQLite writes go through `_db_write()` / `_db_write_multi()` in `agents/shared/nodes.py` (retries, `with closing(...)`, logging on failure). All reads go through `_db_read()` in the same module: it uses `_get_db_path()` for sim vs live, triggers `_ensure_db()`, sets `PRAGMA busy_timeout=5000` per connection, and retries on lock contention — used by agent nodes, `dashboard/layout/helpers.py` (`_load_trades_db`, `_load_agent_memory`, `_load_postmortem`), and the live tab track-records block in `dashboard/callbacks/live.py`.
+All SQLite writes go through `_db_write()` / `_db_write_multi()` in `agents/shared/db.py` (retries, `with closing(...)`, logging on failure). All reads go through `_db_read()` in the same module: it uses `_get_db_path()` for sim vs live, triggers `_ensure_db()`, sets `PRAGMA busy_timeout=5000` per connection, and retries on lock contention — used via `agents.shared.nodes` re-exports by agent nodes, `dashboard/layout/helpers.py` (`_load_trades_db`, `_load_agent_memory`, `_load_postmortem`), and the live tab track-records block in `dashboard/callbacks/live.py`.
 
 ### LiveFeed
 
@@ -282,14 +290,14 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **Discord webhook alerts** — `core.notifications` uses fire-and-forget `httpx.post` (5s timeout). Fail-silent on errors; never blocks the agent loop. Wire points use lazy imports (`core.data` ↔ `agents.shared.nodes`). Leave `DISCORD_WEBHOOK_URL` unset to disable.
 - **CI jobs** — `.github/workflows/ci.yml`: job `lint` runs `uv run black --check .` only; job `test` runs ruff + pytest + coverage. Failing `lint` on push: reproduce with `uv run black --check --diff .`.
 - **`README.md`** — root `README.md` is a symlink to `docs/README.md`; commit `docs/README.md` when updating user-facing README.
-- **`_init_db()` test DB path** — if `_get_db_path()` is not the repo `trades.db` / `trades_sim.db` (e.g. `tmp_db` monkeypatch), `_init_db()` initializes only that file — avoids writing project DBs during tests.
+- **`_init_db()` test DB path** — if `_get_db_path()` is not the repo `trades.db` / `trades_sim.db` (e.g. `tmp_db` monkeypatch on `agents.shared.db._get_db_path`), `_init_db()` initializes only that file — avoids writing project DBs during tests.
 - **GitHub MCP** — typically no Actions run logs; debug CI with the same `uv run` commands locally.
 - **yfinance MultiIndex** — depuis yfinance 0.2.38+, `yf.download()` peut retourner un DataFrame en colonnes MultiIndex. Toujours passer `auto_adjust=True` ou aplatir avec `df.columns = df.columns.get_level_values(0)` avant d’accéder à `df["Close"]` (voir `_seed_live_price_history`).
 - **`_seed_live_price_history` bloque `fetch_data_node`** — au premier cycle live, le téléchargement ~1 mois par symbole prend ~2–5 s chacun. Le seed est protégé par `_live_price_history_lock` pour éviter un double seed en fan-out (multi-agent).
 - **No `assets/` directory** — all CSS is inlined in `dashboard/server.py`'s `index_string`. Do not create an `assets/` folder expecting Dash to pick it up automatically.
 - **`HOLD` trades not saved** — `save_memory_node` returns early on HOLD. Patterns table only contains BUY/SELL lessons.
 - **`avg_price` vs `avg_cost`** — both keys appear in `_portfolio_value()` due to backward compat (`pos.get("avg_price", pos.get("avg_cost", 0))`). New positions always use `avg_price`.
-- **`trades.db` soft migration** — on startup, `agents/shared/nodes.py` tries `ALTER TABLE trades ADD COLUMN source …` and `ADD COLUMN trace_id …`, and silently catches `OperationalError` if columns exist. Do not remove these blocks.
+- **`trades.db` soft migration** — on startup, `agents/shared/db.py` tries `ALTER TABLE trades ADD COLUMN source …` and `ADD COLUMN trace_id …`, and silently catches `OperationalError` if columns exist. Do not remove these blocks.
 - **`research` goes directly to `risk_check`** — `research_node` does not loop back to `arbitrate`. This is intentional.
 - **`LiveFeed` not wired into graph nodes** — `LiveFeed` is wired into `Portfolio.fetch_prices()` only; it is not a LangGraph node.
 - **`core/registry.py` description** — update `GRAPH_INFO["description"]` if a 5th specialist is added to `agents/multi.py`.
@@ -304,7 +312,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`agents/` → `dashboard/` import direction is forbidden** — `agents/shared/nodes.py` imports from `core.data`. Never import from `dashboard` in any `agents/` file. This violates the one-way dependency rule (dashboard depends on agents/core, not the reverse).
 - **Lazy DB init** — `_init_db()` is no longer called at import time. It runs lazily on first `_db_write`/`_db_read`/`_db_write_multi` call via `_ensure_db()`. Importing `agents/shared/nodes.py` no longer creates SQLite tables. Importing `dashboard/controller.py` does not create a `Portfolio` until `start_controller()` is called explicitly. Importing `agents/multi.py` compiles the LangGraph graph at module level (for LangGraph Studio compatibility).
 - **RSI computed in `core/indicators.py`** — a single canonical `rsi()` function. Do not re-implement RSI elsewhere.
-- **`_db_write()` / `_db_read()` centralize all SQLite access** — never open raw `sqlite3.connect()` anywhere — not in agent nodes, not in `dashboard/layout/helpers.py`, not in `dashboard/callbacks/`. Always use `_db_write()` or `_db_read()` from `agents.shared.nodes` (dashboard loaders and track records use `_db_read()` so analytics match sim/live mode).
+- **`_db_write()` / `_db_read()` centralize all SQLite access** — never open raw `sqlite3.connect()` anywhere — not in agent nodes, not in `dashboard/layout/helpers.py`, not in `dashboard/callbacks/`. Always use `_db_write()` or `_db_read()` from `agents.shared.nodes` (implementations in `agents.shared.db`; dashboard loaders use `_db_read()` so analytics match sim/live mode).
 - **\_live\_price\_history warm-up** — en live mode, le RSI retourne 50.0 (`insufficient data`) pendant les 14 premiers cycles (~7 min) si la série n’est pas encore prête. Le technician est aveugle pendant cette période (mitigation : seed daily + append par jour, sprint v3).
 - **Live mode `technician_node` RSI** — Live closes are appended in `fetch_data_node` (live path) to `_live_price_history` in `agents/shared/nodes.py` (last 100 per symbol). The multi-agent `technician_node` uses that series for RSI; simulation still uses `_sim_price_history` from `_sim_step_prices()`.
 - **`_route_risk` fail-closed** — `_route_risk` defaults `_risk_passed` to `False` (fail-closed). If `risk_check_node` fails to write `_risk_passed`, the graph skips execution instead of proceeding.
@@ -312,7 +320,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **Zero-price stop-loss** — `execute_node` runs SL only when `sl_avg > 0`, `sl_price > 0`, and the quote is plausible: `sl_price > 1.0`, or both cost basis and quote are ≤ $1 (penny stocks). Otherwise it skips SL and logs a warning (`Skipping stop-loss check…`) — avoids bogus ticks (e.g. yfinance 0 / stale sub-dollar quote vs a normal-cost basis) without spamming every cycle on legitimate sub-dollar names.
 - **Backtest vs live RSI** — `core/backtest.py` `compute_indicators()` uses `core.indicators.rsi()` for `RSI_14` (same function as agents). Do not reintroduce pandas EWM for RSI.
 - **`test_sqlite_schema` fails on a clean clone** — `tests/test_smoke.py` asserts `trades.db` exists, but `_ensure_db()` is lazy and only runs on first write. The test must call `_ensure_db()` before asserting the schema.
-- **Token budget resets daily** — `_maybe_reset_token_counter()` is called at the start of each `_llm()` invocation and resets `_token_counter` at midnight. **`_maybe_reset_token_counter()` acquiert `_token_counter_lock` lui-même** — ne jamais l’appeler depuis une section déjà verrouillée par `_token_counter_lock`, sinon deadlock.
+- **Token budget resets daily** — `_maybe_reset_token_counter()` in `agents/shared/llm.py` is called at the start of each `_llm()` invocation and resets `_token_counter` at midnight. **`_maybe_reset_token_counter()` acquiert `_token_counter_lock` lui-même** — ne jamais l’appeler depuis une section déjà verrouillée par `_token_counter_lock`, sinon deadlock.
 - **All LLM specialist votes validated by Pydantic** — `technician_node`, `analyst_node`, `risk_manager_node`, `macro_watcher_node` and `arbitrate_node` all pass raw LLM JSON through their respective `validate_*_vote()` / `validate_decision()` functions from `agents/shared/schemas.py`.
 - **`was_correct` is deferred** — `agent_memory.was_correct` reflects the actual market move 5 trading days after the trade (resolved by `evaluate_pending_trades`), not the arbitration consensus. Right after a trade, `was_correct IS NULL`; the dashboard shows `⏳ Calibrating` per agent until ≥ 5 evaluated votes accumulate.
 - **Paper mode reuses sim decision nodes** — `_no_llm_mode()` is `True` in both sim and paper, so any change to `sim_technician`, `sim_analyst`, `sim_risk_manager`, `sim_macro_watcher`, the `_no_llm_mode()` branch in `arbitrate_node`, or the `[SIM]/[PAPER]` lesson tag in `save_memory_node` directly affects paper trading. Only `fetch_data_node` diverges (paper uses the live yfinance branch).
@@ -320,7 +328,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`pending_evaluations` retry policy** — rows are flagged `evaluated=1` even when the verdict is inconclusive (move below `EVAL_SIGNIFICANCE_PCT`) to prevent infinite retries. The only path back to `evaluated=0` is when `_fast_last_price` returns `None` (network/quote unavailable) — those rows are retried at the next tick.
 - **Dynamic weights graceful warm-up** — `_compute_dynamic_weights` returns the static `WEIGHTS` dict verbatim while no agent has ≥ `_MIN_EVALUATED_VOTES` (5) evaluated votes. Holding `_weights_lock` (threading.Lock) during cache check + DB read prevents thundering-herd recomputation.
 - **Postmortem thread also runs `evaluate_pending_trades`** — every 60 s tick, regardless of `POSTMORTEM_HOUR`. Skipped under SIM mode (random-walk prices would corrupt `was_correct`); runs under LIVE and PAPER.
-- **Raw `sqlite3.connect` removed from dashboard** — layout/helpers and callbacks use `_db_read()` / `_load_*()` helpers so tabs follow the active DB path. Do not reintroduce `sqlite3.connect(DB_PATH)` outside `agents/shared/nodes.py`.
+- **Raw `sqlite3.connect` removed from dashboard** — layout/helpers and callbacks use `_db_read()` / `_load_*()` helpers so tabs follow the active DB path. Do not reintroduce `sqlite3.connect(DB_PATH)` outside `agents/shared/db.py`.
 - **`agent_memory.trace_id` invariant** — must exist in `_SCHEMA` AND be written by `_record_vote`. If either is missing, `evaluate_pending_trades` silently fails (UPDATE matches zero rows) and `was_correct` stays NULL forever. The regression guard is `tests/test_smoke.py::test_agent_memory_has_trace_id`.
 
 ## Code conventions
