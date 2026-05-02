@@ -308,7 +308,7 @@ CREATE TABLE postmortem (
 
 `source` values: `'live'`, `'paper'`, or `'simulation'`.
 `HOLD` actions are not persisted to `trades` (save_memory_node skips HOLDs).
-`agent_memory.was_correct` is set by `arbitrate_node` after the final decision is known (NULL until then).
+`agent_memory.was_correct` is set asynchronously by `evaluate_pending_trades` (postmortem thread) based on the actual market outcome after `EVAL_HORIZON_DAYS` (≈ `EVAL_HORIZON_CALENDAR_DAYS` = 7 calendar days). Only BUY/SELL votes are evaluated; HOLD votes (`risk_manager`, `macro_watcher`) remain `was_correct=NULL` so they don't pollute `_compute_dynamic_weights`.
 `postmortem` rows are written once per SELL trade by `run_daily_postmortem()` at `POSTMORTEM_HOUR`.
 
 ## Daily Postmortem

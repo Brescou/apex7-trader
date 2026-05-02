@@ -321,6 +321,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **Dynamic weights graceful warm-up** — `_compute_dynamic_weights` returns the static `WEIGHTS` dict verbatim while no agent has ≥ `_MIN_EVALUATED_VOTES` (5) evaluated votes. Holding `_weights_lock` (threading.Lock) during cache check + DB read prevents thundering-herd recomputation.
 - **Postmortem thread also runs `evaluate_pending_trades`** — every 60 s tick, regardless of `POSTMORTEM_HOUR`. Skipped under SIM mode (random-walk prices would corrupt `was_correct`); runs under LIVE and PAPER.
 - **Raw `sqlite3.connect` removed from dashboard callbacks** — `dashboard/callbacks/agents.py` and `dashboard/callbacks/heatmap.py` now go through `_db_read()` / `_load_*()` helpers so they follow the active DB path. Do not reintroduce `sqlite3.connect(DB_PATH)` outside `agents/shared/nodes.py`.
+- **`agent_memory.trace_id` invariant** — must exist in `_SCHEMA` AND be written by `_record_vote`. If either is missing, `evaluate_pending_trades` silently fails (UPDATE matches zero rows) and `was_correct` stays NULL forever. The regression guard is `tests/test_smoke.py::test_agent_memory_has_trace_id`.
 
 ## Code conventions
 
