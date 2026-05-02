@@ -104,6 +104,13 @@ core.registry
 
 Import direction is one-way: `dashboard` → `core`/`agents`/`market_data`. Never import from `dashboard` inside `agents/` or `core/`.
 
+## Primary modules (`core/` & `agents/shared/`)
+
+| Module | Role |
+|--------|------|
+| `core/external_data.py` | **FRED** (`fetch_fred_latest`, `fetch_macro_indicators`) and **CNN Fear & Greed** (`fetch_fear_greed`). Optional `FRED_API_KEY`. Standalone — must not import `agents/` or `dashboard/`. |
+| `agents/shared/watchlist.py` | Dynamic **watchlist** backed by SQLite table `watchlist` (max **20** symbols, yfinance validation on add): `get_watchlist`, `add_to_watchlist`, `remove_from_watchlist`. |
+
 ## Agent Graph
 
 ```
@@ -309,9 +316,9 @@ CREATE INDEX idx_pending_eval_due
     ON pending_evaluations (evaluated, eval_after_date);
 
 CREATE TABLE watchlist (
-    symbol   TEXT PRIMARY KEY,
-    added_at TEXT NOT NULL,
-    source   TEXT DEFAULT 'manual'
+    symbol   TEXT PRIMARY KEY,   -- upper-case ticker; max 20 rows (enforced in code)
+    added_at TEXT NOT NULL,      -- ISO-8601 UTC
+    source   TEXT DEFAULT 'manual'  -- e.g. seed | manual
 );
 
 CREATE TABLE postmortem (
@@ -522,8 +529,9 @@ Zero imports from `agents/` or `dashboard/`. Used exclusively by `dashboard/call
 | `fetch_ohlcv(symbol, period)` | 5 min per `(symbol, period)` | Daily OHLCV; returns `[{"date": "...", "open": ..., "high": ..., "low": ..., "close": ..., "volume": ...}, ...]`; empty list on failure; never raises |
 | `fetch_sector_performance(periods)` | per-sector TTL cache | Sector ETF % change grid (`yf.download`); cells `None` on failure |
 | `fetch_correlation_matrix(symbols, period)` | matrix cache | Pearson correlation of daily **returns**; needs ≥ 2 symbols; handles yfinance **MultiIndex** columns |
-| `fetch_earnings_calendar(symbols)` | short TTL via per-ticker fetch | Next earnings date per symbol; **try/except** around `Ticker.calendar` |
-| `build_economic_calendar_rows(symbols, …)` | n/a | Earnings rows + static macro (FOMC/CPI/NFP) for the terminal strip |
+| `fetch_earnings_calendar(symbols)` | **5 min** (`_EARNINGS_TTL`) per sorted symbol-set | Next earnings date per symbol via `Ticker.calendar`; **try/except**; shared cache for `is_earnings_week` |
+| `is_earnings_week(symbol)` | uses earnings cache | `True` if next earnings within 5 calendar days |
+| `build_economic_calendar_rows(symbols, …)` | n/a | Merges earnings rows with static **FOMC/CPI/NFP** schedule (`_SCHEDULED_MACRO_EVENTS`); logs **warning** if that schedule is stale (last event date in the past) |
 
 Cache uses `threading.Lock()` — thread-safe for concurrent Dash callbacks. Separate lock per cache (`_sparkline_lock`, `_comparison_lock`, sector/correlation caches, etc.).
 

@@ -9,7 +9,7 @@
 - **Data:** **FRED** macro series (`core/external_data.py`, optional `FRED_API_KEY`), **CNN Fear & Greed** index, **earnings calendar** via yfinance (`fetch_earnings_calendar`, `build_economic_calendar_rows`).
 - **Terminal:** **economic calendar** strip, **sector rotation** heatmap, **correlation** matrix panel, **enriched macro bar** (F&G, Fed funds, 10Y).
 
-## [Unreleased] — Feature Sprint v1
+## [Unreleased] — Feature Sprint v2
 
 ### Sprint Features v2 — summary (2026-05)
 
