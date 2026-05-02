@@ -18,6 +18,10 @@ INITIAL_BALANCE = 1000
 DEATH_THRESHOLD = 50.0
 MAX_POSITIONS = 3
 MAX_ALLOC_PCT = 40
+try:
+    MAX_PYRAMID_LAYERS = max(1, int(os.getenv("MAX_PYRAMID_LAYERS", "3")))
+except ValueError:
+    MAX_PYRAMID_LAYERS = 3
 AGENT_INTERVAL = 30
 
 SIMULATION_MODE = os.getenv("SIMULATION_MODE", "false").lower() == "true"

@@ -406,7 +406,7 @@ Thread-safe portfolio state. All mutations protected by `threading.RLock()`.
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `cash` | float | Available cash |
-| `positions` | dict | `{symbol: {shares, avg_price}}` — max 1 position per symbol |
+| `positions` | dict | `{symbol: {shares, avg_price, layers?}}` — pyramiding up to ``MAX_PYRAMID_LAYERS`` adds per symbol |
 | `trade_history` | list | All executed trades (in-memory) |
 | `value_history` | list | `[{time, value}]` snapshots |
 | `agent_log` | list | `[{time, message, level}]` |
@@ -418,7 +418,7 @@ Key methods:
 
 | Method | Description |
 |--------|-------------|
-| `buy(symbol, amount_usd, price)` | Opens position; returns `{"success": False, "error": "position already open"}` if symbol already held |
+| `buy(symbol, amount_usd, price)` | Opens or pyramids a position (weighted `avg_price`, `layers` ≤ `MAX_PYRAMID_LAYERS`) |
 | `sell(symbol, sell_pct, price)` | Closes or reduces position |
 | `open_symbols()` | Returns list of currently held symbols |
 | `closed_trades_since(ts)` | Returns SELL trades from `trade_history` with `time >= ts` |
@@ -529,4 +529,5 @@ Pre-commit hooks (`.pre-commit-config.yaml`): ruff (auto-fix) + black + trailing
 | `DEATH_THRESHOLD` | hardcoded | `50.0` | Portfolio floor |
 | `MAX_POSITIONS` | hardcoded | `3` | Max simultaneous positions |
 | `MAX_ALLOC_PCT` | hardcoded | `40` | Max % portfolio per trade |
+| `MAX_PYRAMID_LAYERS` | env | `3` | Max pyramid adds per symbol (`Portfolio.buy`) |
 | `AGENT_INTERVAL` | hardcoded | `30` | Seconds between live cycles (3s in sim) |

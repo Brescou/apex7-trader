@@ -17,6 +17,7 @@ from config import (
     DEATH_THRESHOLD,
     INITIAL_BALANCE,
     MAX_ALLOC_PCT,
+    MAX_PYRAMID_LAYERS,
     PORTFOLIO_SAVE_ENABLED,
     PORTFOLIO_STATE_PATH,
     USE_LIVEFEED,
@@ -30,7 +31,7 @@ class Portfolio:
     def __init__(self):
         self._lock = threading.RLock()
         self.cash = float(INITIAL_BALANCE)
-        self.positions: dict[str, dict] = {}  # {symbol: {"shares": float, "avg_price": float}}
+        self.positions: dict[str, dict] = {}  # {symbol: {shares, avg_price, layers?}}
         self.trade_history: list[dict] = []
         self.value_history: list[dict] = [
             {"time": datetime.now().isoformat(), "value": float(INITIAL_BALANCE)}
@@ -95,20 +96,44 @@ class Portfolio:
             amount_usd = min(amount_usd, max_amount, self.cash)
             if amount_usd < 1:
                 return {"success": False, "error": "Insufficient cash"}
+            px = float(price)
+            new_shares = amount_usd / px
+
             if symbol in self.positions:
-                return {"success": False, "error": "position already open"}
-            shares = amount_usd / price
-            self.cash -= amount_usd
-            self.positions[symbol] = {"shares": shares, "avg_price": price}
-            fp = float(price)
-            if not math.isnan(fp) and fp > 0:
-                self.high_watermarks[symbol] = max(self.high_watermarks.get(symbol, fp), fp)
+                existing = self.positions[symbol]
+                layers = int(existing.get("layers", 1))
+                if layers >= MAX_PYRAMID_LAYERS:
+                    return {
+                        "success": False,
+                        "error": f"max pyramid layers ({MAX_PYRAMID_LAYERS}) reached",
+                    }
+                old_shares = float(existing["shares"])
+                old_avg = float(existing.get("avg_price", existing.get("avg_cost", 0)))
+                total_shares = old_shares + new_shares
+                new_avg = (old_shares * old_avg + new_shares * px) / total_shares
+                existing["avg_price"] = new_avg
+                existing["shares"] = total_shares
+                existing["layers"] = layers + 1
+                self.cash -= amount_usd
+                trade_shares = new_shares
+            else:
+                self.cash -= amount_usd
+                self.positions[symbol] = {
+                    "shares": new_shares,
+                    "avg_price": px,
+                    "layers": 1,
+                }
+                trade_shares = new_shares
+                fp = px
+                if not math.isnan(fp) and fp > 0:
+                    self.high_watermarks[symbol] = max(self.high_watermarks.get(symbol, fp), fp)
+
             trade = {
                 "time": datetime.now().isoformat(),
                 "action": "BUY",
                 "symbol": symbol,
-                "shares": round(shares, 6),
-                "price": round(price, 2),
+                "shares": round(trade_shares, 6),
+                "price": round(px, 2),
                 "amount": round(amount_usd, 2),
             }
             self.trade_history.append(trade)

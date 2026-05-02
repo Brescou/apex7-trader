@@ -282,6 +282,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 | `MARKET_DATA_CACHE_SEC` | `60` | TTL for macro data cache in `market_data.py` |
 | `WATCHLIST_CACHE_SEC` | `10` | TTL for watchlist prices cache in `market_data.py` |
 | `NEWS_MAX_ITEMS` | `8` | Max news items returned by `fetch_news()` |
+| `MAX_PYRAMID_LAYERS` | `3` | Max weighted add layers per open symbol (`Portfolio.buy` pyramiding) |
 
 `WATCHLIST`, `INITIAL_BALANCE`, `DEATH_THRESHOLD`, `MAX_POSITIONS`, `MAX_ALLOC_PCT`, `AGENT_INTERVAL`, `STOP_LOSS_PCT`, and `POSTMORTEM_HOUR` are hardcoded in `config.py` and not overridable by env vars.
 
@@ -302,7 +303,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`LiveFeed` not wired into graph nodes** — `LiveFeed` is wired into `Portfolio.fetch_prices()` only; it is not a LangGraph node.
 - **`core/registry.py` description** — update `GRAPH_INFO["description"]` if a 5th specialist is added to `agents/multi.py`.
 - **Postmortem thread only in `dashboard/controller.py`** — `run_daily_postmortem()` is never called from `main.py`. It only runs when the full Dash app is started.
-- **Multi-symbol position limit** — `Portfolio.buy()` returns `{"success": False, "error": "position already open"}` if the symbol is already held. Callers in `execute_node` check `result["success"]`.
+- **Multi-symbol position limit** — `Portfolio.buy()` allows up to `MAX_PYRAMID_LAYERS` weighted adds per symbol (pyramiding); past that it returns `{"success": False, "error": "max pyramid layers (…) reached"}`. Callers in `execute_node` check `result["success"]`.
 - **`market_data.py` cache** — macro cached 60s, watchlist 10s to avoid yfinance rate limiting. Cache is in-memory only; resets on restart.
 - **`market_data.py` decoupled** — zero imports from `agents/` or `dashboard/` by design.
 - **`USE_LIVEFEED=False` in tests** — set via env or config override to avoid yfinance rate limiting during test runs.

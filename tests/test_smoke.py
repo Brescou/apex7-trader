@@ -48,8 +48,11 @@ def test_portfolio_multi_symbol(portfolio):
     assert r1["success"], f"first buy failed: {r1}"
 
     r2 = portfolio.buy("AAPL", 100.0, 105.0)
-    assert not r2["success"], f"duplicate buy should fail but got: {r2}"
-    assert "already open" in r2.get("error", "").lower() or not r2["success"]
+    assert r2["success"], f"pyramid buy should succeed: {r2}"
+    aapl = portfolio.positions["AAPL"]
+    assert aapl.get("layers", 1) == 2
+    exp_avg = (200.0 + 100.0) / (2.0 + 100.0 / 105.0)
+    assert abs(float(aapl["avg_price"]) - exp_avg) < 1e-6
 
     r3 = portfolio.buy("MSFT", 200.0, 400.0)
     assert r3["success"], f"MSFT buy failed: {r3}"
