@@ -26,6 +26,9 @@ apex7-trader/
 ├── core/
 │   ├── __init__.py
 │   ├── data.py            ← Portfolio, LiveFeed
+│   ├── notifications.py  ← Discord (trades, digest, weekly, evaluation)
+│   ├── external_data.py  ← FRED + CNN Fear & Greed
+│   ├── watchlist.py      ← DB watchlist (max 20 symbols)
 │   ├── backtest.py        ← run_backtest, compare_strategies
 │   ├── indicators.py      ← Shared RSI implementation
 │   └── registry.py        ← graph builder + UI metadata (single graph)
@@ -96,6 +99,7 @@ core.registry
   └── agents.multi (build_multi_graph)
         └── agents.shared.nodes, agents.shared.state
               └── core.data (Portfolio)
+              └── market_data, core.external_data (macro context, F&G, earnings)
 ```
 
 Import direction is one-way: `dashboard` → `core`/`agents`/`market_data`. Never import from `dashboard` inside `agents/` or `core/`.
@@ -304,6 +308,12 @@ CREATE TABLE pending_evaluations (
 CREATE INDEX idx_pending_eval_due
     ON pending_evaluations (evaluated, eval_after_date);
 
+CREATE TABLE watchlist (
+    symbol   TEXT PRIMARY KEY,
+    added_at TEXT NOT NULL,
+    source   TEXT DEFAULT 'manual'
+);
+
 CREATE TABLE postmortem (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp       TEXT,
@@ -322,6 +332,15 @@ CREATE TABLE postmortem (
 `HOLD` actions are not persisted to `trades` (save_memory_node skips HOLDs).
 `agent_memory.was_correct` is set asynchronously by `evaluate_pending_trades` (postmortem thread) based on the actual market outcome after `EVAL_HORIZON_DAYS` (≈ `EVAL_HORIZON_CALENDAR_DAYS` = 7 calendar days). Only BUY/SELL votes are evaluated; HOLD votes (`risk_manager`, `macro_watcher`) remain `was_correct=NULL` so they don't pollute `_compute_dynamic_weights`.
 `postmortem` rows are written once per SELL trade by `run_daily_postmortem()` at `POSTMORTEM_HOUR`.
+**`watchlist`** — one row per ticker (max **20** enforced in `core/watchlist.py`). New DB files are seeded from `config.WATCHLIST`. A symbol with an **open** position cannot be removed from the watchlist.
+
+## External data sources
+
+| Source | Module | Usage |
+|--------|--------|--------|
+| **FRED** (St. Louis Fed) | `core/external_data.fetch_fred_latest`, `fetch_macro_indicators` | Terminal macro bar (e.g. Fed funds, 10Y). Optional `FRED_API_KEY` — many series work **without** a key in JSON but are **rate-limited**. |
+| **CNN Fear & Greed** | `core/external_data.fetch_fear_greed` | Macro bar `F&G` cell. Endpoint is **not officially documented**; failures are **fail-silent** (`F&G: —`). |
+| **Earnings calendar** | `market_data.fetch_earnings_calendar`, `build_economic_calendar_rows` | Merges yfinance `Ticker.calendar` with a static macro schedule for the terminal strip and agent context. **`calendar` format varies by yfinance version** — helpers stay in **try/except**. |
 
 ## Daily Postmortem
 
@@ -345,30 +364,36 @@ Four tab content divs are always present in the DOM (`id` = `tab-live`, `tab-ana
 | LIVE | Portfolio value, agent state, equity curve, activity log, agent cards (multi mode, incl. eval banner per specialist), Track Records badges | 2s interval |
 | ANALYTICS | KPI row, 4 charts, full trade table, **Trade postmortem** (`postmortem` SQLite via `_load_postmortem`) | 30s + manual; `no_update` guard when tab not active |
 | BACKTEST | Symbol input, period dropdown, strategy selector (simple/multi), RUN BACKTEST button; KPI row (return, vs benchmark, win rate, max drawdown, Sharpe); equity curve with SPY benchmark overlay and BUY/SELL trade markers; trade log table with P&L per row | on button click |
-| TERMINAL | 65/35 split: left = 64px macro bar + 2-col symbol cards; right = chart overlay panel + news feed panel + compact screener | macro: 60s, watchlist: 10s, news: 120s |
+| TERMINAL | 65/35 split: macro bar + watchlist + **sector rotation** + **correlation** + **economic calendar**; chart, news, screener | macro: 60s, watchlist: 10s, news: 120s |
 
 ### Terminal tab components
 
 | Component / div id | Description |
 |--------------------|-------------|
-| `macro-bar-content` | VIX / SPY / DXY blocs — price, change_pct, 80×30px mini sparkline per symbol |
-| `watchlist-table` | 2-column symbol card grid — price, change_pct, RSI badge, MA20 indicator, volume, sparkline |
-| `chart-overlay-content` | 1mo OHLCV area chart for the selected symbol; max/min annotations; driven by `fetch_ohlcv()` |
-| `news-feed-content` | News cards for the selected symbol; sentiment-coloured left border; tab-gated |
+| `macro-bar-content` | VIX / SPY / DXY + **CNN Fear & Greed** + **FRED** (Fed funds, 10Y) + timestamp; mini sparklines on index blocs |
+| `watchlist-table` | 2-column symbol card grid — price, change_pct, RSI badge, MA20, volume, sparkline (symbols from DB `watchlist`) |
+| `economic-calendar-content` | Upcoming **earnings** (watchlist) + static **macro** dates (`build_economic_calendar_rows`) |
+| `sector-rotation-content` | **Sector ETF** performance heatmap (`fetch_sector_performance`) across period chips |
+| `correlation-matrix-content` | Pearson correlation grid on daily returns (`fetch_correlation_matrix`); `correlation-period-dropdown`; needs ≥ 2 symbols |
+| `chart-overlay-content` | 1mo OHLCV area chart for the selected symbol; max/min annotations |
+| `news-feed-content` | News cards for the selected symbol |
 | `screener-results` | Screener matches list |
-| `screener-results-store` | List of matched symbol strings (for watchlist card highlighting) |
-| `screener-active-store` | Bool — true when screener has been run and not cleared |
+| `screener-results-store` | List of matched symbol strings |
+| `screener-active-store` | Bool — screener highlight mode |
 
 ### Terminal tab callbacks (`dashboard/callbacks/terminal.py`)
 
 | Callback | Trigger | Output |
 |----------|---------|--------|
-| `_update_macro_bar` | `macro-interval` | `macro-bar-content` — blocs with mini sparklines |
-| `_update_watchlist` | `watchlist-interval`, `terminal-watchlist`, `terminal-active-symbol`, screener stores | `watchlist-table` (2-col card grid) |
+| `_update_macro_bar` | `macro-interval` | `macro-bar-content` — index blocs + F&G + FRED + sparklines |
+| `_update_watchlist` | `watchlist-interval`, `terminal-watchlist`, `terminal-active-symbol`, screener stores | `watchlist-table` |
+| `_update_economic_calendar` | interval + `terminal-watchlist` | `economic-calendar-content` |
+| `_update_sector_rotation` | interval + period checklists | `sector-rotation-content` |
+| `_update_correlation_matrix` | `correlation-period-dropdown`, interval, `terminal-watchlist` | `correlation-matrix-warning`, `correlation-matrix-content` |
 | `_update_news_content` | `terminal-active-symbol`, `news-interval` | `news-feed-content`; tab-gated |
 | `_update_chart_overlay` | `terminal-active-symbol` | `chart-overlay-content`; tab-gated |
 | `_run_screener` | `btn-screener-run` | 3-tuple: `screener-results`, `screener-results-store`, `screener-active-store` |
-| `_clear_screener` | `btn-screener-clear` | resets `screener-active-store` + `screener-results-store` |
+| `_clear_screener` | `btn-screener-clear` | resets screener stores |
 
 ### dcc.Store ids
 
@@ -406,25 +431,27 @@ Thread-safe portfolio state. All mutations protected by `threading.RLock()`.
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `cash` | float | Available cash |
-| `positions` | dict | `{symbol: {shares, avg_price, layers?}}` — pyramiding up to ``MAX_PYRAMID_LAYERS`` adds per symbol |
+| `positions` | dict | `{symbol: {shares, avg_price, layers}}` — successive BUYs on the same symbol **pyramid** up to ``MAX_PYRAMID_LAYERS``; each add recomputes `avg_price` as share-weighted average \((\text{old\_shares} \cdot \text{old\_avg} + \text{new\_shares} \cdot \text{price}) / \text{total\_shares}\) |
 | `trade_history` | list | All executed trades (in-memory) |
 | `value_history` | list | `[{time, value}]` snapshots |
 | `agent_log` | list | `[{time, message, level}]` |
 | `is_dead` | bool | True when total value < DEATH_THRESHOLD |
 | `last_prices` | dict | Last fetched prices cache |
 | `peak_value` | float | All-time peak portfolio value (updated in `record_value`) |
+| `high_watermarks` | dict | Per-symbol peak price for **trailing** stop — initialized on **first** BUY only; **not** reset when pyramiding |
 
 Key methods:
 
 | Method | Description |
 |--------|-------------|
-| `buy(symbol, amount_usd, price)` | Opens or pyramids a position (weighted `avg_price`, `layers` ≤ `MAX_PYRAMID_LAYERS`) |
+| `buy(symbol, amount_usd, price)` | New position or **pyramid** add. Fails when `layers` ≥ `MAX_PYRAMID_LAYERS`. Weighted `avg_price`; `high_watermarks[sym]` set only on **initial** open. |
 | `sell(symbol, sell_pct, price)` | Closes or reduces position |
 | `open_symbols()` | Returns list of currently held symbols |
 | `closed_trades_since(ts)` | Returns SELL trades from `trade_history` with `time >= ts` |
 | `fetch_prices(symbols)` | Fetches live prices via `yf.Tickers` fast_info |
 | `total_value(prices)` | Cash + sum of position values |
 | `record_value(prices)` | Appends snapshot to `value_history`; updates `peak_value` |
+| `update_watermarks(prices)` | Bumps `high_watermarks` toward current quotes (trailing SL) |
 | `check_death(prices)` | Sets `is_dead = True` if total value < DEATH_THRESHOLD |
 | `save_state(path)` | Serializes cash/positions/history/peak_value to JSON |
 | `load_state(path)` | Restores state from JSON (no-op if file absent) |
@@ -458,11 +485,22 @@ prices = feed.fetch()  # -> {"AAPL": 185.0, "MSFT": 415.0}
 
 Wired into `Portfolio.fetch_prices()` when `USE_LIVEFEED=True`. If `LiveFeed.fetch()` raises or returns empty, `Portfolio.fetch_prices()` falls back to `yf.Tickers` fast_info silently. The `LiveFeed` instance is created lazily once per `Portfolio` instance.
 
+## Discord notifications (`core/notifications.py`)
+
+Optional `DISCORD_WEBHOOK_URL` — same **`httpx.post`**, 5s timeout, **fail-silent** pattern for all message types.
+
+| Alert | Entry point | Trigger |
+|-------|-------------|---------|
+| Trade / death / stagnation / rate-limit / startup | Various wire sites in `agents`, `dashboard`, `llm` | Existing sprint v2 behavior |
+| **Daily digest** | `alert_daily_digest` ← `run_daily_digest` | Same **postmortem hour** gate as `run_daily_postmortem` (`POSTMORTEM_HOUR`), once per calendar day |
+| **Weekly report** | `alert_weekly_report` ← `run_weekly_report` | **Sunday** at that hour, after digest/scheduling (`dashboard/controller.py` `_run_digest_and_weekly_at_postmortem_hour`) |
+| **Evaluation** | `alert_evaluation` | Emitted from `evaluate_pending_trades` when a pending trade is scored (`was_correct` resolved) |
+
 ## Concurrency Model
 
 - Dash callback thread: reads `_state["portfolio"]` — no mutations
 - Agent loop thread (`apex7-agent`, daemon): mutates Portfolio via `buy()`, `sell()`, `record_value()` — launched by `start_controller()` in `dashboard/controller.py`
-- Postmortem thread (`apex7-postmortem`, daemon): runs every 60 s; calls `evaluate_pending_trades(now)` to resolve due `was_correct` rows in LIVE/PAPER (skipped in SIM), and `run_daily_postmortem()` once per day at `POSTMORTEM_HOUR`. Reads `portfolio.trade_history`, writes to SQLite — no Portfolio mutations.
+- Postmortem thread (`apex7-postmortem`, daemon): runs every 60 s; calls `evaluate_pending_trades(now)` to resolve due `was_correct` rows in LIVE/PAPER (skipped in SIM), and `run_daily_postmortem()` once per day at `POSTMORTEM_HOUR`. **Same hour** also runs `run_daily_digest()` and, on **Sundays**, `run_weekly_report()` (`_run_digest_and_weekly_at_postmortem_hour`). Reads `portfolio.trade_history`, writes to SQLite — no Portfolio mutations.
 - All Portfolio mutations use `with self._lock` (RLock)
 - SQLite writes go through `_db_write()` in `agents/shared/db.py` (re-exported from `agents.shared.nodes`) — handles WAL mode, retries (3 attempts with backoff), and structured logging
 - Sim and live use separate databases (`trades_sim.db` / `trades.db`) via `_get_db_path()`
@@ -482,8 +520,12 @@ Zero imports from `agents/` or `dashboard/`. Used exclusively by `dashboard/call
 | `fetch_sparkline(symbol)` | 5 min | 1-day hourly OHLC via yfinance; returns `[{"time": "14:00", "price": 182.5, "open": 181.0}, ...]`; empty list on failure |
 | `fetch_comparison(symbols, period)` | 5 min | Daily closes normalized to 100.0 at first point; returns `{"AAPL": [{"date": "...", "value": 100.0}, ...], ...}`; empty dict on failure |
 | `fetch_ohlcv(symbol, period)` | 5 min per `(symbol, period)` | Daily OHLCV; returns `[{"date": "...", "open": ..., "high": ..., "low": ..., "close": ..., "volume": ...}, ...]`; empty list on failure; never raises |
+| `fetch_sector_performance(periods)` | per-sector TTL cache | Sector ETF % change grid (`yf.download`); cells `None` on failure |
+| `fetch_correlation_matrix(symbols, period)` | matrix cache | Pearson correlation of daily **returns**; needs ≥ 2 symbols; handles yfinance **MultiIndex** columns |
+| `fetch_earnings_calendar(symbols)` | short TTL via per-ticker fetch | Next earnings date per symbol; **try/except** around `Ticker.calendar` |
+| `build_economic_calendar_rows(symbols, …)` | n/a | Earnings rows + static macro (FOMC/CPI/NFP) for the terminal strip |
 
-Cache uses `threading.Lock()` — thread-safe for concurrent Dash callbacks. Separate lock per cache (`_sparkline_lock`, `_comparison_lock`).
+Cache uses `threading.Lock()` — thread-safe for concurrent Dash callbacks. Separate lock per cache (`_sparkline_lock`, `_comparison_lock`, sector/correlation caches, etc.).
 
 ## CI/CD Pipeline
 
@@ -529,5 +571,7 @@ Pre-commit hooks (`.pre-commit-config.yaml`): ruff (auto-fix) + black + trailing
 | `DEATH_THRESHOLD` | hardcoded | `50.0` | Portfolio floor |
 | `MAX_POSITIONS` | hardcoded | `3` | Max simultaneous positions |
 | `MAX_ALLOC_PCT` | hardcoded | `40` | Max % portfolio per trade |
-| `MAX_PYRAMID_LAYERS` | env | `3` | Max pyramid adds per symbol (`Portfolio.buy`) |
+| `DISCORD_WEBHOOK_URL` | env | — | Optional — trades, stagnation, death, rate-limit, startup, **daily digest**, **weekly report**, **evaluation** |
+| `FRED_API_KEY` | env | — | Optional FRED key; keyless JSON often works but is rate-limited (`core/external_data`) |
+| `MAX_PYRAMID_LAYERS` | env | `3` | Max pyramid BUY layers per symbol |
 | `AGENT_INTERVAL` | hardcoded | `30` | Seconds between live cycles (3s in sim) |

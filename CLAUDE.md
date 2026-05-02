@@ -17,7 +17,8 @@ uv run langgraph dev
 # Run regression smoke tests (11 tests, legacy runner: assert+print; or pytest: uv run pytest tests/test_smoke.py -q)
 uv run python tests/test_smoke.py
 
-# Run terminal/market data tests (7 tests, no pytest)
+# Run terminal/market data tests (pytest: 13 tests incl. sector/correlation/macro mocks; legacy: 7 no-pytest)
+uv run pytest tests/test_terminal.py -q
 uv run python tests/test_terminal.py
 
 # Lint (CI-grade)
@@ -58,7 +59,9 @@ apex7-trader/
 ├── core/
 │   ├── __init__.py
 │   ├── data.py            ← Portfolio, LiveFeed
-│   ├── notifications.py   ← optional Discord webhook alerts
+│   ├── notifications.py   ← optional Discord webhook (trades, digest, weekly, evaluation, …)
+│   ├── external_data.py   ← FRED series + CNN Fear & Greed (HTTP, TTL caches)
+│   ├── watchlist.py       ← persisted watchlist helpers (SQLite via agents.shared.db)
 │   ├── backtest.py        ← run_backtest, compare_strategies (yfinance history)
 │   ├── indicators.py      ← Shared RSI implementation
 │   └── registry.py        ← single graph builder + UI metadata
@@ -139,15 +142,17 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `agents/shared/eval.py` | `evaluate_pending_trades`, `_fast_last_price`, `EVAL_SIGNIFICANCE_PCT` |
 | `agents/shared/schemas.py` | Pydantic validation models for LLM decision outputs |
 | `core/data.py` | `Portfolio` — thread-safe state; `LiveFeed` — multi-symbol yfinance wrapper |
-| `core/notifications.py` | Optional Discord webhook alerts (`httpx.post`, 5s timeout, fail-silent) |
+| `core/notifications.py` | Optional Discord webhook — trades, death/stagnation/rate-limit/startup, **daily digest**, **weekly report**, **evaluation** alerts |
+| `core/external_data.py` | `fetch_fred_latest`, `fetch_macro_indicators`, `fetch_fear_greed` (CNN); used by terminal macro bar + `fetch_data` context |
+| `core/watchlist.py` | `get_watchlist`, `add_to_watchlist`, `remove_from_watchlist` — max 20 symbols; cannot remove a symbol with an open position |
 | `core/backtest.py` | Functional API (`fetch_historical`, `compute_indicators`, `run_backtest`, `compare_strategies`) |
 | `core/indicators.py` | Shared `rsi()` implementation used across agents, backtest, and market_data |
 | `core/registry.py` | Single `get_graph(p)` + `get_graph_info()` UI metadata |
 | `config.py` | All constants, loaded from `.env` |
-| `market_data.py` | Standalone market data — fetch_macro, fetch_watchlist_prices, fetch_news, run_screener, fetch_sparkline, fetch_comparison |
+| `market_data.py` | Standalone market data — macro/watchlist/news/screener/sparkline/comparison/OHLCV, **sector rotation**, **correlation matrix**, **earnings calendar** / `build_economic_calendar_rows` |
 | `langgraph.json` | LangGraph Studio config — exposes both compiled graphs |
 | `tests/test_smoke.py` | 11 regression smoke tests — no pytest, assert+print, exit 0/1 |
-| `tests/test_terminal.py` | 7 market data tests (sparkline, comparison, screener, cache) |
+| `tests/test_terminal.py` | Market data + terminal mocks (macro strip, sector %, correlation matrix, economic calendar) |
 | `tests/test_integration.py` | pytest integration tests with mocked LLM (sim mode) |
 
 ### Concurrency model
@@ -232,7 +237,7 @@ g.add_edge("my_node", "risk_check")
 
 ### SQLite schema
 
-`trades.db` (live), `trades_paper.db` (paper) and `trades_sim.db` (simulation) are auto-created on first access via `_ensure_db()` with WAL mode and busy_timeout=5000ms. Five tables:
+`trades.db` (live), `trades_paper.db` (paper) and `trades_sim.db` (simulation) are auto-created on first access via `_ensure_db()` with WAL mode and busy_timeout=5000ms. Six core tables:
 
 | Table | Description |
 |-------|-------------|
@@ -241,6 +246,7 @@ g.add_edge("my_node", "risk_check")
 | `agent_memory` | One row per agent vote per cycle; `was_correct` is **NULL until evaluated** by `evaluate_pending_trades` in `agents/shared/eval.py` (NOT by arbitration) |
 | `postmortem` | One row per closed trade (SELL); written by `run_daily_postmortem()` |
 | `pending_evaluations` | One row per executed trade scheduled for outcome evaluation (`eval_after_date = entry_date + EVAL_HORIZON_CALENDAR_DAYS`, default 7 calendar days) |
+| `watchlist` | `symbol` PRIMARY KEY, `added_at`, `source` — seeded from `config.WATCHLIST` when empty; UI + `core/watchlist.py` enforce **max 20** symbols |
 
 The `source` column on `trades`, `agent_memory`, and `postmortem` is one of `'live'` / `'paper'` / `'simulation'`.
 
@@ -260,6 +266,30 @@ All SQLite writes go through `_db_write()` / `_db_write_multi()` in `agents/shar
 
 `LiveFeed` in `core/data.py` provides multi-symbol price fetching using 1m yfinance history. Wired into `Portfolio.fetch_prices()` when `USE_LIVEFEED=True`. Falls back to `yf.Tickers` fast_info silently on error.
 
+### Terminal tab — sprint v3 sections
+
+Beyond the original macro bar, watchlist cards, chart, news, and screener, the TERMINAL tab adds:
+
+| Block | DOM id / driver | Role |
+|-------|-----------------|------|
+| **Economic calendar** | `economic-calendar-content` | `_update_economic_calendar` — merges `build_economic_calendar_rows()` (yfinance earnings + static macro schedule) for the current DB watchlist |
+| **Sector rotation** | `sector-rotation-content` | `_update_sector_rotation` — `fetch_sector_performance()` heatmap (% vs period presets) |
+| **Correlation matrix** | `correlation-matrix-content`, `correlation-period-dropdown` | `_update_correlation_matrix` — `fetch_correlation_matrix()` (Pearson on daily returns); needs ≥ 2 symbols |
+
+**Enriched macro bar** (`macro-bar-content`): VIX / SPY / DXY blocs unchanged in spirit; adds **CNN Fear & Greed** (`fetch_fear_greed` via `core/external_data.py`), **FED funds** and **10Y** from FRED (`fetch_fred_latest`), each with the same refresh cadence as the rest of the bar.
+
+### Discord alerts beyond trades
+
+When `DISCORD_WEBHOOK_URL` is set, `core/notifications.py` also supports:
+
+| Function | When |
+|----------|------|
+| `alert_daily_digest` | End-of-day portfolio summary — scheduled from `run_daily_digest()` (`dashboard/controller.py` postmortem thread) |
+| `alert_weekly_report` | Weekly agent ranking / stats — `run_weekly_report()` |
+| `alert_evaluation` | After `evaluate_pending_trades` resolves `was_correct` for a trade (`agents/shared/eval.py`) |
+
+All use the same fail-silent `httpx.post` pattern as trade alerts.
+
 ## Configuration
 
 All tuneable constants are in `config.py`. Env vars override at startup:
@@ -277,17 +307,23 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 | `USE_LIVEFEED` | `true` | Delegate Portfolio.fetch_prices() to LiveFeed; set `false` in tests |
 | `PORTFOLIO_STATE_PATH` | `portfolio_state.json` | Path for JSON portfolio persistence |
 | `PORTFOLIO_SAVE_ENABLED` | `true` | Enable/disable Portfolio save_state(); set `false` in unit tests |
-| `DISCORD_WEBHOOK_URL` | — | Optional Discord webhook for `core.notifications` (trades, death, stagnation, rate-limit, startup) |
+| `DISCORD_WEBHOOK_URL` | — | Optional Discord webhook for `core.notifications` (trades, death, stagnation, rate-limit, startup, **daily digest**, **weekly report**, **evaluation**) |
+| `FRED_API_KEY` | — | Optional; FRED JSON works for many series without a key but is **rate-limited** — key improves limits |
 | `MACRO_SYMBOLS` | `{"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}` | Symbols for the TERMINAL macro header bar |
 | `MARKET_DATA_CACHE_SEC` | `60` | TTL for macro data cache in `market_data.py` |
 | `WATCHLIST_CACHE_SEC` | `10` | TTL for watchlist prices cache in `market_data.py` |
 | `NEWS_MAX_ITEMS` | `8` | Max news items returned by `fetch_news()` |
-| `MAX_PYRAMID_LAYERS` | `3` | Max weighted add layers per open symbol (`Portfolio.buy` pyramiding) |
+| `MAX_PYRAMID_LAYERS` | `3` | Env `MAX_PYRAMID_LAYERS` — max BUY layers per symbol (`Portfolio.buy` pyramiding; weighted `avg_price`) |
 
 `WATCHLIST`, `INITIAL_BALANCE`, `DEATH_THRESHOLD`, `MAX_POSITIONS`, `MAX_ALLOC_PCT`, `AGENT_INTERVAL`, `STOP_LOSS_PCT`, and `POSTMORTEM_HOUR` are hardcoded in `config.py` and not overridable by env vars.
 
 ## Known pitfalls
 
+- **FRED API** — works without `FRED_API_KEY` for many popular JSON series, but responses are **rate-limited**. Set `FRED_API_KEY` in `.env` for higher quotas and more predictable access (`core/external_data.fetch_fred_latest`).
+- **Fear & Greed** — CNN `production.dataviz.cnn.io` endpoint is **undocumented** and may change without notice. `fetch_fear_greed` is **fail-silent** (bar shows `F&G: —` on failure).
+- **Earnings calendar** — `yf.Ticker.calendar` shape varies across **yfinance** versions (dict vs DataFrame, column names). `market_data.fetch_earnings_calendar` and `build_economic_calendar_rows` must stay wrapped in **try/except**; never assume a single format.
+- **Pyramiding** — `MAX_PYRAMID_LAYERS` (default 3, env `MAX_PYRAMID_LAYERS`) caps successive BUYs on the same symbol; `avg_price` is recomputed as a **share-weighted** average. Past the cap, `buy()` returns `{"success": False, "error": "max pyramid layers (…) reached"}` — `execute_node` checks `result["success"]`. **`high_watermarks`** for trailing stop is set on the **first** open only — pyramids do **not** reset it.
+- **Watchlist DB** — at most **20** symbols (`core/watchlist.MAX_WATCHLIST_SYMBOLS`). **`remove_from_watchlist`** refuses to drop a ticker that still has an **open position** (`open_symbols`).
 - **Discord webhook alerts** — `core.notifications` uses fire-and-forget `httpx.post` (5s timeout). Fail-silent on errors; never blocks the agent loop. Wire points use lazy imports (`core.data` ↔ `agents.shared.nodes`). Leave `DISCORD_WEBHOOK_URL` unset to disable.
 - **CI jobs** — `.github/workflows/ci.yml`: job `lint` runs `uv run black --check .` only; job `test` runs ruff + pytest + coverage. Failing `lint` on push: reproduce with `uv run black --check --diff .`.
 - **`README.md`** — root `README.md` is a symlink to `docs/README.md`; commit `docs/README.md` when updating user-facing README.
@@ -303,7 +339,6 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`LiveFeed` not wired into graph nodes** — `LiveFeed` is wired into `Portfolio.fetch_prices()` only; it is not a LangGraph node.
 - **`core/registry.py` description** — update `GRAPH_INFO["description"]` if a 5th specialist is added to `agents/multi.py`.
 - **Postmortem thread only in `dashboard/controller.py`** — `run_daily_postmortem()` is never called from `main.py`. It only runs when the full Dash app is started.
-- **Multi-symbol position limit** — `Portfolio.buy()` allows up to `MAX_PYRAMID_LAYERS` weighted adds per symbol (pyramiding); past that it returns `{"success": False, "error": "max pyramid layers (…) reached"}`. Callers in `execute_node` check `result["success"]`.
 - **`market_data.py` cache** — macro cached 60s, watchlist 10s to avoid yfinance rate limiting. Cache is in-memory only; resets on restart.
 - **`market_data.py` decoupled** — zero imports from `agents/` or `dashboard/` by design.
 - **`USE_LIVEFEED=False` in tests** — set via env or config override to avoid yfinance rate limiting during test runs.
