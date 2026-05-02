@@ -112,7 +112,8 @@ def alert_death(*, portfolio_value: float | None = None) -> None:
     desc = "Portfolio is dead (below survival threshold)."
     if portfolio_value is not None:
         desc += f"\nLast value: `${portfolio_value:,.2f}`"
-    send_discord_alert("APEX-7 death", desc, color=_COLOR_RED)
+    fields = [{"name": "Mode", "value": _runtime_mode_label(), "inline": True}]
+    send_discord_alert("APEX-7 death", desc, color=_COLOR_RED, fields=fields)
 
 
 def alert_stagnation(*, hold_cycles: int) -> None:
@@ -121,6 +122,7 @@ def alert_stagnation(*, hold_cycles: int) -> None:
         "APEX-7 stagnation",
         f"Hold streak reached **{hold_cycles}** cycles without action.",
         color=_COLOR_ORANGE,
+        fields=[{"name": "Mode", "value": _runtime_mode_label(), "inline": True}],
     )
 
 
@@ -150,7 +152,7 @@ def alert_trailing_stop(
     high_watermark: float,
     drawdown_pct: float,
 ) -> None:
-    """Trailing stop-loss triggered (Feature 4 — wired from ``execute_node``)."""
+    """Trailing stop-loss triggered (Feature 3 — wired from ``execute_node``)."""
     send_discord_alert(
         "APEX-7 trailing stop",
         f"`{symbol}` @ `{price:.4f}` — high `{high_watermark:.4f}`, "

@@ -140,7 +140,7 @@ def _record_hold_stagnation(final_action: str) -> None:
             "HOLD stagnation: %d consecutive HOLD cycles — consider pausing agent",
             n,
         )
-        if n == 10:
+        if n == 10 and not get_simulation_mode():
             try:
                 from core.notifications import alert_stagnation
 
@@ -672,7 +672,6 @@ def make_execute_node(portfolio: Portfolio):
                         f"= ${result['amount']:.2f}  slip={slip-1:+.3%}"
                     )
                 )
-                portfolio.save_state(DB_PATH.parent / ".apex7_state.json")
 
         elif action == "SELL" and symbol:
             slip = 1 + random.uniform(-0.001, 0.001)
@@ -688,7 +687,6 @@ def make_execute_node(portfolio: Portfolio):
                         f"= ${result['amount']:.2f}  slip={slip-1:+.3%}"
                     )
                 )
-                portfolio.save_state(DB_PATH.parent / ".apex7_state.json")
 
         elif action == "HOLD":
             logs.append(_entry(f"HOLD — {decision.get('reasoning','')[:100]}"))

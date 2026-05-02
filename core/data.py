@@ -183,6 +183,10 @@ class Portfolio:
             dead_now = self.is_dead
         if dead_now and not was_dead:
             try:
+                from agents.shared.modes import get_simulation_mode
+
+                if get_simulation_mode():
+                    return dead_now
                 from core.notifications import alert_death
 
                 alert_death(portfolio_value=val)

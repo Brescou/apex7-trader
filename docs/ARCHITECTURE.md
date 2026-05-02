@@ -55,11 +55,23 @@ apex7-trader/
 ├── tests/
 │   ├── conftest.py
 │   ├── test_circuit_breaker.py
+│   ├── test_dynamic_weights.py
+│   ├── test_evaluate_pending.py
 │   ├── test_integration.py
 │   ├── test_layout_helpers.py
+│   ├── test_misc_coverage.py
+│   ├── test_mode_toggle_ui.py
+│   ├── test_notifications.py
+│   ├── test_paper_mode.py
+│   ├── test_paper_trading.py
+│   ├── test_partial_exits.py
+│   ├── test_pending_evaluations.py
+│   ├── test_portfolio.py
 │   ├── test_smoke.py
 │   ├── test_stoploss.py
-│   └── test_terminal.py
+│   ├── test_terminal.py
+│   ├── test_trailing_stop.py
+│   └── test_was_correct.py
 ├── .github/
 │   └── workflows/
 │       └── ci.yml
