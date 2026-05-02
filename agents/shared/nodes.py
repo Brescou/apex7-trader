@@ -1343,9 +1343,14 @@ def evaluate_pending_trades(now: datetime | None = None) -> int:
                 was_correct = None
 
         if trace_id:
+            # Only directional votes (BUY/SELL) are scored against the market.
+            # risk_manager and macro_watcher always vote HOLD — leaving their
+            # rows NULL keeps ``_compute_dynamic_weights`` from blending in
+            # noise (Review v5 Finding 4.4).
             _db_write(
                 "UPDATE agent_memory SET was_correct = ? "
-                "WHERE trace_id = ? AND was_correct IS NULL",
+                "WHERE trace_id = ? AND was_correct IS NULL "
+                "AND vote IN ('BUY', 'SELL')",
                 (was_correct, trace_id),
             )
         _db_write(
