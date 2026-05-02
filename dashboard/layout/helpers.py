@@ -298,6 +298,53 @@ def _make_sparkline_fig(data: list) -> go.Figure:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# AGENT EVAL METRICS (LIVE specialist cards + AGENTS tab)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_AGENT_EVAL_MIN_VOTES = 5
+
+
+def _agent_eval_metrics(agent_rows: list[dict]) -> dict[str, int | float | bool]:
+    """Votes évalués, win rate et flag calibration pour un agent (lignes agent_memory)."""
+    total = len(agent_rows)
+    evaluated = sum(1 for r in agent_rows if r.get("was_correct") in (0, 1, True, False, "0", "1"))
+    correct = sum(1 for r in agent_rows if r.get("was_correct") in (1, True, "1"))
+    win_rate_pct = (correct / evaluated * 100.0) if evaluated > 0 else 0.0
+    market_validated = evaluated >= _AGENT_EVAL_MIN_VOTES
+    return {
+        "total": total,
+        "evaluated": evaluated,
+        "correct": correct,
+        "win_rate_pct": win_rate_pct,
+        "market_validated": market_validated,
+    }
+
+
+def _live_agent_eval_banner(metrics: dict[str, int | float | bool]) -> html.Div:
+    """Ligne compacte sous l'en-tête d'une carte agent LIVE (accuracy + badge calibration)."""
+    wr = float(metrics["win_rate_pct"])
+    evaluated = int(metrics["evaluated"])
+    validated = bool(metrics["market_validated"])
+    if validated:
+        label = f"{wr:.0f}% · ✓ Market-validated"
+        color = GREEN
+    else:
+        label = f"{wr:.0f}% · ⏳ calibrating ({evaluated}/{_AGENT_EVAL_MIN_VOTES})"
+        color = ORANGE if evaluated > 0 else TEXT_DIM
+    return html.Div(
+        label,
+        style={
+            "fontSize": "9px",
+            "color": color,
+            "padding": "4px 0 6px",
+            "borderBottom": f"1px solid {BORDER}",
+            "marginBottom": "6px",
+            "letterSpacing": "0.04em",
+        },
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # DB LOADERS
 # ═══════════════════════════════════════════════════════════════════════════════
 

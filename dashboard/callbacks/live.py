@@ -16,11 +16,14 @@ from core.data import Portfolio
 from dashboard.controller import _controller_lock, _ctrl, _launch, _state
 from dashboard.layout import (
     _EMOTIONS,
+    _agent_eval_metrics,
     _analyst_body_children,
     _build_arb_card,
     _card_hdr_standard,
     _cycle,
     _emotion,
+    _live_agent_eval_banner,
+    _load_agent_memory,
     _log_entry_card,
     _macro_body_children,
     _mini_stat,
@@ -586,6 +589,12 @@ def _refresh(_, store, active_tab):
     is_sim = get_simulation_mode()
     vote_map = {v.get("agent", ""): v for v in votes}
 
+    _mem_ag: dict[str, list[dict]] = {}
+    for r in _load_agent_memory():
+        k = r.get("agent_name") or ""
+        if k in ("technician", "analyst", "risk_manager", "macro_watcher"):
+            _mem_ag.setdefault(k, []).append(r)
+
     _PLACEHOLDER_HDR = [html.Span("—", style={"fontSize": "9px", "color": TEXT_DIM})]
     _WAITING = [
         html.Div(
@@ -664,10 +673,18 @@ def _refresh(_, store, active_tab):
             *([_sim_chip()] if is_sim else []),
         ]
 
-        body_tech = _tech_body_children(tv) if tv else _WAITING
-        body_anlst = _analyst_body_children(av) if av else _WAITING
-        body_risk = _risk_body_children(rv) if rv else _WAITING
-        body_macro = _macro_body_children(mv) if mv else _WAITING
+        body_tech = [
+            _live_agent_eval_banner(_agent_eval_metrics(_mem_ag.get("technician", [])))
+        ] + (_tech_body_children(tv) if tv else _WAITING)
+        body_anlst = [_live_agent_eval_banner(_agent_eval_metrics(_mem_ag.get("analyst", [])))] + (
+            _analyst_body_children(av) if av else _WAITING
+        )
+        body_risk = [
+            _live_agent_eval_banner(_agent_eval_metrics(_mem_ag.get("risk_manager", [])))
+        ] + (_risk_body_children(rv) if rv else _WAITING)
+        body_macro = [
+            _live_agent_eval_banner(_agent_eval_metrics(_mem_ag.get("macro_watcher", [])))
+        ] + (_macro_body_children(mv) if mv else _WAITING)
         card_arb = _build_arb_card(arb)
 
     else:
@@ -675,7 +692,18 @@ def _refresh(_, store, active_tab):
         hdr_anlst = _PLACEHOLDER_HDR
         hdr_risk = _PLACEHOLDER_HDR
         hdr_macro = _PLACEHOLDER_HDR
-        body_tech = body_anlst = body_risk = body_macro = _WAITING
+        body_tech = [
+            _live_agent_eval_banner(_agent_eval_metrics(_mem_ag.get("technician", [])))
+        ] + _WAITING
+        body_anlst = [
+            _live_agent_eval_banner(_agent_eval_metrics(_mem_ag.get("analyst", [])))
+        ] + _WAITING
+        body_risk = [
+            _live_agent_eval_banner(_agent_eval_metrics(_mem_ag.get("risk_manager", [])))
+        ] + _WAITING
+        body_macro = [
+            _live_agent_eval_banner(_agent_eval_metrics(_mem_ag.get("macro_watcher", [])))
+        ] + _WAITING
         card_arb = _build_arb_card({})
 
     cards_style = {"padding": "0 14px 12px"}

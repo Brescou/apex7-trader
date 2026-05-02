@@ -5,7 +5,7 @@ import datetime as _dt
 import plotly.graph_objects as go
 from dash import Input, Output, State, dcc, html, no_update
 
-from dashboard.layout.helpers import _load_agent_memory, _load_postmortem
+from dashboard.layout.helpers import _agent_eval_metrics, _load_agent_memory, _load_postmortem
 from dashboard.server import (
     BG_CARD,
     BLUE,
@@ -135,10 +135,10 @@ def _agents_refresh(_, __, active_tab):
         key = ag["key"]
         col = ag["color"]
         rows = [r for r in mem if r.get("agent_name") == key]
-        total = len(rows)
-        evaluated = sum(1 for r in rows if r.get("was_correct") in (0, 1, True, False, "0", "1"))
-        correct = sum(1 for r in rows if r.get("was_correct") in (1, True, "1"))
-        wr = (correct / evaluated * 100) if evaluated > 0 else 0.0
+        m = _agent_eval_metrics(rows)
+        total = int(m["total"])
+        evaluated = int(m["evaluated"])
+        wr = float(m["win_rate_pct"])
         confs = [float(r["confidence"]) for r in rows if r.get("confidence") is not None]
         avg_c = (sum(confs) / len(confs)) if confs else 0.0
 
