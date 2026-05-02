@@ -146,6 +146,29 @@ def _launch(p: Portfolio) -> threading.Thread:
 _last_postmortem_date = None
 
 
+def _run_digest_and_weekly_at_postmortem_hour(portfolio: Portfolio, now: datetime) -> None:
+    """Run daily postmortem, digest, and weekly report (Sunday only) when hour matches."""
+
+    global _last_postmortem_date
+    today = now.date()
+    if now.hour != POSTMORTEM_HOUR or _last_postmortem_date == today:
+        return
+    try:
+        run_daily_postmortem(portfolio)
+    except Exception as _e:
+        portfolio.log(f"Postmortem error: {_e}", "error")
+    try:
+        run_daily_digest(portfolio)
+    except Exception as _e:
+        portfolio.log(f"Daily digest error: {_e}", "error")
+    if now.weekday() == 6:
+        try:
+            run_weekly_report(portfolio)
+        except Exception as _e:
+            portfolio.log(f"Weekly report error: {_e}", "error")
+    _last_postmortem_date = today
+
+
 def start_controller() -> None:
     """Create the live portfolio and start agent + postmortem threads.
 
@@ -175,11 +198,9 @@ def start_controller() -> None:
 
 
 def _postmortem_loop(p: Portfolio) -> None:
-    global _last_postmortem_date
     while True:
         time.sleep(60)
         now = datetime.now()
-        today = now.date()
 
         # Resolve any due pending trade evaluations every minute — independent
         # of the daily postmortem schedule. Skipped in simulation mode because
@@ -193,18 +214,4 @@ def _postmortem_loop(p: Portfolio) -> None:
             except Exception as exc:
                 p.log(f"evaluate_pending_trades error: {exc}", "error")
 
-        if now.hour == POSTMORTEM_HOUR and _last_postmortem_date != today:
-            try:
-                run_daily_postmortem(p)
-            except Exception as _e:
-                p.log(f"Postmortem error: {_e}", "error")
-            try:
-                run_daily_digest(p)
-            except Exception as _e:
-                p.log(f"Daily digest error: {_e}", "error")
-            if now.weekday() == 6:
-                try:
-                    run_weekly_report(p)
-                except Exception as _e:
-                    p.log(f"Weekly report error: {_e}", "error")
-            _last_postmortem_date = today
+        _run_digest_and_weekly_at_postmortem_hour(p, now)
