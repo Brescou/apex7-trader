@@ -672,7 +672,8 @@ def fetch_correlation_matrix(symbols: list[str], period: str = "3mo") -> dict[st
     return {"symbols": list(out["symbols"]), "matrix": [list(r) for r in out["matrix"]]}
 
 
-# Scheduled macro prints (FOMC / CPI / NFP). Refresh quarterly from Fed & BLS calendars.
+# ⚠️ UPDATE QUARTERLY — last verified: 2026-Q2
+# If today > last date in list, logger.warning fires automatically
 _SCHEDULED_MACRO_EVENTS: list[dict[str, str]] = [
     {"date": "2026-01-09", "event": "NFP", "importance": "high"},
     {"date": "2026-01-14", "event": "CPI", "importance": "high"},
@@ -724,6 +725,14 @@ def build_economic_calendar_rows(
         symbols: Watchlist tickers for ``fetch_earnings_calendar``.
         horizon_days: Only include events from today through this many days.
     """
+    if _SCHEDULED_MACRO_EVENTS:
+        last_event_date = max(e["date"] for e in _SCHEDULED_MACRO_EVENTS)
+        if datetime.now().strftime("%Y-%m-%d") > last_event_date:
+            logger.warning(
+                "_SCHEDULED_MACRO_EVENTS is stale — last event was %s. Update market_data.py.",
+                last_event_date,
+            )
+
     today = date.today()
     rows: list[dict[str, Any]] = []
     end_offset = timedelta(days=horizon_days)
