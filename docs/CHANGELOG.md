@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased] — Feature Sprint v4
+
+### Added
+
+- **Dashboard auth (optional):** set `DASHBOARD_PASSWORD` to gate the UI behind a styled `/login` page (signed Flask session; `DASHBOARD_SECRET_KEY` keeps sessions across restarts). `/health` stays open for monitoring; unauthenticated Dash XHRs get a 401. Disabled by default (localhost usage unchanged). Tests: `tests/test_auth.py`.
+- **A/B prompts panel (analytics):** new « Prompt versions (A/B) » section grouping trades by `prompt_version` — volumes BUY/SELL, confiance moyenne, **win rate validé marché** (`was_correct` via `trace_id` join sur `agent_memory`), période couverte. Chip « non significatif » sous 30 trades évalués. Loader : `_load_prompt_version_stats()` (`dashboard/layout/loaders.py`). Tests : `tests/test_prompt_versions.py`.
+
 ## [Unreleased] — Feature Sprint v3
 
 ### Changed

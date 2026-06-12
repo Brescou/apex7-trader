@@ -54,7 +54,7 @@ def tmp_db(tmp_path, monkeypatch):
 
     import agents.shared.db as db_mod
 
-    db_mod._db_initialized = False
+    db_mod._db_initialized_paths.discard(str(db))
     db_mod._ensure_db()
     yield db
-    db_mod._db_initialized = False
+    db_mod._db_initialized_paths.discard(str(db))

@@ -85,6 +85,10 @@ def setup_layout() -> None:
                     dcc.Store(id="price-alerts-store", data=[]),
                     dcc.Store(id="screener-results-store", data=[]),
                     dcc.Store(id="screener-active-store", data=False),
+                    # Signature of the last rendered watchlist grid; lets
+                    # _update_watchlist skip the (expensive) 20-card rebuild
+                    # when no displayed field has changed between ticks.
+                    dcc.Store(id="watchlist-render-sig", data=None),
                     dcc.Store(id="cli-history-store", data=[]),
                     dcc.Store(id="cli-history-pos", data=-1),
                     dcc.Store(id="cli-keyboard-event", data=None),

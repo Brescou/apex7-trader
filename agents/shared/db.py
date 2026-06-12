@@ -98,7 +98,9 @@ CREATE INDEX IF NOT EXISTS idx_pending_eval_due
 
 
 _db_init_lock = threading.Lock()
-_db_initialized = False
+# Keyed by resolved DB path so a thread initializing one path (e.g. the project
+# DBs) never marks a different path (e.g. a test tmp DB) as initialized.
+_db_initialized_paths: set[str] = set()
 
 
 def _seed_watchlist_if_empty(con: sqlite3.Connection) -> None:
@@ -172,18 +174,25 @@ def _init_db() -> None:
                 con.commit()
             except sqlite3.OperationalError:
                 pass
+            try:
+                con.execute(
+                    "ALTER TABLE pending_evaluations ADD COLUMN retry_count INTEGER DEFAULT 0"
+                )
+                con.commit()
+            except sqlite3.OperationalError:
+                pass
 
 
 def _ensure_db() -> None:
     """Lazy DB initialisation — called on first write/read, not at import time."""
-    global _db_initialized
-    if _db_initialized:
+    path = str(_get_db_path())
+    if path in _db_initialized_paths:
         return
     with _db_init_lock:
-        if _db_initialized:
+        if path in _db_initialized_paths:
             return
         _init_db()
-        _db_initialized = True
+        _db_initialized_paths.add(path)
 
 
 def _db_write(query: str, params: tuple, *, retries: int = 3) -> bool:
@@ -251,6 +260,48 @@ def _db_write_multi(queries: list[tuple[str, tuple]], *, retries: int = 3) -> bo
             logger.error("SQLite unexpected error: %s", e)
             return False
     return False
+
+
+def mode_db_path(mode: str) -> Path:
+    """Resolve the SQLite file for a given runtime mode label.
+
+    ``mode`` is one of ``"live"`` / ``"paper"`` / ``"sim"``. Lets the
+    dashboard read a specific mode's DB regardless of the active mode (e.g.
+    the LIVE-vs-PAPER comparison panel). Unknown labels fall back to live.
+    """
+    return {
+        "live": _DB_ROOT / "trades.db",
+        "paper": _DB_ROOT / "trades_paper.db",
+        "sim": _DB_ROOT / "trades_sim.db",
+    }.get(mode, _DB_ROOT / "trades.db")
+
+
+def _db_read_at(db_path, query: str, params: tuple = (), *, retries: int = 3) -> list:
+    """Read from an explicit DB file (returns ``[]`` if the file is missing).
+
+    Unlike :func:`_db_read`, this does **not** route through
+    ``_get_db_path()`` / ``_ensure_db()`` — it reads whatever path is given
+    and never creates it. Used for cross-mode reads (LIVE vs PAPER) where the
+    target DB may not exist yet.
+    """
+    p = Path(db_path)
+    if not p.exists():
+        return []
+    for attempt in range(retries):
+        try:
+            with closing(sqlite3.connect(p, timeout=5)) as con:
+                con.execute("PRAGMA busy_timeout=5000")
+                return con.execute(query, params).fetchall()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e) and attempt < retries - 1:
+                time.sleep(0.1 * (attempt + 1))
+                continue
+            logger.error("SQLite read failed: %s (query=%s)", e, query[:80])
+            return []
+        except Exception as e:
+            logger.error("SQLite read failed: %s (query=%s)", e, query[:80])
+            return []
+    return []
 
 
 def _db_read(query: str, params: tuple = (), *, retries: int = 3) -> list:

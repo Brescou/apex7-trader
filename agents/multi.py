@@ -63,6 +63,7 @@ from config import (
 )
 from core.data import Portfolio
 from core.indicators import rsi as _rsi
+from core.metrics import kelly_fraction, win_stats
 from agents.shared.watchlist import get_watchlist
 
 logger = logging.getLogger("apex7.multi")
@@ -246,6 +247,78 @@ def _record_vote(
             _get_trace_id(),
         ),
     )
+
+
+# ── Specialist node scaffolding (shared by the 4 LLM specialists) ────────────
+#
+# The 4 specialist nodes (technician/analyst/risk_manager/macro_watcher) share
+# identical plumbing: read recent lessons, append them to the system prompt,
+# call the LLM, parse+validate the JSON, then record the vote and return the
+# accumulator dict. The *prompts* and *signal building* genuinely differ per
+# agent, so those stay inline in each node; only the boilerplate is factored
+# out here to remove ~4× duplication and keep the ``_no_llm_mode()`` gate and
+# vote-recording in one place.
+
+
+def _recent_lessons(agent_name: str, limit: int = 5) -> list[str]:
+    """Most recent non-null lessons logged for ``agent_name`` (newest first)."""
+    rows = _db_read(
+        "SELECT lesson FROM agent_memory WHERE agent_name=? AND lesson IS NOT NULL "
+        "ORDER BY timestamp DESC LIMIT ?",
+        (agent_name, limit),
+    )
+    return [r[0] for r in rows if r[0]]
+
+
+def _with_lessons(system_prompt: str, lessons: list[str]) -> str:
+    """Append a ``Tes erreurs récentes`` block to a system prompt if any."""
+    if lessons:
+        system_prompt += "\nTes erreurs récentes :\n" + "\n".join(
+            f"  • {lesson}" for lesson in lessons
+        )
+    return system_prompt
+
+
+def _invoke_specialist(
+    model,
+    model_id: str,
+    user: str,
+    system: str,
+    max_tokens: int,
+    validator,
+    display_name: str,
+    web_search: bool = False,
+) -> dict:
+    """Run the LLM call + JSON parse + Pydantic validation for a specialist.
+
+    Returns a validated vote dict with ``agent_name`` set. Falls back to the
+    validator's safe defaults (``validator({})``) when the model returns
+    unparseable output.
+    """
+    text = _llm(
+        model,
+        model_id,
+        [{"role": "user", "content": user}],
+        system=system,
+        max_tokens=max_tokens,
+        web_search=web_search,
+    )
+    raw = _parse_json_obj(text)
+    vote = validator(raw) if raw else validator({})
+    vote["agent_name"] = display_name
+    return vote
+
+
+def _emit_vote(name: str, vote_key: str, vote: dict, logs: list) -> dict:
+    """Record the vote in ``agent_memory`` and build the node accumulator dict."""
+    _record_vote(
+        name,
+        vote.get("symbol", ""),
+        vote.get("action", "HOLD"),
+        vote.get("confidence", 0.5),
+        _record_source(),
+    )
+    return {"agent_votes": [vote], vote_key: vote, "log": logs}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -546,11 +619,7 @@ def technician_node(state: MultiAgentState) -> dict:
     wl = get_watchlist()
     logs = [_entry("technician: technical analysis")]
 
-    _rows = _db_read(
-        "SELECT lesson FROM agent_memory WHERE agent_name='technician' AND lesson IS NOT NULL "
-        "ORDER BY timestamp DESC LIMIT 5"
-    )
-    recent_lessons = [r[0] for r in _rows if r[0]]
+    recent_lessons = _recent_lessons("technician")
 
     rsi_map = {
         sym: _rsi(_live_price_history.get(sym, [prices.get(sym, 100.0)]))
@@ -567,11 +636,7 @@ def technician_node(state: MultiAgentState) -> dict:
         for sym, p in pos.items()
     }
 
-    system = TECHNICIAN_SYSTEM_PROMPT
-    if recent_lessons:
-        system += "\nTes erreurs récentes :\n" + "\n".join(
-            f"  • {lesson}" for lesson in recent_lessons
-        )
+    system = _with_lessons(TECHNICIAN_SYSTEM_PROMPT, recent_lessons)
     user = (
         f"TECHNICAL ANALYSIS — Cycle #{state['round']}\n\n"
         f"PRIX ACTUELS:\n{json.dumps({s: f'${p:.2f}' for s, p in prices.items()}, indent=2)}\n\n"
@@ -587,10 +652,7 @@ def technician_node(state: MultiAgentState) -> dict:
         '"bb": "lower|mid|upper", "trend": "up|down|sideways"}\n}'
     )
 
-    text = _llm(haiku, HAIKU_ID, [{"role": "user", "content": user}], system=system, max_tokens=512)
-    raw = _parse_json_obj(text)
-    vote = validate_tech_vote(raw) if raw else validate_tech_vote({})
-    vote["agent_name"] = "Technician"
+    vote = _invoke_specialist(haiku, HAIKU_ID, user, system, 512, validate_tech_vote, "Technician")
     ki = vote.get("key_indicators", {})
     rsi_val = ki.get("rsi") or rsi_map.get(vote.get("symbol", ""), 50.0)
     vote["signals"] = [
@@ -604,14 +666,7 @@ def technician_node(state: MultiAgentState) -> dict:
             f"technician: {vote.get('action')} {vote.get('symbol','')} conf={vote.get('confidence',0):.0%}"
         )
     )
-    _record_vote(
-        "technician",
-        vote.get("symbol", ""),
-        vote.get("action", "HOLD"),
-        vote.get("confidence", 0.5),
-        _record_source(),
-    )
-    return {"agent_votes": [vote], "tech_vote": vote, "log": logs}
+    return _emit_vote("technician", "tech_vote", vote, logs)
 
 
 def analyst_node(state: MultiAgentState) -> dict:
@@ -623,17 +678,9 @@ def analyst_node(state: MultiAgentState) -> dict:
     wl = get_watchlist()
     logs = [_entry("analyst: fundamental + sentiment analysis")]
 
-    _rows = _db_read(
-        "SELECT lesson FROM agent_memory WHERE agent_name='analyst' AND lesson IS NOT NULL "
-        "ORDER BY timestamp DESC LIMIT 5"
-    )
-    recent_lessons = [r[0] for r in _rows if r[0]]
+    recent_lessons = _recent_lessons("analyst")
 
-    system = ANALYST_SYSTEM_PROMPT
-    if recent_lessons:
-        system += "\nTes erreurs récentes :\n" + "\n".join(
-            f"  • {lesson}" for lesson in recent_lessons
-        )
+    system = _with_lessons(ANALYST_SYSTEM_PROMPT, recent_lessons)
     user = (
         f"FUNDAMENTAL ANALYSIS — Cycle #{state['round']}\n\n"
         f"NEWS RÉCENTES:\n{(state.get('news') or 'Aucune news')[:600]}\n\n"
@@ -649,17 +696,16 @@ def analyst_node(state: MultiAgentState) -> dict:
         '  "sentiment_score": 0.0\n}'
     )
 
-    text = _llm(
+    vote = _invoke_specialist(
         sonnet,
         SONNET_ID,
-        [{"role": "user", "content": user}],
-        system=system,
-        max_tokens=512,
+        user,
+        system,
+        512,
+        validate_analyst_vote,
+        "Analyst",
         web_search=True,
     )
-    raw = _parse_json_obj(text)
-    vote = validate_analyst_vote(raw) if raw else validate_analyst_vote({})
-    vote["agent_name"] = "Analyst"
     sent_score = vote.get("sentiment_score", 0.0)
     catalysts_list = vote.get("catalysts", [])
     vote["signals"] = [
@@ -671,14 +717,7 @@ def analyst_node(state: MultiAgentState) -> dict:
             f"analyst: {vote.get('action')} {vote.get('symbol','')} conf={vote.get('confidence',0):.0%}"
         )
     )
-    _record_vote(
-        "analyst",
-        vote.get("symbol", ""),
-        vote.get("action", "HOLD"),
-        vote.get("confidence", 0.5),
-        _record_source(),
-    )
-    return {"agent_votes": [vote], "analyst_vote": vote, "log": logs}
+    return _emit_vote("analyst", "analyst_vote", vote, logs)
 
 
 def risk_manager_node(state: MultiAgentState) -> dict:
@@ -690,27 +729,30 @@ def risk_manager_node(state: MultiAgentState) -> dict:
     pv = _portfolio_value(state)
     logs = [_entry("risk_manager: risk metrics calculation")]
 
-    _rows = _db_read(
-        "SELECT lesson FROM agent_memory WHERE agent_name='risk_manager' AND lesson IS NOT NULL "
-        "ORDER BY timestamp DESC LIMIT 5"
-    )
-    recent_lessons = [r[0] for r in _rows if r[0]]
+    recent_lessons = _recent_lessons("risk_manager")
 
     exposure = (pv - balance) / pv if pv > 0 else 0.0
     danger_ratio = pv / INITIAL_BALANCE
+    risk_metrics = state.get("risk_metrics") or {}
     var_1d = pv * 0.025
 
-    win_rate_est = 0.55
-    avg_win_est = 0.08
-    avg_loss_est = 0.05
-    kelly_f = (win_rate_est * avg_win_est - (1 - win_rate_est) * avg_loss_est) / avg_win_est
+    # Kelly from actual closed-trade outcomes (postmortem.pnl_pct, stored in %).
+    # Falls back to conservative priors below 5 closed trades.
+    pnl_rows = _db_read(
+        "SELECT pnl_pct FROM postmortem WHERE pnl_pct IS NOT NULL "
+        "ORDER BY timestamp DESC LIMIT 20"
+    )
+    pnl_fracs = [float(r[0]) / 100.0 for r in pnl_rows]
+    kelly_source = "réel (postmortem)"
+    if len(pnl_fracs) >= 5:
+        win_rate_est, avg_win_est, avg_loss_est = win_stats(pnl_fracs)
+    else:
+        win_rate_est, avg_win_est, avg_loss_est = 0.55, 0.08, 0.05
+        kelly_source = "estimé (< 5 trades clôturés)"
+    kelly_f = kelly_fraction(win_rate_est, avg_win_est, avg_loss_est)
     kelly_alloc = max(0, min(kelly_f * 100, MAX_ALLOC_PCT))
 
-    system = RISK_MANAGER_SYSTEM_PROMPT
-    if recent_lessons:
-        system += "\nTes erreurs récentes :\n" + "\n".join(
-            f"  • {lesson}" for lesson in recent_lessons
-        )
+    system = _with_lessons(RISK_MANAGER_SYSTEM_PROMPT, recent_lessons)
     user = (
         f"RISK ASSESSMENT — Cycle #{state['round']}\n\n"
         f"MÉTRIQUES CALCULÉES (Python pur) :\n"
@@ -719,7 +761,11 @@ def risk_manager_node(state: MultiAgentState) -> dict:
         f"  Exposure:           {exposure:.1%}\n"
         f"  Danger ratio:       {danger_ratio:.2f} (mort si < {DEATH_THRESHOLD/INITIAL_BALANCE:.2f})\n"
         f"  VaR 95% 1j:        ${var_1d:.2f}\n"
-        f"  Kelly allocation:   {kelly_alloc:.1f}%\n"
+        f"  Kelly allocation:   {kelly_alloc:.1f}% — {kelly_source} "
+        f"(win rate {win_rate_est:.0%}, avg win {avg_win_est:.1%}, avg loss {avg_loss_est:.1%})\n"
+        f"  Sharpe (indicatif): {risk_metrics.get('sharpe', 0.0):.2f}\n"
+        f"  Max drawdown:       {risk_metrics.get('max_drawdown_pct', 0.0):.1f}%\n"
+        f"  Drawdown courant:   {risk_metrics.get('current_drawdown_pct', 0.0):.1f}%\n"
         f"  Positions:          {len(pos)}/{MAX_POSITIONS}\n\n"
         f"BRIEF SUPERVISEUR: {state.get('supervisor_brief', '')[:200]}\n\n"
         "Retourne ce JSON uniquement :\n"
@@ -730,10 +776,9 @@ def risk_manager_node(state: MultiAgentState) -> dict:
         '  "reasoning": "2 phrases",\n  "warnings": []\n}'
     )
 
-    text = _llm(haiku, HAIKU_ID, [{"role": "user", "content": user}], system=system, max_tokens=400)
-    raw = _parse_json_obj(text)
-    vote = validate_risk_vote(raw) if raw else validate_risk_vote({})
-    vote["agent_name"] = "Risk Manager"
+    vote = _invoke_specialist(
+        haiku, HAIKU_ID, user, system, 400, validate_risk_vote, "Risk Manager"
+    )
     vote.setdefault("action", "HOLD")
     vote.setdefault("symbol", "")
     vote.setdefault("confidence", 0.5)
@@ -743,7 +788,10 @@ def risk_manager_node(state: MultiAgentState) -> dict:
         f"Danger ratio: {danger_ratio:.2f} (death at {DEATH_THRESHOLD/INITIAL_BALANCE:.2f})",
         f"Exposure: {exposure:.0%}",
         f"VaR 95% 1d: ${var_1d:.2f}",
-        f"Kelly allocation: {kelly_alloc:.1f}%",
+        f"Kelly allocation: {kelly_alloc:.1f}% ({kelly_source})",
+        f"Sharpe: {risk_metrics.get('sharpe', 0.0):.2f} | "
+        f"DD: {risk_metrics.get('current_drawdown_pct', 0.0):.1f}% "
+        f"(max {risk_metrics.get('max_drawdown_pct', 0.0):.1f}%)",
         f"Sizing: {vote.get('sizing_recommendation', 'N/A')}",
     ] + vote.get("warnings", [])
 
@@ -754,14 +802,7 @@ def risk_manager_node(state: MultiAgentState) -> dict:
             f"VaR=${vote.get('var_1d',0):.0f}"
         )
     )
-    _record_vote(
-        "risk_manager",
-        vote.get("symbol", ""),
-        vote.get("action", "HOLD"),
-        vote.get("confidence", 0.5),
-        _record_source(),
-    )
-    return {"agent_votes": [vote], "risk_vote": vote, "log": logs}
+    return _emit_vote("risk_manager", "risk_vote", vote, logs)
 
 
 def macro_watcher_node(state: MultiAgentState) -> dict:
@@ -773,19 +814,11 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
     pos = state["positions"]
     logs = [_entry("macro_watcher: regime analysis")]
 
-    _rows = _db_read(
-        "SELECT lesson FROM agent_memory WHERE agent_name='macro_watcher' AND lesson IS NOT NULL "
-        "ORDER BY timestamp DESC LIMIT 5"
-    )
-    recent_lessons = [r[0] for r in _rows if r[0]]
+    recent_lessons = _recent_lessons("macro_watcher")
 
     avg_sent = sum(sentiment.values()) / max(len(sentiment), 1)
 
-    system = MACRO_WATCHER_SYSTEM_PROMPT
-    if recent_lessons:
-        system += "\nTes erreurs récentes :\n" + "\n".join(
-            f"  • {lesson}" for lesson in recent_lessons
-        )
+    system = _with_lessons(MACRO_WATCHER_SYSTEM_PROMPT, recent_lessons)
     macro_indicators = state.get("macro_indicators") or {}
     fear_greed = state.get("fear_greed")
     system += (
@@ -809,10 +842,9 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
         '  "macro_score": 0.0\n}'
     )
 
-    text = _llm(haiku, HAIKU_ID, [{"role": "user", "content": user}], system=system, max_tokens=400)
-    raw = _parse_json_obj(text)
-    vote = validate_macro_vote(raw) if raw else validate_macro_vote({})
-    vote["agent_name"] = "Macro Watcher"
+    vote = _invoke_specialist(
+        haiku, HAIKU_ID, user, system, 400, validate_macro_vote, "Macro Watcher"
+    )
     vote.setdefault("action", "HOLD")
     vote.setdefault("symbol", "")
     vote.setdefault("confidence", 0.5)
@@ -832,14 +864,7 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
             f"score={vote.get('macro_score',0):+.2f}"
         )
     )
-    _record_vote(
-        "macro_watcher",
-        vote.get("symbol", ""),
-        vote.get("action", "HOLD"),
-        vote.get("confidence", 0.5),
-        _record_source(),
-    )
-    return {"agent_votes": [vote], "macro_vote": vote, "log": logs}
+    return _emit_vote("macro_watcher", "macro_vote", vote, logs)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

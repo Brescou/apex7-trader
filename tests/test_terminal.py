@@ -299,7 +299,7 @@ def test_correlation_matrix_multiindex(monkeypatch) -> None:
 
 def test_fear_greed_in_macro() -> None:
     """Macro bar callback surfaces CNN Fear & Greed score when mocked."""
-    import dashboard.callbacks.terminal as term
+    import dashboard.callbacks.terminal.macro as term
 
     macro_stub = {
         "updated_at": "",
@@ -321,7 +321,7 @@ def test_fear_greed_in_macro() -> None:
 
 def test_earnings_calendar_in_terminal() -> None:
     """Economic calendar callback shows mocked earnings line from watchlist."""
-    import dashboard.callbacks.terminal as term
+    import dashboard.callbacks.terminal.macro as term
 
     row = {
         "kind": "earnings",

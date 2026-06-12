@@ -22,6 +22,140 @@ from dashboard.server import (
 )
 
 
+def _walk_forward_section(symbol: str, period: str, strategy: str) -> html.Div:
+    """Out-of-sample robustness panel — per-fold returns + consistency summary."""
+    from core.backtest import walk_forward_backtest as _wf
+
+    try:
+        wf = _wf(symbol=symbol, period=period, strategy=strategy, n_folds=4)
+    except Exception:
+        return html.Div()
+
+    folds = wf.get("folds", [])
+    if not folds:
+        return html.Div(
+            "Walk-forward: insufficient data (need a longer period).",
+            style={
+                "color": TEXT_DIM,
+                "fontSize": "10px",
+                "fontStyle": "italic",
+                "padding": "10px",
+                "marginTop": "16px",
+            },
+        )
+
+    cols = "40px 1fr 60px 80px 70px 70px"
+    header = html.Div(
+        [
+            html.Span("FOLD"),
+            html.Span("WINDOW"),
+            html.Span("TRADES"),
+            html.Span("RETURN"),
+            html.Span("WIN%"),
+            html.Span("SHARPE"),
+        ],
+        style={
+            "display": "grid",
+            "gridTemplateColumns": cols,
+            "padding": "5px 10px",
+            "borderBottom": f"1px solid {BORDER}",
+            "fontSize": "9px",
+            "color": TEXT_DIM,
+            "letterSpacing": "0.1em",
+            "fontWeight": "700",
+        },
+    )
+    rows = []
+    for f in folds:
+        r = float(f["total_return_pct"])
+        rows.append(
+            html.Div(
+                [
+                    html.Span(str(f["fold"]), style={"fontSize": "10px", "color": TEXT_DIM}),
+                    html.Span(
+                        f"{f['start_date']} → {f['end_date']}",
+                        style={"fontSize": "10px", "color": TEXT_MAIN},
+                    ),
+                    html.Span(str(f["n_trades"]), style={"fontSize": "10px", "color": TEXT_DIM}),
+                    html.Span(
+                        f"{r:+.1f}%",
+                        style={
+                            "fontSize": "10px",
+                            "fontWeight": "700",
+                            "color": GREEN if r >= 0 else RED,
+                        },
+                    ),
+                    html.Span(
+                        f"{float(f['win_rate']):.0f}%",
+                        style={"fontSize": "10px", "color": TEXT_DIM},
+                    ),
+                    html.Span(
+                        f"{float(f['sharpe_ratio']):.2f}",
+                        style={"fontSize": "10px", "color": BLUE},
+                    ),
+                ],
+                style={
+                    "display": "grid",
+                    "gridTemplateColumns": cols,
+                    "padding": "6px 10px",
+                    "borderBottom": f"1px solid {BORDER}22",
+                    "alignItems": "center",
+                },
+            )
+        )
+
+    mean_r = float(wf.get("mean_return_pct", 0.0))
+    pct_prof = float(wf.get("pct_profitable_folds", 0.0))
+    summary = html.Div(
+        [
+            html.Span(
+                f"Mean fold return {mean_r:+.1f}%",
+                style={
+                    "fontSize": "10px",
+                    "fontWeight": "700",
+                    "color": GREEN if mean_r >= 0 else RED,
+                },
+            ),
+            html.Span(
+                f"  •  {pct_prof:.0f}% of folds profitable",
+                style={"fontSize": "10px", "color": TEXT_DIM, "marginLeft": "8px"},
+            ),
+        ],
+        style={
+            "padding": "8px 10px",
+            "borderTop": f"1px solid {BORDER}",
+            "background": BG_CARD,
+        },
+    )
+
+    return html.Div(
+        [
+            html.Div(
+                "WALK-FORWARD (out-of-sample)",
+                style={
+                    "fontSize": "9px",
+                    "fontWeight": "700",
+                    "letterSpacing": "0.18em",
+                    "color": TEXT_DIM,
+                    "textTransform": "uppercase",
+                    "padding": "10px 10px 6px",
+                    "borderBottom": f"1px solid {BORDER}",
+                },
+            ),
+            header,
+            html.Div(rows),
+            summary,
+        ],
+        style={
+            "background": BG_CARD,
+            "border": f"1px solid {BORDER}",
+            "borderRadius": "4px",
+            "overflow": "hidden",
+            "marginTop": "16px",
+        },
+    )
+
+
 @app.callback(
     Output("bt-results", "children"),
     Input("btn-backtest-run", "n_clicks"),
@@ -374,4 +508,13 @@ def _backtest_run(n_clicks, symbol, period, strategy):
         },
     )
 
-    return html.Div([kpi_row, dcc.Graph(figure=fig, config={"displayModeBar": False}), trade_table])
+    wf_section = _walk_forward_section(sym, per, strat)
+
+    return html.Div(
+        [
+            kpi_row,
+            dcc.Graph(figure=fig, config={"displayModeBar": False}),
+            trade_table,
+            wf_section,
+        ]
+    )

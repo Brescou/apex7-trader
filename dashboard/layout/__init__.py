@@ -13,9 +13,6 @@ from dashboard.layout.helpers import (
     _conf_bar_inline,
     _fmt_volume,
     _ind_cell,
-    _load_agent_memory,
-    _load_postmortem,
-    _load_trades_db,
     _live_agent_eval_banner,
     _log_entry_card,
     _macro_bar,
@@ -30,6 +27,12 @@ from dashboard.layout.helpers import (
     _sparkline,
     _tech_body_children,
     _watchlist_row,
+)
+from dashboard.layout.loaders import (
+    _load_agent_memory,
+    _load_postmortem,
+    _load_prompt_version_stats,
+    _load_trades_db,
 )
 from dashboard.layout.main import setup_layout
 
@@ -52,6 +55,7 @@ __all__ = [
     "_ind_cell",
     "_load_agent_memory",
     "_load_postmortem",
+    "_load_prompt_version_stats",
     "_load_trades_db",
     "_live_agent_eval_banner",
     "_log_entry_card",

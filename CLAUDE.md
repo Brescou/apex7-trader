@@ -50,7 +50,8 @@ apex7-trader/
 │   ├── charts.py
 │   ├── sectors.py
 │   ├── correlation.py
-│   ├── economic_calendar.py
+│   ├── economic_calendar.py ← FRED-backed CPI/NFP (+static FOMC fallback)
+│   ├── fundamentals.py    ← yf.Ticker.info → P/E, market cap, dividend (cache 1h)
 │   ├── screener.py
 │   └── helpers.py
 ├── pyproject.toml
@@ -88,15 +89,21 @@ apex7-trader/
 │   │   ├── live_tab.py
 │   │   ├── analytics_tab.py
 │   │   ├── terminal_tab.py
-│   │   ├── helpers.py
+│   │   ├── helpers.py     ← UI builders (cards, sparklines, agent cards)
+│   │   ├── loaders.py     ← DB read helpers (_load_trades_db / _load_agent_memory / _load_postmortem)
 │   │   ├── classify.py
 │   │   └── emotions.py
 │   └── callbacks/
 │       ├── __init__.py    ← imports all callback modules
 │       ├── live.py        ← live tab + tab routing (4 tabs)
-│       ├── analytics.py   ← analytics tab (+ trade postmortem section)
+│       ├── analytics.py   ← analytics tab (+ postmortem, LIVE vs PAPER, A/B prompts)
 │       ├── backtest_tab.py← backtest tab
-│       └── terminal.py    ← terminal tab (16 callbacks)
+│       └── terminal/      ← terminal tab callbacks (package)
+│           ├── __init__.py    ← imports macro/watchlist/charts (registers callbacks)
+│           ├── _shared.py     ← shared constants (macro keys, F&G bands, palette)
+│           ├── macro.py       ← macro bar, sector rotation, correlation, econ calendar
+│           ├── watchlist.py   ← watchlist grid, screener, alerts, compare, CSV export
+│           └── charts.py      ← symbol chart, news, comparison
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── CHANGELOG.md
@@ -157,9 +164,9 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `agents/shared/watchlist.py` | `get_watchlist`, `add_to_watchlist`, `remove_from_watchlist` — max 20 symbols |
 | `core/data.py` | `Portfolio` — thread-safe state; `LiveFeed` — multi-symbol yfinance wrapper |
 | `core/notifications.py` | Optional Discord webhook — callers pass `mode` / `watchlist_summary`; must not import `agents/` |
-| `core/external_data.py` | `fetch_fred_latest`, `fetch_macro_indicators`, `fetch_fear_greed` (CNN) |
+| `core/external_data.py` | `fetch_fred_latest`, `fetch_fred_release_dates` (release schedule), `fetch_macro_indicators`, `fetch_fear_greed` (CNN) |
 | `core/backtest.py` | Functional API (`fetch_historical`, `compute_indicators`, `run_backtest`, `compare_strategies`) |
-| `core/indicators.py` | Shared `rsi()` implementation used across agents, backtest, and market_data |
+| `core/indicators.py` | Canonical `rsi()`, `ema()`, `macd()`, `bollinger_bands()`, `bb_position()` — used across agents, backtest, market_data |
 | `core/registry.py` | Single `get_graph(p)` + `get_graph_info()` UI metadata |
 | `config.py` | All constants, loaded from `.env` |
 | `market_data/` | Package terminal — `macro`, `quotes`, `news`, `earnings`, `charts`, `sectors`, `correlation`, `economic_calendar`, `screener` ; **zéro** import `agents`/`dashboard` |
@@ -273,7 +280,7 @@ The `source` column on `trades`, `agent_memory`, and `postmortem` is one of `'li
    - Otherwise `was_correct` stays `NULL` (inconclusive) but the pending row is marked `evaluated=1` to avoid retry loops.
 3. `_compute_dynamic_weights` only blends accuracy when an agent has ≥ 5 evaluated votes (`_MIN_EVALUATED_VOTES`). Until then it returns the static `WEIGHTS` dict — the dashboard surfaces this as `⏳ Calibrating` / `✓ Market-validated` badges.
 
-All SQLite writes go through `_db_write()` / `_db_write_multi()` in `agents/shared/db.py` (retries, `with closing(...)`, logging on failure). All reads go through `_db_read()` in the same module: it uses `_get_db_path()` for sim vs live, triggers `_ensure_db()`, sets `PRAGMA busy_timeout=5000` per connection, and retries on lock contention — used via `agents.shared.nodes` re-exports by agent nodes, `dashboard/layout/helpers.py` (`_load_trades_db`, `_load_agent_memory`, `_load_postmortem`), and the live tab track-records block in `dashboard/callbacks/live.py`.
+All SQLite writes go through `_db_write()` / `_db_write_multi()` in `agents/shared/db.py` (retries, `with closing(...)`, logging on failure). All reads go through `_db_read()` in the same module: it uses `_get_db_path()` for sim vs live, triggers `_ensure_db()`, sets `PRAGMA busy_timeout=5000` per connection, and retries on lock contention — used via `agents.shared.nodes` re-exports by agent nodes, `dashboard/layout/loaders.py` (`_load_trades_db`, `_load_agent_memory`, `_load_postmortem`, re-exported through the `dashboard.layout` package), and the live tab track-records block in `dashboard/callbacks/live.py`.
 
 ### LiveFeed
 
@@ -327,17 +334,26 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 | `WATCHLIST_CACHE_SEC` | `10` | TTL for watchlist prices cache (`market_data.caches` / `quotes.py`) |
 | `NEWS_MAX_ITEMS` | `8` | Max news items returned by `fetch_news()` |
 | `MAX_PYRAMID_LAYERS` | `3` | Env `MAX_PYRAMID_LAYERS` — max BUY layers per symbol (`Portfolio.buy` pyramiding; weighted `avg_price`) |
+| `DASHBOARD_PASSWORD` | — | Optional; when set, gates the dashboard behind a `/login` page (`/health` stays open for monitoring). Unset = no auth (localhost default) |
+| `DASHBOARD_SECRET_KEY` | — | Optional; Flask session signing key — set it to keep logins across restarts (random per-process key otherwise) |
 
-`WATCHLIST`, `INITIAL_BALANCE`, `DEATH_THRESHOLD`, `MAX_POSITIONS`, `MAX_ALLOC_PCT`, `AGENT_INTERVAL`, `STOP_LOSS_PCT`, and `POSTMORTEM_HOUR` are hardcoded in `config.py` and not overridable by env vars.
+`WATCHLIST`, `INITIAL_BALANCE`, `DEATH_THRESHOLD`, `MAX_POSITIONS`, `MAX_ALLOC_PCT`, `AGENT_INTERVAL`, `STOP_LOSS_PCT`, `POSTMORTEM_HOUR`, and the trade-lifecycle guards (`TAKE_PROFIT_PCT` 10%, `TAKE_PROFIT_SELL_PCT` 50, `TIME_STOP_DAYS` 10, `TIME_STOP_BAND_PCT` 2%, `MAX_DRAWDOWN_BLOCK_PCT` 20%, `EARNINGS_BLOCK_DAYS` 2) are hardcoded in `config.py` and not overridable by env vars.
 
 ## Known pitfalls
 
 - **FRED API** — works without `FRED_API_KEY` for many popular JSON series, but responses are **rate-limited**. Set `FRED_API_KEY` in `.env` for higher quotas and more predictable access (`core/external_data.fetch_fred_latest`).
 - **Fear & Greed** — CNN `production.dataviz.cnn.io` endpoint is **undocumented** and may change without notice. `fetch_fear_greed` is **fail-silent** (bar shows `F&G: —` on failure).
 - **Earnings calendar** — `yf.Ticker.calendar` shape varies across **yfinance** versions (dict vs DataFrame, column names). `market_data.fetch_earnings_calendar` and `build_economic_calendar_rows` must stay wrapped in **try/except**; never assume a single format.
-- **`_SCHEDULED_MACRO_EVENTS`** — calendrier macro FOMC/CPI/NFP **hardcodé** dans `market_data/economic_calendar.py` ; **mettre à jour trimestriellement**. Le code émet un `logger.warning` lorsque la date du jour dépasse la dernière date de la liste (calendrier périmé).
+- **`_SCHEDULED_MACRO_EVENTS`** — calendrier macro **fallback** dans `market_data/economic_calendar.py`. CPI/NFP sont désormais récupérés via FRED (`fetch_fred_release_dates`, ids 10/50) par `_get_macro_events()` ; le **FOMC** (pas un *release* FRED) et le mode **hors-ligne** retombent sur cette liste statique — **toujours à mettre à jour trimestriellement**. `logger.warning` se déclenche si la date du jour dépasse la dernière date de la liste.
+- **`market_data/fundamentals.py`** — `fetch_fundamentals(symbol)` via `yf.Ticker(...).info`, **cache 1 h** (lourd + rate-limité, ne jamais appeler par tick). Fail-silent : sert le cache stale ou `{}` en cas d'échec. Surfacé sous le chart du terminal (`_fundamentals_strip`).
+- **`walk_forward_backtest`** — `core/backtest.py` découpe l'historique en N folds disjoints et rejoue `_simulate` (extrait de `run_backtest`, logique d'exécution partagée) sur chacun depuis le cash initial → rendement moyen / % de folds gagnants / consistance. Surfacé dans l'onglet backtest.
+- **Reads cross-mode** — `_db_read_at(path, query)` + `mode_db_path(mode)` (`agents/shared/db.py`, réexportés via `agents.shared.nodes`) lisent un fichier DB **explicite** (`trades.db` / `trades_paper.db`) sans passer par `_get_db_path()` et **sans créer** le fichier (retourne `[]` s'il manque) — utilisés par le panneau LIVE vs PAPER de l'onglet analytics.
 - **`fetch_earnings_calendar`** — réponses **mises en cache 5 min** (`_EARNINGS_TTL`, clé = ensemble de symboles trié). Ne pas l’appeler directement depuis un callback Dash **à chaque tick** sans passer par ce cache (surcharge yfinance).
 - **Pyramiding** — `MAX_PYRAMID_LAYERS` (default 3, env `MAX_PYRAMID_LAYERS`) caps successive BUYs on the same symbol; `avg_price` is recomputed as a **share-weighted** average. Past the cap, `buy()` returns `{"success": False, "error": "max pyramid layers (…) reached"}` — `execute_node` checks `result["success"]`. **`high_watermarks`** for trailing stop is set on the **first** open only — pyramids do **not** reset it.
+- **Trade lifecycle guards in `execute_node`** — beyond the trailing stop: partial **take-profit** (sells `TAKE_PROFIT_SELL_PCT`% once at +`TAKE_PROFIT_PCT` vs `avg_price`; the per-position `tp_taken` flag prevents re-firing), **time-stop** (full exit when held > `TIME_STOP_DAYS` calendar days with PnL within ±`TIME_STOP_BAND_PCT`; needs `opened_at`, set on first open — legacy positions without it are skipped), and a **drawdown guard** (BUY converted to no-op when drawdown from `peak_value` ≥ `MAX_DRAWDOWN_BLOCK_PCT`).
+- **Earnings hard block** — `risk_check_node` **fails** a BUY when earnings are within `EARNINGS_BLOCK_DAYS` (2) days (uses `state["earnings_calendar"]`, already fetched per cycle); 3–5 days out still only damps allocation (×0.65 via `is_earnings_week`). A **volatility guard** in the same node damps allocation (×0.75 above 2% daily vol, ×0.5 above 3%) using the same close series as RSI.
+- **`core/metrics.py`** — canonical Sharpe/Sortino/max-drawdown/Kelly/volatility implementations (pure functions, no I/O). `core/backtest.py` and `_compute_risk_metrics` in `agents/shared/nodes.py` (state key `risk_metrics`, consumed by `risk_manager_node`) both use it — do not re-implement these metrics elsewhere. `risk_manager_node` computes Kelly from **real** `postmortem.pnl_pct` rows once ≥ 5 closed trades exist (conservative priors before that).
+- **`pending_evaluations.retry_count`** — incremented when `_fast_last_price` returns `None`; the row is abandoned (`evaluated=1` + warning) after 10 consecutive failures (`_MAX_EVAL_RETRIES` in `agents/shared/eval.py`). Soft-migrated like the other columns.
 - **Watchlist DB** — at most **20** symbols (`agents.shared.watchlist.MAX_WATCHLIST_SYMBOLS`). **`remove_from_watchlist`** refuses to drop a ticker that still has an **open position** (`open_symbols`).
 - **`core/` dependency rule** — **`core/` must NEVER import from `agents/` or `dashboard/`**. Pass runtime data (e.g. watchlist symbols, `get_runtime_mode()`) as **parameters** from callers in `agents/` or `dashboard/`.
 - **Discord webhook alerts** — `core.notifications` uses fire-and-forget `httpx.post` (5s timeout). Fail-silent on errors; never blocks the agent loop. Wire points use lazy imports (`core.data` ↔ `agents.shared.nodes`). Leave `DISCORD_WEBHOOK_URL` unset to disable.
@@ -355,16 +371,17 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`LiveFeed` not wired into graph nodes** — `LiveFeed` is wired into `Portfolio.fetch_prices()` only; it is not a LangGraph node.
 - **`core/registry.py` description** — update `GRAPH_INFO["description"]` if a 5th specialist is added to `agents/multi.py`.
 - **Postmortem thread only in `dashboard/controller.py`** — `run_daily_postmortem()` is never called from `main.py`. It only runs when the full Dash app is started.
-- **`market_data` caches** — macro 60s, watchlist 10s (`market_data.caches`) pour limiter yfinance. Cache mémoire uniquement ; reset au redémarrage.
+- **`market_data` caches** — macro 60s, watchlist 10s (`market_data.caches`) pour limiter yfinance. Cache mémoire uniquement ; reset au redémarrage. Un **circuit breaker yfinance** (`yf_circuit_open` / `record_yf_failure` / `record_yf_success` dans `caches.py`) s'ouvre après 3 échecs consécutifs et sert le cache stale pendant 60 s — câblé dans `quotes.py` et `macro.py`.
+- **Sentiment Twitter neutre sans token** — `_fetch_sentiment_sync` retourne `0.0` par symbole quand `X_BEARER_TOKEN` est absent (plus de bruit aléatoire ±0.3 traité comme signal).
 - **`market_data` découpé** — package sans import `agents/` ou `dashboard/` (règle inchangée).
 - **`USE_LIVEFEED=False` in tests** — set via env or config override to avoid yfinance rate limiting during test runs.
 - **`portfolio_state.json` created on first run** — added to `.gitignore`, do not commit.
 - **`PORTFOLIO_SAVE_ENABLED=True` by default** — set to `False` in unit tests to avoid disk writes.
-- **`dashboard/callbacks/__init__.py` must import all callback modules** — `live`, `analytics`, `backtest_tab`, `terminal` must all be imported. If any are missing, those `@app.callback` decorators are never registered and the corresponding UI updates silently fail.
+- **`dashboard/callbacks/__init__.py` must import all callback modules** — `live`, `analytics`, `backtest_tab`, `terminal`, `cli` must all be imported. If any are missing, those `@app.callback` decorators are never registered and the corresponding UI updates silently fail. `terminal` is a **package** (`terminal/{macro,watchlist,charts}.py`); its `__init__.py` must import all three submodules for the same reason. Tests that patch terminal symbols must target the **submodule** where the function lives (e.g. `dashboard.callbacks.terminal.macro`), not the package.
 - **`agents/` → `dashboard/` import direction is forbidden** — `agents/shared/nodes.py` imports from `core.data`. Never import from `dashboard` in any `agents/` file. This violates the one-way dependency rule (dashboard depends on agents/core, not the reverse).
-- **Lazy DB init** — `_init_db()` is no longer called at import time. It runs lazily on first `_db_write`/`_db_read`/`_db_write_multi` call via `_ensure_db()`. Importing `agents/shared/nodes.py` no longer creates SQLite tables. Importing `dashboard/controller.py` does not create a `Portfolio` until `start_controller()` is called explicitly. Importing `agents/multi.py` compiles the LangGraph graph at module level (for LangGraph Studio compatibility).
-- **RSI computed in `core/indicators.py`** — a single canonical `rsi()` function. Do not re-implement RSI elsewhere.
-- **`_db_write()` / `_db_read()` centralize all SQLite access** — never open raw `sqlite3.connect()` anywhere — not in agent nodes, not in `dashboard/layout/helpers.py`, not in `dashboard/callbacks/`. Always use `_db_write()` or `_db_read()` from `agents.shared.nodes` (implementations in `agents.shared.db`; dashboard loaders use `_db_read()` so analytics match sim/live mode).
+- **Lazy DB init** — `_init_db()` is no longer called at import time. It runs lazily on first `_db_write`/`_db_read`/`_db_write_multi` call via `_ensure_db()`. Importing `agents/shared/nodes.py` no longer creates SQLite tables. Importing `dashboard/controller.py` does not create a `Portfolio` until `start_controller()` is called explicitly. Importing `agents/multi.py` compiles the LangGraph graph at module level (for LangGraph Studio compatibility). Initialization state is tracked **per resolved DB path** (`_db_initialized_paths` set) so initializing one path never marks another (e.g. a test tmp DB) as done.
+- **RSI/MACD/Bollinger in `core/indicators.py`** — canonical `rsi()`, `ema()`, `macd()`, `bollinger_bands()`, `bb_position()`. Do not re-implement them elsewhere. The scalar `macd()`/`bollinger_bands()` use the same `ewm(adjust=False)` + sample-std (ddof=1) conventions as `core/backtest.py compute_indicators`, so the latest values match across the technician, terminal watchlist (`macd_hist`/`bb_pos` in `fetch_watchlist_prices`), and backtest — verified by `tests/test_indicators.py`.
+- **`_db_write()` / `_db_read()` centralize all SQLite access** — never open raw `sqlite3.connect()` anywhere — not in agent nodes, not in `dashboard/layout/loaders.py`, not in `dashboard/callbacks/`. Always use `_db_write()` or `_db_read()` from `agents.shared.nodes` (implementations in `agents.shared.db`; dashboard DB loaders live in `dashboard/layout/loaders.py` and use `_db_read()` so analytics match sim/live mode).
 - **\_live\_price\_history warm-up** — en live mode, le RSI retourne 50.0 (`insufficient data`) pendant les 14 premiers cycles (~7 min) si la série n’est pas encore prête. Le technician est aveugle pendant cette période (mitigation : seed daily + append par jour, sprint v3).
 - **Live mode `technician_node` RSI** — Live closes are appended in `fetch_data_node` (live path) to `_live_price_history` in `agents/shared/nodes.py` (last 100 per symbol). The multi-agent `technician_node` uses that series for RSI; simulation still uses `_sim_price_history` from `_sim_step_prices()`.
 - **`_route_risk` fail-closed** — `_route_risk` defaults `_risk_passed` to `False` (fail-closed). If `risk_check_node` fails to write `_risk_passed`, the graph skips execution instead of proceeding.
@@ -382,6 +399,8 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **Postmortem thread also runs `evaluate_pending_trades`** — every 60 s tick, regardless of `POSTMORTEM_HOUR`. Skipped under SIM mode (random-walk prices would corrupt `was_correct`); runs under LIVE and PAPER.
 - **Raw `sqlite3.connect` removed from dashboard** — layout/helpers and callbacks use `_db_read()` / `_load_*()` helpers so tabs follow the active DB path. Do not reintroduce `sqlite3.connect(DB_PATH)` outside `agents/shared/db.py`.
 - **`agent_memory.trace_id` invariant** — must exist in `_SCHEMA` AND be written by `_record_vote`. If either is missing, `evaluate_pending_trades` silently fails (UPDATE matches zero rows) and `was_correct` stays NULL forever. The regression guard is `tests/test_smoke.py::test_agent_memory_has_trace_id`.
+- **Dashboard auth gate** — `_require_auth` (`before_request` in `dashboard/server.py`) is active only when `DASHBOARD_PASSWORD` is set; `_auth_enabled()` reads `config.DASHBOARD_PASSWORD` at **request time** (tests monkeypatch it). `/login`, `/logout`, `/health` and favicons are exempt; unauthenticated GETs redirect to `/login`, non-GETs (Dash XHR) get **401**. Without `DASHBOARD_SECRET_KEY`, the session key is random per process — every restart logs users out.
+- **A/B prompts panel** — `_load_prompt_version_stats()` (`dashboard/layout/loaders.py`) joins `trades.trace_id` → `agent_memory.was_correct` (MAX() per trace dedupes the 4 agent rows, all carrying the same verdict). The « validated win rate » is therefore the deferred market evaluation, NOT the arbitration consensus; the card shows a « non significatif » chip below 30 evaluated trades (`_AB_MIN_EVALUATED` in `dashboard/callbacks/analytics.py`). Bump `PROMPT_VERSION` in `agents/shared/prompts.py` after any prompt change to start a new comparable series.
 
 ## Code conventions
 

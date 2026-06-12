@@ -41,13 +41,12 @@ The entire reasoning process is visible in real time on the terminal dashboard.
 
 ## Architecture overview
 
-### Simple graph (`AGENT_GRAPH=simple`)
+### Runtime topology
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   dashboard/ (Dash)                          │
-│  LIVE · ANALYTICS · BACKTEST · LEADERBOARD · HEATMAP ·      │
-│  AGENTS · TERMINAL                                          │
+│  LIVE · ANALYTICS · BACKTEST · TERMINAL                      │
 │  dcc.Interval (2s) → callbacks → portfolio state display    │
 └──────────────────────────┬──────────────────────────────────┘
                            │ reads
@@ -62,32 +61,15 @@ The entire reasoning process is visible in real time on the terminal dashboard.
 └──────────────────────────┬──────────────────────────────────┘
                            │ invokes
 ┌──────────────────────────▼──────────────────────────────────┐
-│         LangGraph compiled graph (agents/simple.py)          │
-│                                                             │
-│  __start__                                                  │
-│      │                                                      │
-│  load_memory   ← SQLite (last 20 trades + patterns)         │
-│      │                                                      │
-│  fetch_data    ← yfinance prices + news + Twitter sentiment  │
-│      │                                                      │
-│  analyze       ← Claude Sonnet 4.5 + web_search tool        │
-│      │                                                      │
-│   conf ≥ 0.7 ──────────────────────────┐                   │
-│      │                                  │                   │
-│  research      ← Claude Sonnet + web    │                   │
-│   (max 2×)                              │                   │
-│      │──────────────────────────────────┘                   │
-│      │                                                      │
-│  risk_check    ← pure Python rules                          │
-│      │                                                      │
-│  pass ──► execute  ──► save_memory ← Claude Haiku 4.5       │
-│  fail ──► skip                                              │
-│                                                             │
-│  __end__                                                    │
+│        LangGraph compiled graph (agents/multi.py)            │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Multi-agent graph (`AGENT_GRAPH=multi`)
+There is a **single** compiled graph (`agents/multi.py:agent_multi_graph`),
+exposed to LangGraph Studio via `langgraph.json`. The legacy single-agent
+graph and the `AGENT_GRAPH` env toggle have been removed.
+
+### Multi-agent graph
 
 ```
   __start__
@@ -122,13 +104,15 @@ All specialist votes are validated through **Pydantic models** (`TechVote`, `Ana
 ### Persistence
 
 ```
-┌──────────────────────────────────────────────────┐
-│  trades.db (live) / trades_sim.db (simulation)    │
-│  tables: trades, patterns, agent_memory, postmortem │
-│  (trades: trace_id, prompt_version, source)        │
-│  WAL mode + busy_timeout=5000ms                   │
-│  All access via _db_write() / _db_read()          │
-└──────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│  trades.db (live) / trades_paper.db (paper) /              │
+│  trades_sim.db (simulation)                                │
+│  tables: trades, patterns, agent_memory, postmortem,       │
+│          pending_evaluations, watchlist                    │
+│  (trades: trace_id, prompt_version, source)                │
+│  WAL mode + busy_timeout=5000ms                            │
+│  All access via _db_write() / _db_read()                   │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -222,27 +206,27 @@ apex7-trader/
 ├── main.py                         # Entrypoint: app.run()
 ├── config.py                       # All constants, loaded from .env
 ├── market_data/                    # Package market data (macro, quotes, terminal…)
-├── leaderboard.py                  # Benchmarks 4 allocation strategies
 ├── langgraph.json                  # LangGraph Studio config
 ├── pyproject.toml                  # Dependencies (uv) + black/ruff/pytest config
 ├── Dockerfile                      # Multi-stage image (uv, python 3.12, port 8050)
 ├── .dockerignore
 ├── CLAUDE.md                       # Maintainer / agent context (detailed pitfalls)
 │
-├── agents/                         # Agent graphs and shared logic
-│   ├── simple.py                   # Simple graph (1 LLM agent)
+├── agents/                         # Agent graph and shared logic
 │   ├── multi.py                    # Multi-agent graph (4 specialists + arbitration)
 │   └── shared/
 │       ├── state.py                # AgentState, MultiAgentState TypedDicts
 │       ├── nodes.py                # Shared nodes, DB helpers, sim engine, _llm()
+│       ├── eval.py                 # Deferred was_correct evaluation
 │       ├── prompts.py              # Versioned system prompts (PROMPT_VERSION)
 │       └── schemas.py              # Pydantic validation for all LLM outputs
 │
 ├── core/                           # Domain logic (no UI, no agents)
 │   ├── data.py                     # Portfolio (thread-safe), LiveFeed
-│   ├── backtest.py                 # BacktestEngine + run_backtest()
+│   ├── backtest.py                 # run_backtest(), compare_strategies()
 │   ├── indicators.py               # Canonical RSI implementation
-│   └── registry.py                 # Graph ID → builder map
+│   ├── metrics.py                  # Sharpe/Sortino/drawdown/Kelly (pure functions)
+│   └── registry.py                 # Single graph builder + UI metadata
 │
 ├── dashboard/                      # Dash UI
 │   ├── __init__.py                 # create_app() entry point
@@ -258,11 +242,9 @@ apex7-trader/
 │   │   └── classify.py             # Log badge classification
 │   └── callbacks/                  # Dash callbacks (one file per tab)
 │       ├── live.py                 # Live tab + tab routing
-│       ├── analytics.py            # Analytics tab
+│       ├── analytics.py            # Analytics tab (+ trade postmortem)
 │       ├── backtest_tab.py         # Backtest tab
-│       ├── leaderboard_tab.py      # Leaderboard tab
-│       ├── heatmap.py              # Heatmap tab
-│       ├── agents.py               # Agents tab
+│       ├── cli.py                  # In-dashboard command console
 │       └── terminal.py             # Terminal tab (16 callbacks)
 │
 ├── docs/
@@ -279,7 +261,8 @@ apex7-trader/
 │   ├── test_circuit_breaker.py     # LLM circuit breaker + rate-limit behavior
 │   ├── test_stoploss.py            # execute_node stop-loss guards
 │   ├── test_portfolio.py           # Portfolio.sell() validation
-│   └── test_misc_coverage.py       # Leaderboard, RSI seed mocks
+│   ├── test_metrics.py             # core.metrics pure functions
+│   └── test_misc_coverage.py       # RSI seed mocks, misc paths
 │
 ├── .github/workflows/ci.yml        # CI: job test (ruff + pytest + coverage) + job lint (black)
 ├── .pre-commit-config.yaml          # ruff + black + standard hooks
@@ -317,10 +300,10 @@ ANTHROPIC_API_KEY=sk-ant-...
 X_BEARER_TOKEN=...
 
 # Optional — agent behavior
-SIMULATION_MODE=true        # true = no real money, no API calls for data
+SIMULATION_MODE=true        # random-walk prices + rule-based decisions (no LLM)
+PAPER_MODE=false            # real prices + rule-based decisions (no LLM)
 SIM_VOLATILITY=0.02         # price volatility per step (default 2%)
 SIM_DRIFT=0.0001            # slight upward drift (default 0.01%)
-AGENT_GRAPH=multi           # "simple" (default) or "multi"
 ```
 
 **Watchlist, balance, and thresholds** are configured directly in `config.py`:
@@ -440,26 +423,6 @@ Runs `run_backtest()` from `core/backtest.py` against real yfinance data — no 
 
 Output: KPI row (total return, vs SPY benchmark, win rate, max drawdown, Sharpe ratio) + equity curve with SPY overlay and BUY/SELL trade markers + trade log table.
 
-### LEADERBOARD tab
-
-Select a scenario, click **RUN ALL AGENTS**.
-
-Runs `Leaderboard().run_all(scenario)` — benchmarks 4 allocation strategies (CONSERVATIVE 15%, BALANCED 25%, AGGRESSIVE 40%, APEX-7 default) through 80 cycles each.
-
-Output: ranked table (winner highlighted in green) + comparative returns bar chart with breakeven line.
-
-### HEATMAP tab
-
-Per-symbol performance matrix showing returns and trade frequency across the watchlist.
-Data sourced from the active SQLite DB (live vs simulation).
-
-### AGENTS tab
-
-Per-agent comparison table loaded from `agent_memory` in the active SQLite DB:
-- Accuracy rate (correct votes / total votes)
-- Average confidence
-- Win rate per agent
-
 ### TERMINAL tab
 
 Bloomberg-style market terminal with live data from the `market_data` package.
@@ -523,13 +486,13 @@ This opens the Studio UI where you can inspect node inputs/outputs, replay trace
 def my_node(state: AgentState) -> dict:
     return {"log": [_entry("my_node ran")], "confidence": 0.9}
 
-# In agents/simple.py — wire it into the graph
+# In agents/multi.py — wire it into the graph
 g.add_node("my_node", my_node)
-g.add_edge("analyze", "my_node")
+g.add_edge("arbitrate", "my_node")
 g.add_edge("my_node", "risk_check")
 ```
 
-### Add a new specialist agent (multi graph)
+### Add a new specialist agent
 
 1. Create the Pydantic model in `agents/shared/schemas.py`
 2. Add the node function in `agents/multi.py`

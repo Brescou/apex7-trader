@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import date as _date
 from typing import Any
 
 import httpx
@@ -15,6 +16,7 @@ import httpx
 logger = logging.getLogger("apex7.external")
 
 _FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
+_FRED_RELEASE_BASE = "https://api.stlouisfed.org/fred/release/dates"
 _FRED_SERIES = {
     "US10Y": "DGS10",
     "CPI": "CPIAUCSL",
@@ -32,8 +34,13 @@ _FEAR_GREED_CACHE_SEC = 3600
 _macro_indicators_cache: dict[str, Any] = {"data": None, "ts": 0.0}
 _macro_indicators_lock = threading.Lock()
 
+_FRED_RELEASE_CACHE_SEC = 21600  # 6 hours — release schedules change rarely
+
 _fred_series_cache: dict[str, dict[str, Any]] = {}
 _fred_series_lock = threading.Lock()
+
+_fred_release_cache: dict[int, dict[str, Any]] = {}
+_fred_release_lock = threading.Lock()
 
 _fear_greed_cache: dict[str, Any] = {"data": None, "ts": 0.0}
 _fear_greed_lock = threading.Lock()
@@ -118,6 +125,58 @@ def fetch_fred_latest(
     with _fred_series_lock:
         _fred_series_cache[series_id] = {"data": payload, "ts": time.time()}
     return payload
+
+
+def fetch_fred_release_dates(
+    release_id: int,
+    api_key: str = "",
+    *,
+    limit: int = 24,
+    max_cache_sec: float | None = None,
+) -> list[str]:
+    """Upcoming release dates for a FRED *release* (e.g. 10=CPI, 50=Employment).
+
+    Returns a sorted list of ``YYYY-MM-DD`` strings from today onward (at most
+    ``limit``), or ``[]`` on failure / no key. Cached 6 h. Used by the economic
+    calendar to auto-refresh CPI/NFP dates instead of a hardcoded schedule.
+
+    FRED's free tier serves many JSON requests without a key but is rate
+    limited — set ``FRED_API_KEY`` for reliable access.
+    """
+    key = _fred_api_key(api_key)
+    ttl = float(max_cache_sec) if max_cache_sec is not None else float(_FRED_RELEASE_CACHE_SEC)
+    now = time.time()
+    with _fred_release_lock:
+        cached = _fred_release_cache.get(release_id)
+        if cached is not None and (now - cached["ts"]) < ttl:
+            return cached["data"]
+
+    today = _date.today().isoformat()
+    url = (
+        f"{_FRED_RELEASE_BASE}?release_id={release_id}"
+        "&include_release_dates_with_no_data=true&sort_order=asc&file_type=json"
+        f"&realtime_start={today}&realtime_end=9999-12-31"
+    )
+    if key:
+        url += f"&api_key={key}"
+
+    out: list[str] = []
+    try:
+        data = _http_get_json(url)
+        seen: set[str] = set()
+        for row in data.get("release_dates") or []:
+            d = str(row.get("date", ""))[:10]
+            if d and d >= today and d not in seen:
+                seen.add(d)
+                out.append(d)
+        out = sorted(out)[:limit]
+    except Exception:
+        logger.debug("FRED release dates fetch failed for %s", release_id, exc_info=False)
+        out = []
+
+    with _fred_release_lock:
+        _fred_release_cache[release_id] = {"data": out, "ts": time.time()}
+    return out
 
 
 def fetch_macro_indicators() -> dict[str, dict[str, Any] | None]:

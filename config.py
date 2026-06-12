@@ -8,6 +8,10 @@ X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN", "")
 # FRED (Federal Reserve Economic Data) — optional; improves reliability/limits.
 FRED_API_KEY = os.getenv("FRED_API_KEY", "").strip()
 
+# Finnhub — used as fallback quote provider when the yfinance circuit breaker
+# trips. The free tier works without a key (30 req/min); a key lifts it to 60.
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "").strip()
+
 WATCHLIST = [
     "AAPL",
     "MSFT",
@@ -29,6 +33,14 @@ SIM_DRIFT = float(os.getenv("SIM_DRIFT", "0.0001"))  # léger biais haussier
 
 STOP_LOSS_PCT = 0.05
 
+# ── Trade lifecycle guards (execute_node) ─────────────────────────────────────
+TAKE_PROFIT_PCT = 0.10  # partial take-profit trigger: price ≥ avg_price × (1 + 10%)
+TAKE_PROFIT_SELL_PCT = 50.0  # fraction of the position sold at take-profit
+TIME_STOP_DAYS = 10  # exit positions held longer than N calendar days…
+TIME_STOP_BAND_PCT = 0.02  # …when PnL is still within ±2% (stagnant)
+MAX_DRAWDOWN_BLOCK_PCT = 0.20  # block new BUYs when drawdown from peak exceeds 20%
+EARNINGS_BLOCK_DAYS = 2  # hard-block BUY when earnings are within N days
+
 POSTMORTEM_HOUR = 22
 
 # Number of trading days the market needs to move before evaluating an agent
@@ -48,3 +60,10 @@ PORTFOLIO_SAVE_ENABLED = os.getenv("PORTFOLIO_SAVE_ENABLED", "true").lower() == 
 
 # Discord webhook (optional — ``core.notifications``)
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+
+# Dashboard auth (optional) — set DASHBOARD_PASSWORD to gate the UI behind a
+# login page (``/health`` stays open for monitoring). DASHBOARD_SECRET_KEY
+# keeps session cookies valid across restarts; without it a random key is
+# generated per process and every restart logs users out.
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "").strip()
+DASHBOARD_SECRET_KEY = os.getenv("DASHBOARD_SECRET_KEY", "").strip()

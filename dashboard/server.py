@@ -1,9 +1,14 @@
 """APEX-7 // SURVIVAL TRADER — Dash app instance, design tokens, index_string."""
 
+import hmac
+import secrets
+import time
 from pathlib import Path
 
 import dash
-from config import DEATH_THRESHOLD, INITIAL_BALANCE  # noqa: F401
+from flask import redirect, request, session
+
+from config import DASHBOARD_SECRET_KEY, DEATH_THRESHOLD, INITIAL_BALANCE  # noqa: F401
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DESIGN TOKENS  (Apex7.html reference palette)
@@ -62,6 +67,100 @@ app = dash.Dash(
     ],
 )
 server = app.server
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# OPTIONAL AUTH GATE
+# ═══════════════════════════════════════════════════════════════════════════════
+# Enabled by setting DASHBOARD_PASSWORD in the environment; without it the
+# dashboard stays open (default localhost usage). The signed session cookie
+# needs a secret key: DASHBOARD_SECRET_KEY keeps sessions valid across
+# restarts, otherwise a random per-process key is generated.
+
+server.secret_key = DASHBOARD_SECRET_KEY or secrets.token_hex(32)
+
+_AUTH_EXEMPT_PATHS = {"/login", "/logout", "/health", "/favicon.ico", "/_favicon.ico"}
+
+_LOGIN_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>APEX-7 // LOGIN</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    body { background: #05090f; color: #b8d0d6; font-family: 'JetBrains Mono', monospace;
+           display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+    .box { background: #070e16; border: 1px solid #0d2030; border-top: 2px solid #00dda0;
+           border-radius: 4px; padding: 28px 32px; width: 300px; }
+    h1 { font-size: 13px; letter-spacing: 0.18em; color: #00dda0; margin: 0 0 18px; }
+    input { width: 100%; box-sizing: border-box; background: #040810; color: #b8d0d6;
+            border: 1px solid #0d2030; border-radius: 3px; padding: 9px 10px;
+            font-family: inherit; font-size: 12px; margin-bottom: 12px; }
+    button { width: 100%; background: #00dda011; color: #00dda0; border: 1px solid #00dda055;
+             border-radius: 3px; padding: 9px; font-family: inherit; font-size: 11px;
+             font-weight: 700; letter-spacing: 0.14em; cursor: pointer; }
+    button:hover { background: #00dda022; }
+    .err { color: #ff4060; font-size: 11px; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <form class="box" method="post" action="/login">
+    <h1>APEX-7 // ACCESS</h1>
+    {error_html}
+    <input type="password" name="password" placeholder="password" autofocus autocomplete="current-password">
+    <button type="submit">AUTHENTICATE</button>
+  </form>
+</body>
+</html>"""
+
+
+def _auth_enabled() -> bool:
+    """Read the password at request time so env/test overrides take effect."""
+    import config
+
+    return bool(config.DASHBOARD_PASSWORD)
+
+
+@server.before_request
+def _require_auth():
+    """Gate every route behind the login session when auth is enabled.
+
+    ``/health`` stays open for monitoring probes. Unauthenticated GETs are
+    redirected to the login page; non-GETs (Dash callback XHRs) get a 401 so
+    the front-end fails loudly instead of following an HTML redirect.
+    """
+    if not _auth_enabled() or session.get("apex7_auth"):
+        return None
+    if request.path in _AUTH_EXEMPT_PATHS:
+        return None
+    if request.method == "GET":
+        return redirect("/login")
+    return {"error": "authentication required"}, 401
+
+
+@server.route("/login", methods=["GET", "POST"])
+def _login():
+    import config
+
+    if not config.DASHBOARD_PASSWORD or session.get("apex7_auth"):
+        return redirect("/")
+    error_html = ""
+    status = 200
+    if request.method == "POST":
+        supplied = request.form.get("password", "")
+        if hmac.compare_digest(supplied, config.DASHBOARD_PASSWORD):
+            session["apex7_auth"] = True
+            return redirect("/")
+        time.sleep(0.3)  # slow down brute-force attempts
+        error_html = '<div class="err">Invalid password</div>'
+        status = 401
+    return _LOGIN_PAGE.replace("{error_html}", error_html), status
+
+
+@server.route("/logout")
+def _logout():
+    session.pop("apex7_auth", None)
+    return redirect("/login")
+
 
 app.index_string = """<!DOCTYPE html>
 <html lang="en">

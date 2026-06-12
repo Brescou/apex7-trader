@@ -21,6 +21,7 @@ class AgentState(TypedDict):
     macro_indicators: dict  # FRED bundle from ``core.external_data``
     fear_greed: dict | None  # CNN Fear & Greed or None on failure
     earnings_calendar: dict  # per-symbol next earnings from ``market_data``
+    risk_metrics: dict  # sharpe / max_drawdown_pct / current_drawdown_pct (core.metrics)
 
     # Memory
     past_trades: List[dict]
@@ -53,6 +54,7 @@ class MultiAgentState(TypedDict):
     macro_indicators: dict
     fear_greed: dict | None
     earnings_calendar: dict
+    risk_metrics: dict
     past_trades: List[dict]
     known_patterns: List[str]
     round: int

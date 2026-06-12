@@ -31,7 +31,8 @@ class Portfolio:
     def __init__(self):
         self._lock = threading.RLock()
         self.cash = float(INITIAL_BALANCE)
-        self.positions: dict[str, dict] = {}  # {symbol: {shares, avg_price, layers?}}
+        # {symbol: {shares, avg_price, layers?, opened_at?, tp_taken?}}
+        self.positions: dict[str, dict] = {}
         self.trade_history: list[dict] = []
         self.value_history: list[dict] = [
             {"time": datetime.now().isoformat(), "value": float(INITIAL_BALANCE)}
@@ -122,6 +123,8 @@ class Portfolio:
                     "shares": new_shares,
                     "avg_price": px,
                     "layers": 1,
+                    "opened_at": datetime.now().isoformat(),
+                    "tp_taken": False,
                 }
                 trade_shares = new_shares
                 fp = px
@@ -183,6 +186,12 @@ class Portfolio:
             result = {"success": True, **trade}
         self.save_state()
         return result
+
+    def mark_take_profit(self, symbol: str) -> None:
+        """Flag a position so the partial take-profit only fires once per position."""
+        with self._lock:
+            if symbol in self.positions:
+                self.positions[symbol]["tp_taken"] = True
 
     def open_symbols(self) -> list[str]:
         with self._lock:

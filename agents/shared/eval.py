@@ -12,6 +12,7 @@ from agents.shared.modes import get_runtime_mode, get_simulation_mode
 logger = logging.getLogger("apex7")
 
 EVAL_SIGNIFICANCE_PCT = 0.01  # 1% move required to declare a vote correct/wrong
+_MAX_EVAL_RETRIES = 10  # abandon evaluation after this many consecutive price-fetch failures
 
 
 def _fast_last_price(symbol: str) -> float | None:
@@ -77,11 +78,31 @@ def evaluate_pending_trades(now: datetime | None = None) -> int:
 
         current_price = _fast_last_price(symbol)
         if current_price is None:
-            logger.info(
-                "evaluate_pending_trades: skip %s %s (no spot price, will retry)",
-                symbol,
-                action_u,
+            _db_write(
+                "UPDATE pending_evaluations "
+                "SET retry_count = COALESCE(retry_count, 0) + 1 WHERE id = ?",
+                (pe_id,),
             )
+            count_row = _db_read(
+                "SELECT retry_count FROM pending_evaluations WHERE id = ?", (pe_id,)
+            )
+            retry_count = int(count_row[0][0]) if count_row else 0
+            if retry_count >= _MAX_EVAL_RETRIES:
+                logger.warning(
+                    "evaluate_pending_trades: abandoning %s %s after %d retries (no spot price)",
+                    symbol,
+                    action_u,
+                    retry_count,
+                )
+                _db_write("UPDATE pending_evaluations SET evaluated = 1 WHERE id = ?", (pe_id,))
+            else:
+                logger.info(
+                    "evaluate_pending_trades: skip %s %s (no spot price, retry %d/%d)",
+                    symbol,
+                    action_u,
+                    retry_count,
+                    _MAX_EVAL_RETRIES,
+                )
             continue
 
         try:

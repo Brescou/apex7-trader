@@ -7,6 +7,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -17,10 +21,10 @@ jobs:
           cache-dependency-glob: |
             uv.lock
             pyproject.toml
-      - name: Set up Python
-        run: uv python install 3.12
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --python ${{ matrix.python-version }}
       - name: Run linter (ruff)
         run: uv run ruff check . --select E,F,W --ignore E501
       - name: Run tests
@@ -30,9 +34,9 @@ jobs:
           USE_LIVEFEED: "false"
         run: |
           uv run pytest tests/ -v --tb=short \
-            --cov=. --cov-report=xml --cov-report=html --cov-fail-under=53
+            --cov=. --cov-report=xml --cov-report=html --cov-fail-under=60
       - name: Upload coverage report
-        if: always()
+        if: always() && matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
@@ -55,3 +59,24 @@ jobs:
         run: uv sync
       - name: Check formatting (black)
         run: uv run black --check --diff .
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+      - name: Install dependencies
+        run: uv sync
+      # flake8-bandit security scan. The three ignored rules cover intentional
+      # patterns in this repo: S110 (fail-silent try/except/pass for Discord and
+      # yfinance), S311 (non-crypto random for the price simulation/slippage),
+      # and S104 (binding 0.0.0.0 for the containerized dashboard). This still
+      # catches new issues like hardcoded secrets or SQL injection.
+      - name: Security scan (ruff flake8-bandit)
+        run: uv run ruff check . --select S --ignore S110,S311,S104 --exclude tests

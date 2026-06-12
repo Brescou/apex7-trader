@@ -8,8 +8,17 @@ from market_data.earnings import fetch_earnings_calendar
 
 logger = logging.getLogger("apex7.market_data")
 
-# ⚠️ UPDATE QUARTERLY — last verified: 2026-Q2
-# If today > last date in list, logger.warning fires automatically
+# FRED release ids that map cleanly to our macro events. FOMC is NOT a FRED
+# release (no scheduled-data feed), so it stays sourced from the static list.
+_FRED_RELEASE_IDS: dict[int, str] = {
+    10: "CPI",  # Consumer Price Index
+    50: "NFP",  # Employment Situation (non-farm payrolls)
+}
+
+# ⚠️ FALLBACK schedule — used when FRED is unavailable (offline / rate-limited)
+# and as the source of truth for FOMC dates (not a FRED release).
+# UPDATE QUARTERLY — last verified: 2026-Q2. If today > last date, a
+# logger.warning fires automatically.
 _SCHEDULED_MACRO_EVENTS: list[dict[str, str]] = [
     {"date": "2026-01-09", "event": "NFP", "importance": "high"},
     {"date": "2026-01-14", "event": "CPI", "importance": "high"},
@@ -46,6 +55,50 @@ _SCHEDULED_MACRO_EVENTS: list[dict[str, str]] = [
 ]
 
 
+def _fred_macro_events(horizon_days: int) -> list[dict[str, str]]:
+    """CPI/NFP events from FRED release dates within the horizon (``[]`` on failure)."""
+    try:
+        from core.external_data import fetch_fred_release_dates
+    except Exception:
+        return []
+
+    today = date.today()
+    end = today + timedelta(days=horizon_days)
+    events: list[dict[str, str]] = []
+    for release_id, label in _FRED_RELEASE_IDS.items():
+        try:
+            dates = fetch_fred_release_dates(release_id)
+        except Exception:
+            dates = []
+        for ds in dates:
+            try:
+                evd = date.fromisoformat(ds)
+            except ValueError:
+                continue
+            if today <= evd <= end:
+                events.append({"date": ds, "event": label, "importance": "high"})
+    return events
+
+
+def _get_macro_events(horizon_days: int) -> list[dict[str, str]]:
+    """Macro events: FRED-sourced CPI/NFP + static FOMC, static fallback offline.
+
+    When FRED returns nothing (offline / no key / rate-limited) the full static
+    schedule is used so the calendar never goes blank. Otherwise FRED supplies
+    CPI/NFP (always current) and FOMC is taken from the static list since FRED
+    has no FOMC release feed. Deduplicated by ``(date, event)``.
+    """
+    fred = _fred_macro_events(horizon_days)
+    if not fred:
+        return list(_SCHEDULED_MACRO_EVENTS)
+
+    merged: dict[tuple[str, str], dict[str, str]] = {(e["date"], e["event"]): e for e in fred}
+    for e in _SCHEDULED_MACRO_EVENTS:
+        if e["event"] == "FOMC":
+            merged[(e["date"], e["event"])] = e
+    return list(merged.values())
+
+
 def build_economic_calendar_rows(
     symbols: list[str],
     *,
@@ -74,7 +127,7 @@ def build_economic_calendar_rows(
     rows: list[dict[str, Any]] = []
     end_offset = timedelta(days=horizon_days)
 
-    for item in _SCHEDULED_MACRO_EVENTS:
+    for item in _get_macro_events(horizon_days):
         evd = date.fromisoformat(item["date"])
         if evd < today or evd > today + end_offset:
             continue

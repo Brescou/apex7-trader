@@ -1,13 +1,23 @@
 """APEX-7 — Analytics tab callback."""
 
+import csv
+import io
 import statistics
 from collections import Counter, defaultdict
+from datetime import datetime
 
 import plotly.graph_objects as go
 from dash import Input, Output, State, dcc, html, no_update
 from dash.dash_table import DataTable
 
-from dashboard.layout import _load_postmortem, _load_trades_db
+from agents.shared.nodes import _db_read_at, mode_db_path
+from dashboard.layout import (
+    _load_agent_memory,
+    _load_postmortem,
+    _load_prompt_version_stats,
+    _load_trades_db,
+)
+from market_data import fetch_comparison
 from dashboard.server import (
     BG_CARD,
     BG_DEEP,
@@ -243,6 +253,474 @@ def _analytics_postmortem_section(post: list[dict]) -> html.Div:
     )
 
 
+_CSV_COLUMNS = [
+    "id",
+    "timestamp",
+    "symbol",
+    "action",
+    "price",
+    "amount_usd",
+    "shares",
+    "confidence",
+    "emotion",
+    "portfolio_value_after",
+    "reasoning",
+    "lesson",
+    "trace_id",
+    "source",
+]
+
+
+def _mode_trade_stats(mode: str) -> dict:
+    """Compute headline stats for one runtime mode by reading its DB directly.
+
+    Reads ``trades`` from ``trades.db`` / ``trades_paper.db`` regardless of the
+    active mode (via ``_db_read_at``), so the panel can compare LIVE and PAPER
+    side by side. Returns zeros when the DB does not exist yet.
+    """
+    rows = _db_read_at(
+        mode_db_path(mode),
+        "SELECT timestamp, symbol, action, price, portfolio_value_after "
+        "FROM trades ORDER BY timestamp ASC",
+    )
+    n_trades = len(rows)
+    buys: dict[str, float] = {}
+    pnls: list[float] = []
+    last_value = 0.0
+    for ts, symbol, action, price, pv in rows:
+        if pv not in (None, "", 0):
+            try:
+                last_value = float(pv)
+            except (TypeError, ValueError):
+                pass
+        au = (action or "").upper()
+        try:
+            px = float(price)
+        except (TypeError, ValueError):
+            continue
+        if au == "BUY":
+            buys[symbol] = px
+        elif au == "SELL" and symbol in buys:
+            bp = buys.pop(symbol)
+            if bp > 0:
+                pnls.append((px - bp) / bp)
+    wins = sum(1 for p in pnls if p > 0)
+    win_rate = (wins / len(pnls) * 100.0) if pnls else 0.0
+    avg_pnl = (statistics.mean(pnls) * 100.0) if pnls else 0.0
+    return {
+        "n_trades": n_trades,
+        "closed": len(pnls),
+        "win_rate": win_rate,
+        "avg_pnl": avg_pnl,
+        "last_value": last_value,
+    }
+
+
+def _mode_stat_card(title: str, accent: str, stats: dict) -> html.Div:
+    rows = [
+        ("Portfolio", f"${stats['last_value']:.2f}" if stats["last_value"] else "—", TEXT_MAIN),
+        ("Trades", str(stats["n_trades"]), TEXT_MAIN),
+        ("Closed", str(stats["closed"]), TEXT_MAIN),
+        (
+            "Win rate",
+            f"{stats['win_rate']:.1f}%",
+            GREEN if stats["win_rate"] >= 50 else RED,
+        ),
+        (
+            "Avg P&L",
+            f"{stats['avg_pnl']:+.2f}%",
+            GREEN if stats["avg_pnl"] >= 0 else RED,
+        ),
+    ]
+    body = [
+        html.Div(
+            [
+                html.Span(lbl, style={"fontSize": "10px", "color": TEXT_DIM}),
+                html.Span(
+                    val,
+                    style={"fontSize": "12px", "fontWeight": "700", "color": col},
+                ),
+            ],
+            style={
+                "display": "flex",
+                "justifyContent": "space-between",
+                "padding": "5px 0",
+                "borderBottom": f"1px solid {BORDER}",
+            },
+        )
+        for lbl, val, col in rows
+    ]
+    return html.Div(
+        [
+            html.Div(
+                title,
+                style={
+                    "fontSize": "10px",
+                    "fontWeight": "700",
+                    "letterSpacing": "0.14em",
+                    "color": accent,
+                    "marginBottom": "8px",
+                },
+            ),
+            *body,
+        ],
+        style={
+            "background": BG_CARD,
+            "border": f"1px solid {BORDER}",
+            "borderTop": f"2px solid {accent}",
+            "borderRadius": "4px",
+            "padding": "12px 14px",
+        },
+    )
+
+
+def _decision_history_section(mem: list[dict]) -> html.Div:
+    """Filterable/sortable replay of agent votes (``agent_memory``).
+
+    Native Dash filtering lets the user slice by agent, symbol, vote, source,
+    or date. ``was_correct`` is shown as ✓ / ✗ / ⏳ (pending evaluation).
+    """
+    cols = [
+        {"name": c, "id": c}
+        for c in ["timestamp", "agent_name", "symbol", "vote", "confidence", "result", "source"]
+    ]
+    data = []
+    for m in mem:
+        wc = m.get("was_correct")
+        result = "⏳" if wc is None else ("✓" if wc else "✗")
+        conf = m.get("confidence")
+        data.append(
+            {
+                "timestamp": str(m.get("timestamp", ""))[:19],
+                "agent_name": m.get("agent_name", ""),
+                "symbol": m.get("symbol", ""),
+                "vote": m.get("vote", ""),
+                "confidence": f"{float(conf):.0%}" if isinstance(conf, (int, float)) else "",
+                "result": result,
+                "source": m.get("source", ""),
+            }
+        )
+
+    table = DataTable(
+        columns=cols,
+        data=data,
+        page_size=15,
+        sort_action="native",
+        filter_action="native",
+        style_table={
+            "background": BG_DEEP,
+            "border": f"1px solid {BORDER}",
+            "borderRadius": "4px",
+            "overflowX": "auto",
+        },
+        style_header={
+            "background": BG_CARD,
+            "color": PURPLE,
+            "fontSize": "10px",
+            "fontFamily": FONT,
+            "fontWeight": "700",
+            "letterSpacing": "0.1em",
+            "border": f"1px solid {BORDER}",
+        },
+        style_cell={
+            "background": BG_DEEP,
+            "color": TEXT_MAIN,
+            "fontSize": "11px",
+            "fontFamily": FONT,
+            "borderBottom": f"1px solid {BORDER}",
+            "padding": "6px 10px",
+            "textAlign": "left",
+        },
+        style_data_conditional=[
+            {"if": {"filter_query": '{vote} = "BUY"'}, "background": f"{BLUE}12"},
+            {"if": {"filter_query": '{vote} = "SELL"'}, "background": f"{RED}12"},
+            {"if": {"filter_query": '{result} = "✓"'}, "color": GREEN},
+            {"if": {"filter_query": '{result} = "✗"'}, "color": RED},
+        ],
+    )
+
+    return html.Div(
+        [
+            html.Div(
+                "Decision history",
+                style={
+                    "fontSize": "9px",
+                    "fontWeight": "700",
+                    "letterSpacing": "0.18em",
+                    "color": TEXT_DIM,
+                    "textTransform": "uppercase",
+                    "borderBottom": f"1px solid {BORDER}",
+                    "paddingBottom": "6px",
+                    "marginBottom": "10px",
+                    "marginTop": "28px",
+                },
+            ),
+            table,
+        ]
+    )
+
+
+# Below this many evaluated trades, win-rate differences between prompt
+# versions are statistical noise — the card shows a warning chip instead of
+# letting a 3-trade sample look like a verdict.
+_AB_MIN_EVALUATED = 30
+
+_AB_ACCENTS = [GREEN, BLUE, PURPLE, ORANGE, YELLOW]
+
+
+def _prompt_version_card(stats: dict, accent: str) -> html.Div:
+    """One card per prompt version — volumes, confidence, validated win rate."""
+    evaluated = int(stats.get("evaluated") or 0)
+    wins = int(stats.get("wins") or 0)
+    win_rate = (wins / evaluated * 100.0) if evaluated else None
+    conf = stats.get("avg_confidence")
+    first = str(stats.get("first_trade") or "")[:10]
+    last = str(stats.get("last_trade") or "")[:10]
+    period = f"{first} → {last}" if first else "—"
+
+    rows = [
+        ("Trades", f"{stats['n_trades']} ({stats['buys']}B / {stats['sells']}S)", TEXT_MAIN),
+        ("Avg confidence", f"{float(conf):.0%}" if conf is not None else "—", TEXT_MAIN),
+        ("Evaluated", str(evaluated), TEXT_MAIN),
+        (
+            "Validated win rate",
+            f"{win_rate:.1f}%" if win_rate is not None else "⏳",
+            (GREEN if win_rate >= 50 else RED) if win_rate is not None else TEXT_DIM,
+        ),
+        ("Period", period, TEXT_DIM),
+    ]
+    body = [
+        html.Div(
+            [
+                html.Span(lbl, style={"fontSize": "10px", "color": TEXT_DIM}),
+                html.Span(val, style={"fontSize": "12px", "fontWeight": "700", "color": col}),
+            ],
+            style={
+                "display": "flex",
+                "justifyContent": "space-between",
+                "padding": "5px 0",
+                "borderBottom": f"1px solid {BORDER}",
+            },
+        )
+        for lbl, val, col in rows
+    ]
+    children = [
+        html.Div(
+            str(stats.get("version") or "—"),
+            style={
+                "fontSize": "10px",
+                "fontWeight": "700",
+                "letterSpacing": "0.14em",
+                "color": accent,
+                "marginBottom": "8px",
+            },
+        ),
+        *body,
+    ]
+    if evaluated < _AB_MIN_EVALUATED:
+        children.append(
+            html.Div(
+                f"⚠ n = {evaluated} < {_AB_MIN_EVALUATED} — non significatif",
+                style={
+                    "fontSize": "9px",
+                    "color": ORANGE,
+                    "marginTop": "8px",
+                    "letterSpacing": "0.06em",
+                },
+            )
+        )
+    return html.Div(
+        children,
+        style={
+            "background": BG_CARD,
+            "border": f"1px solid {BORDER}",
+            "borderTop": f"2px solid {accent}",
+            "borderRadius": "4px",
+            "padding": "12px 14px",
+        },
+    )
+
+
+def _prompt_versions_section() -> html.Div:
+    """A/B prompt comparison — outcome stats grouped by ``prompt_version``.
+
+    Every trade persists the ``PROMPT_VERSION`` active when it was taken, so
+    bumping it in ``agents/shared/prompts.py`` after a prompt change starts a
+    new comparable series in the same DB. The win rate shown is the
+    market-validated ``was_correct`` share resolved by
+    ``evaluate_pending_trades`` — not the arbitration consensus.
+    """
+    stats = _load_prompt_version_stats()
+    if not stats:
+        body: list = [
+            html.Div(
+                "No prompt-version data yet.",
+                style={
+                    "color": TEXT_DIM,
+                    "fontSize": "11px",
+                    "fontStyle": "italic",
+                    "padding": "12px",
+                },
+            )
+        ]
+    else:
+        cards = [
+            _prompt_version_card(s, _AB_ACCENTS[i % len(_AB_ACCENTS)]) for i, s in enumerate(stats)
+        ]
+        body = [
+            html.Div(
+                cards,
+                style={
+                    "display": "grid",
+                    "gridTemplateColumns": f"repeat({min(len(cards), 4)}, 1fr)",
+                    "gap": "12px",
+                },
+            )
+        ]
+        if len(stats) == 1:
+            body.append(
+                html.Div(
+                    "Une seule version en base — bump PROMPT_VERSION dans "
+                    "agents/shared/prompts.py après un changement de prompt "
+                    "pour démarrer une série comparable.",
+                    style={"fontSize": "10px", "color": TEXT_DIM, "marginTop": "8px"},
+                )
+            )
+
+    return html.Div(
+        [
+            html.Div(
+                "Prompt versions (A/B)",
+                style={
+                    "fontSize": "9px",
+                    "fontWeight": "700",
+                    "letterSpacing": "0.18em",
+                    "color": TEXT_DIM,
+                    "textTransform": "uppercase",
+                    "borderBottom": f"1px solid {BORDER}",
+                    "paddingBottom": "6px",
+                    "marginBottom": "10px",
+                    "marginTop": "28px",
+                },
+            ),
+            *body,
+        ]
+    )
+
+
+def _live_paper_comparison_section() -> html.Div:
+    """Side-by-side LIVE vs PAPER headline stats (reads both DBs directly)."""
+    live = _mode_trade_stats("live")
+    paper = _mode_trade_stats("paper")
+    return html.Div(
+        [
+            html.Div(
+                "Live vs Paper",
+                style={
+                    "fontSize": "9px",
+                    "fontWeight": "700",
+                    "letterSpacing": "0.18em",
+                    "color": TEXT_DIM,
+                    "textTransform": "uppercase",
+                    "borderBottom": f"1px solid {BORDER}",
+                    "paddingBottom": "6px",
+                    "marginBottom": "10px",
+                    "marginTop": "28px",
+                },
+            ),
+            html.Div(
+                [
+                    _mode_stat_card("LIVE", GREEN, live),
+                    _mode_stat_card("PAPER", BLUE, paper),
+                ],
+                style={
+                    "display": "grid",
+                    "gridTemplateColumns": "1fr 1fr",
+                    "gap": "12px",
+                },
+            ),
+        ]
+    )
+
+
+@app.callback(
+    Output("analytics-csv-download", "data"),
+    Input("btn-analytics-export", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _export_trades_csv(_n):
+    """Export the full trade history (current DB / mode) as a CSV download."""
+    trades = _load_trades_db()
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=_CSV_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    for t in trades:
+        writer.writerow({k: t.get(k, "") for k in _CSV_COLUMNS})
+    fname = f"apex7_trades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return dcc.send_string(buf.getvalue(), fname)
+
+
+def _equity_benchmark_figure(trades: list[dict], theme: dict) -> go.Figure:
+    """Equity curve from ``portfolio_value_after`` with an SPY benchmark overlay.
+
+    The SPY series (normalized-to-100 by ``fetch_comparison``) is rescaled to
+    the portfolio's starting value so both lines start at the same level. SPY
+    is fetched fail-silent — if unavailable (offline / yfinance error) only the
+    equity curve is drawn.
+    """
+    pts = [
+        (str(t.get("timestamp"))[:19], float(t["portfolio_value_after"]))
+        for t in sorted(trades, key=lambda x: str(x.get("timestamp", "")))
+        if t.get("portfolio_value_after") not in (None, "", 0)
+    ]
+    fig = go.Figure()
+    if not pts:
+        fig.update_layout(title="Equity Curve vs SPY", height=260, **theme)
+        return fig
+
+    eq_x = [p[0] for p in pts]
+    eq_y = [p[1] for p in pts]
+    base = eq_y[0]
+
+    fig.add_trace(
+        go.Scatter(
+            x=eq_x,
+            y=eq_y,
+            mode="lines",
+            name="APEX-7",
+            line=dict(color=GREEN, width=1.8),
+            fill="tozeroy",
+            fillcolor=_rgba(GREEN, 0.08),
+        )
+    )
+
+    try:
+        spy = fetch_comparison(["SPY"], period="3mo").get("SPY", [])
+    except Exception:
+        spy = []
+    if spy and base > 0:
+        spy_x = [d["date"] for d in spy]
+        spy_y = [d["value"] / 100.0 * base for d in spy]
+        fig.add_trace(
+            go.Scatter(
+                x=spy_x,
+                y=spy_y,
+                mode="lines",
+                name="SPY (rescaled)",
+                line=dict(color=BLUE, width=1.4, dash="dot"),
+            )
+        )
+
+    fig.update_layout(
+        title="Equity Curve vs SPY",
+        height=260,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        **theme,
+    )
+    return fig
+
+
 @app.callback(
     Output("analytics-content", "children"),
     [Input("analytics-tick", "n_intervals"), Input("btn-analytics-refresh", "n_clicks")],
@@ -255,6 +733,9 @@ def _analytics_refresh(_, __, active_tab):
     trades = _load_trades_db()
     post = _load_postmortem()
     pm_section = _analytics_postmortem_section(post)
+    compare_section = _live_paper_comparison_section()
+    prompt_section = _prompt_versions_section()
+    history_section = _decision_history_section(_load_agent_memory())
 
     if not trades:
         return html.Div(
@@ -263,6 +744,9 @@ def _analytics_refresh(_, __, active_tab):
                     "No trade data yet. Run the agent first.",
                     style={"color": TEXT_DIM, "fontSize": "12px", "padding": "20px"},
                 ),
+                compare_section,
+                prompt_section,
+                history_section,
                 pm_section,
             ],
             style={"display": "flex", "flexDirection": "column"},
@@ -414,6 +898,12 @@ def _analytics_refresh(_, __, active_tab):
     fig4 = go.Figure(go.Bar(x=hour_x, y=hour_y, marker_color=BLUE))
     fig4.update_layout(title="Trades by Hour", height=250, **_plotly_theme)
 
+    equity_fig = _equity_benchmark_figure(trades, _plotly_theme)
+    equity_row = html.Div(
+        dcc.Graph(figure=equity_fig, config={"displayModeBar": False}),
+        style={"marginBottom": "12px"},
+    )
+
     charts_row = html.Div(
         [
             dcc.Graph(figure=fig1, config={"displayModeBar": False}),
@@ -513,4 +1003,15 @@ def _analytics_refresh(_, __, active_tab):
         ],
     )
 
-    return html.Div([kpi_row, charts_row, data_table, pm_section])
+    return html.Div(
+        [
+            kpi_row,
+            equity_row,
+            charts_row,
+            data_table,
+            compare_section,
+            prompt_section,
+            history_section,
+            pm_section,
+        ]
+    )

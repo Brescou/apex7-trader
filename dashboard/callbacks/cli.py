@@ -13,7 +13,6 @@ from dashboard.server import (
     TEXT_FAINT,
 )
 
-
 # ── CLI clock ─────────────────────────────────────────────────────────────────
 
 

@@ -5,8 +5,33 @@ from datetime import datetime
 
 from config import MACRO_SYMBOLS
 
-from market_data.caches import _macro_cache, _macro_lock, macro_ttl
+from market_data.caches import (
+    _macro_cache,
+    _macro_lock,
+    macro_ttl,
+    record_yf_failure,
+    record_yf_success,
+    yf_circuit_open,
+)
 from market_data.compat import yf
+from market_data.finnhub import fetch_finnhub_quote
+
+
+def _macro_finnhub_overlay(stale: dict) -> dict:
+    """Refresh plain-ticker macro symbols via Finnhub when yfinance is down.
+
+    ``^VIX`` / ``DX-Y.NYB`` are skipped (unsupported on Finnhub free tier);
+    their stale values are carried over untouched.
+    """
+    result = dict(stale)
+    for label, ticker_sym in MACRO_SYMBOLS.items():
+        q = fetch_finnhub_quote(ticker_sym)
+        if q is None:
+            continue
+        change_pct = q["change_pct"]
+        direction = "up" if change_pct > 0.05 else ("down" if change_pct < -0.05 else "flat")
+        result[label] = {"price": q["price"], "change_pct": change_pct, "direction": direction}
+    return result
 
 
 def fetch_macro() -> dict:
@@ -19,6 +44,9 @@ def fetch_macro() -> dict:
         now = time.time()
         if _macro_cache["data"] is not None and (now - _macro_cache["ts"]) < macro_ttl():
             return _macro_cache["data"]
+
+        if yf_circuit_open():
+            return _macro_finnhub_overlay(_macro_cache["data"] or {})
 
         result: dict = {}
         try:
@@ -39,10 +67,12 @@ def fetch_macro() -> dict:
                     direction = "flat"
                 result[label] = {"price": price, "change_pct": change_pct, "direction": direction}
 
+            record_yf_success()
             result["updated_at"] = datetime.now().strftime("%H:%M:%S")
             _macro_cache["data"] = result
             _macro_cache["ts"] = now
         except Exception:
+            record_yf_failure()
             if _macro_cache["data"] is not None:
                 return _macro_cache["data"]
 

@@ -22,17 +22,24 @@ except ImportError:
     _HAS_TWEEPY = False
 
 from config import (
+    EARNINGS_BLOCK_DAYS,
     EVAL_HORIZON_CALENDAR_DAYS,
     INITIAL_BALANCE,
     MAX_ALLOC_PCT,
+    MAX_DRAWDOWN_BLOCK_PCT,
     MAX_POSITIONS,
     MAX_PYRAMID_LAYERS,
     SIM_DRIFT,
     SIM_VOLATILITY,
     STOP_LOSS_PCT,
+    TAKE_PROFIT_PCT,
+    TAKE_PROFIT_SELL_PCT,
+    TIME_STOP_BAND_PCT,
+    TIME_STOP_DAYS,
     X_BEARER_TOKEN,
 )
 from core.data import Portfolio
+from core.metrics import max_drawdown, realized_volatility, sharpe_ratio
 from core.external_data import fetch_fear_greed, fetch_macro_indicators
 from market_data import fetch_earnings_calendar, is_earnings_week
 from agents.shared.state import AgentState
@@ -50,11 +57,13 @@ from agents.shared.llm import (
 from agents.shared.db import (
     DB_PATH,
     _db_read,
+    _db_read_at,
     _db_write,
     _db_write_multi,
     _db_write_returning_id,
     _ensure_db,
     _init_db,
+    mode_db_path,
 )
 from agents.shared.eval import (
     EVAL_SIGNIFICANCE_PCT,
@@ -254,7 +263,8 @@ def _fetch_sentiment_sync(symbols: list[str]) -> dict[str, float]:
             return result
         except Exception:
             pass
-    return {sym: round(random.uniform(-0.3, 0.3), 2) for sym in symbols}
+    # No Twitter credentials — return neutral signal (0.0) rather than random noise.
+    return {sym: 0.0 for sym in symbols}
 
 
 async def _gather_data(
@@ -348,42 +358,53 @@ _live_price_history_lock = threading.Lock()
 
 
 def _seed_live_price_history() -> None:
-    """One-time seed from ~1mo daily closes so RSI(14) is meaningful from cycle 1."""
+    """One-time seed from ~1mo daily closes so RSI(14) is meaningful from cycle 1.
+
+    Network I/O is performed outside the lock to avoid holding it for multiple
+    seconds while downloading data per symbol.
+    """
     global _live_price_history_seeded
     with _live_price_history_lock:
         if _live_price_history_seeded:
             return
-        for sym in get_watchlist():
-            try:
-                df = yf.download(
-                    sym,
-                    period="1mo",
-                    interval="1d",
-                    progress=False,
-                    auto_adjust=True,
-                )
-                if df is None or len(df) == 0:
-                    logger.warning("No OHLC data to seed for %s", sym)
-                    continue
-                if isinstance(df.columns, pd.MultiIndex):
-                    df = df.copy()
-                    df.columns = df.columns.get_level_values(0)
-                closes = [float(x) for x in df["Close"].dropna().tolist()]
-                if not closes:
-                    continue
-                _live_price_history[sym] = closes[-60:]
-                logger.info(
-                    "Seeded _live_price_history for %s with %d daily closes",
-                    sym,
-                    len(_live_price_history[sym]),
-                )
-                idx = df.index[-1]
-                if hasattr(idx, "date"):
-                    _last_price_date[sym] = idx.date().isoformat()
-                else:
-                    _last_price_date[sym] = str(idx)[:10]
-            except Exception as e:
-                logger.warning("Seed failed for %s: %s", sym, e)
+
+    # Download outside the lock so other threads are not blocked during network I/O.
+    collected: dict[str, list[float]] = {}
+    last_dates: dict[str, str] = {}
+    for sym in get_watchlist():
+        try:
+            df = yf.download(
+                sym,
+                period="1mo",
+                interval="1d",
+                progress=False,
+                auto_adjust=True,
+            )
+            if df is None or len(df) == 0:
+                logger.warning("No OHLC data to seed for %s", sym)
+                continue
+            if isinstance(df.columns, pd.MultiIndex):
+                df = df.copy()
+                df.columns = df.columns.get_level_values(0)
+            closes = [float(x) for x in df["Close"].dropna().tolist()]
+            if not closes:
+                continue
+            collected[sym] = closes[-60:]
+            logger.info(
+                "Seeded _live_price_history for %s with %d daily closes",
+                sym,
+                len(collected[sym]),
+            )
+            idx = df.index[-1]
+            last_dates[sym] = idx.date().isoformat() if hasattr(idx, "date") else str(idx)[:10]
+        except Exception as e:
+            logger.warning("Seed failed for %s: %s", sym, e)
+
+    with _live_price_history_lock:
+        if _live_price_history_seeded:
+            return
+        _live_price_history.update(collected)
+        _last_price_date.update(last_dates)
         _live_price_history_seeded = True
 
 
@@ -457,6 +478,7 @@ def sim_fetch_data(state: AgentState, portfolio: Portfolio) -> dict:
         "macro_indicators": {},
         "fear_greed": None,
         "earnings_calendar": {},
+        "risk_metrics": _compute_risk_metrics(portfolio),
         "skip_research": flat,
         "log": logs,
     }
@@ -538,6 +560,24 @@ def load_memory_node(state: AgentState) -> dict:
     return {"past_trades": past_trades, "known_patterns": patterns, "log": logs}
 
 
+def _compute_risk_metrics(portfolio: Portfolio) -> dict:
+    """Sharpe / drawdown snapshot from the portfolio value history (for risk_manager).
+
+    Values are per-cycle, not daily — the annualized Sharpe is indicative only.
+    """
+    with portfolio._lock:
+        values = [v["value"] for v in portfolio.value_history[-200:]]
+        peak = portfolio.peak_value
+    current_dd = 0.0
+    if peak > 0 and values:
+        current_dd = max(0.0, (peak - values[-1]) / peak)
+    return {
+        "sharpe": round(sharpe_ratio(values), 2),
+        "max_drawdown_pct": round(max_drawdown(values) * 100, 2),
+        "current_drawdown_pct": round(current_dd * 100, 2),
+    }
+
+
 def make_fetch_data_node(portfolio: Portfolio):
     def fetch_data_node(state: AgentState) -> dict:
         if _sim_mode["enabled"]:
@@ -583,6 +623,7 @@ def make_fetch_data_node(portfolio: Portfolio):
             "macro_indicators": macro_indicators,
             "fear_greed": fear_greed,
             "earnings_calendar": earnings_calendar,
+            "risk_metrics": _compute_risk_metrics(portfolio),
             "skip_research": flat,
             "log": logs,
         }
@@ -636,7 +677,15 @@ def risk_check_node(state: AgentState) -> dict:
         if alloc > MAX_ALLOC_PCT:
             decision = {**decision, "allocation_pct": MAX_ALLOC_PCT}
             alloc = MAX_ALLOC_PCT
-        if symbol and is_earnings_week(symbol):
+        # Hard block when earnings are imminent (whipsaw risk); damp for the rest
+        # of the earnings week. Uses the calendar already fetched this cycle.
+        earnings_entry = (state.get("earnings_calendar") or {}).get(symbol)
+        days_until = earnings_entry.get("days_until") if earnings_entry else None
+        if days_until is not None and 0 <= days_until <= EARNINGS_BLOCK_DAYS:
+            failures.append(
+                f"earnings {symbol} dans {days_until}j (< {EARNINGS_BLOCK_DAYS}j) — BUY bloqué"
+            )
+        elif symbol and is_earnings_week(symbol):
             logger.warning(
                 "Earnings week for %s — allocation reduced (earnings guard)",
                 symbol,
@@ -645,6 +694,33 @@ def risk_check_node(state: AgentState) -> dict:
             if damped < alloc:
                 decision = {**decision, "allocation_pct": damped}
                 alloc = damped
+        # Volatility-aware sizing: damp allocation when the symbol's realized
+        # daily volatility is elevated (uses the same close series as RSI).
+        closes = (
+            _sim_price_history.get(symbol)
+            if _sim_mode["enabled"]
+            else _live_price_history.get(symbol)
+        ) or []
+        sym_vol = realized_volatility(closes, window=20)
+        if sym_vol > 0.0:
+            if sym_vol > 0.03:
+                vol_factor = 0.5
+            elif sym_vol > 0.02:
+                vol_factor = 0.75
+            else:
+                vol_factor = 1.0
+            if vol_factor < 1.0:
+                damped = max(5.0, alloc * vol_factor)
+                if damped < alloc:
+                    logger.info(
+                        "Volatility guard %s: daily vol %.1f%% — allocation %.1f%% → %.1f%%",
+                        symbol,
+                        sym_vol * 100,
+                        alloc,
+                        damped,
+                    )
+                    decision = {**decision, "allocation_pct": damped}
+                    alloc = damped
         amount = pv * (alloc / 100)
         if amount > balance:
             failures.append(f"cash insuffisant (besoin ${amount:.0f} > dispo ${balance:.0f})")
@@ -775,7 +851,61 @@ def make_execute_node(portfolio: Portfolio):
                     )
                 )
 
-        if action == "BUY" and symbol in prices:
+        # Partial take-profit and time-stop on remaining open positions.
+        for tp_sym, tp_pos in list(portfolio.positions.items()):
+            try:
+                pxf = float(prices.get(tp_sym, 0.0))
+                avg = float(tp_pos.get("avg_price", tp_pos.get("avg_cost", 0)))
+            except (TypeError, ValueError):
+                continue
+            if math.isnan(pxf) or pxf <= 0 or math.isnan(avg) or avg <= 0:
+                continue
+            pnl_frac = pxf / avg - 1.0
+            if pnl_frac >= TAKE_PROFIT_PCT and not tp_pos.get("tp_taken"):
+                tp_slip = 1 + random.uniform(-0.001, 0.001)
+                res = portfolio.sell(tp_sym, TAKE_PROFIT_SELL_PCT, pxf * tp_slip)
+                if res.get("success"):
+                    portfolio.mark_take_profit(tp_sym)
+                    logs.append(
+                        _entry(
+                            f"[TAKE PROFIT] {TAKE_PROFIT_SELL_PCT:.0f}% {tp_sym} "
+                            f"@ ${pxf:.2f} ({pnl_frac:+.1%} vs ${avg:.2f})"
+                        )
+                    )
+                continue
+            opened_at = tp_pos.get("opened_at")
+            if opened_at and abs(pnl_frac) < TIME_STOP_BAND_PCT:
+                try:
+                    held_days = (datetime.now() - datetime.fromisoformat(str(opened_at))).days
+                except (ValueError, TypeError):
+                    held_days = 0
+                if held_days > TIME_STOP_DAYS:
+                    ts_slip = 1 + random.uniform(-0.001, 0.001)
+                    res = portfolio.sell(tp_sym, 100, pxf * ts_slip)
+                    if res.get("success"):
+                        logs.append(
+                            _entry(
+                                f"[TIME STOP] {tp_sym} @ ${pxf:.2f} after {held_days}d "
+                                f"(PnL {pnl_frac:+.1%} within ±{TIME_STOP_BAND_PCT:.0%})",
+                                "warning",
+                            )
+                        )
+
+        dd_from_peak = (
+            (portfolio.peak_value - pv) / portfolio.peak_value if portfolio.peak_value > 0 else 0.0
+        )
+
+        if action == "BUY" and dd_from_peak >= MAX_DRAWDOWN_BLOCK_PCT:
+            logs.append(
+                _entry(
+                    f"[DD GUARD] BUY {symbol} bloqué — drawdown {dd_from_peak:.1%} "
+                    f"≥ {MAX_DRAWDOWN_BLOCK_PCT:.0%} depuis le peak",
+                    "warning",
+                )
+            )
+            result = {"success": True}
+
+        elif action == "BUY" and symbol in prices:
             slip = 1 + random.uniform(-0.001, 0.001)
             price = prices[symbol] * slip
             amount = pv * (min(alloc, MAX_ALLOC_PCT) / 100)

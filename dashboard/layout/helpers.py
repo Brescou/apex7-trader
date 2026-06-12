@@ -6,7 +6,6 @@ import plotly.graph_objects as go
 from dash import dcc, html
 
 from core.data import Portfolio
-from agents.shared.nodes import _db_read
 from dashboard.layout.classify import _classify_v2
 from dashboard.server import (
     BG_CARD,
@@ -385,71 +384,6 @@ def _live_agent_eval_banner(metrics: dict[str, int | float | bool]) -> html.Div:
 # ═══════════════════════════════════════════════════════════════════════════════
 # DB LOADERS
 # ═══════════════════════════════════════════════════════════════════════════════
-
-
-def _load_agent_memory() -> list[dict]:
-    rows = _db_read(
-        "SELECT id,timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source "
-        "FROM agent_memory ORDER BY timestamp DESC LIMIT 1000"
-    )
-    cols = (
-        "id",
-        "timestamp",
-        "agent_name",
-        "symbol",
-        "vote",
-        "confidence",
-        "was_correct",
-        "lesson",
-        "source",
-    )
-    return [dict(zip(cols, r)) for r in rows]
-
-
-def _load_postmortem() -> list[dict]:
-    rows = _db_read(
-        "SELECT id,timestamp,symbol,buy_price,sell_price,pnl_pct,holding_hours,"
-        "agents_correct,summary,source "
-        "FROM postmortem ORDER BY timestamp DESC LIMIT 100"
-    )
-    cols = (
-        "id",
-        "timestamp",
-        "symbol",
-        "buy_price",
-        "sell_price",
-        "pnl_pct",
-        "holding_hours",
-        "agents_correct",
-        "summary",
-        "source",
-    )
-    return [dict(zip(cols, r)) for r in rows]
-
-
-def _load_trades_db() -> list[dict]:
-    rows = _db_read(
-        "SELECT id,timestamp,symbol,action,price,amount_usd,shares,"
-        "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source "
-        "FROM trades ORDER BY timestamp DESC LIMIT 500"
-    )
-    cols = (
-        "id",
-        "timestamp",
-        "symbol",
-        "action",
-        "price",
-        "amount_usd",
-        "shares",
-        "reasoning",
-        "confidence",
-        "emotion",
-        "portfolio_value_after",
-        "lesson",
-        "trace_id",
-        "source",
-    )
-    return [dict(zip(cols, r)) for r in rows]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
