@@ -311,6 +311,7 @@ class LiveFeed:
 
     def fetch(self) -> dict[str, float]:
         result = {}
+        failed: list[str] = []
         for sym in self.symbols:
             try:
                 ticker = yf.Ticker(sym)
@@ -318,5 +319,7 @@ class LiveFeed:
                 if not hist.empty:
                     result[sym] = float(hist["Close"].iloc[-1])
             except Exception:
-                pass
+                failed.append(sym)
+        if failed:
+            logger.warning("LiveFeed: 1m history fetch failed for %s", failed)
         return result

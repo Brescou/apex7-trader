@@ -1,6 +1,7 @@
 """APEX-7 — Terminal tab — watchlist grid, screener, alerts, compare, CSV export."""
 
 import json
+import logging
 import time
 
 import dash
@@ -32,6 +33,8 @@ from dashboard.callbacks.terminal._shared import (
     BG_PANEL,
     _DOT_PALETTE,
 )
+
+logger = logging.getLogger("apex7.terminal.watchlist")
 
 
 @app.callback(
@@ -154,7 +157,8 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
 
     try:
         prices = fetch_watchlist_prices(wl)
-    except Exception:
+    except Exception as exc:
+        logger.warning("watchlist grid: fetch_watchlist_prices failed: %s", exc)
         prices = {}
 
     # Skip the rebuild when no displayed field has moved since last tick.
@@ -178,7 +182,8 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
 
         try:
             spark = fetch_sparkline(sym)
-        except Exception:
+        except Exception as exc:
+            logger.debug("watchlist grid: sparkline failed for %s: %s", sym, exc)
             spark = []
 
         # RSI badge
@@ -472,7 +477,8 @@ def _run_screener(_, watchlist, rsi_range, chg_min, chg_max, flags):
 
     try:
         results = run_screener(wl, filters)
-    except Exception:
+    except Exception as exc:
+        logger.warning("screener: run_screener failed: %s", exc)
         results = []
 
     if not results:
@@ -557,7 +563,8 @@ def _export_csv(n, watchlist):
     wl = watchlist or []
     try:
         prices = fetch_watchlist_prices(wl)
-    except Exception:
+    except Exception as exc:
+        logger.warning("csv export: fetch_watchlist_prices failed: %s", exc)
         prices = {}
 
     rows = []
@@ -648,7 +655,8 @@ def _check_alerts(_, alerts, watchlist):
     all_syms = list({a["symbol"] for a in alerts} | set(watchlist or []))
     try:
         prices = fetch_watchlist_prices(all_syms)
-    except Exception:
+    except Exception as exc:
+        logger.warning("alerts: fetch_watchlist_prices failed: %s", exc)
         prices = {}
 
     triggered = []

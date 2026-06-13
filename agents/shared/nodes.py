@@ -261,8 +261,8 @@ def _fetch_sentiment_sync(symbols: list[str]) -> dict[str, float]:
                         count += 1
                 result[sym] = round(max(min(score / max(count, 1), 1.0), -1.0), 2)
             return result
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Twitter sentiment fetch failed, falling back to neutral: %s", exc)
     # No Twitter credentials — return neutral signal (0.0) rather than random noise.
     return {sym: 0.0 for sym in symbols}
 
@@ -1150,7 +1150,10 @@ _agent_status: dict = {
     "last_update": None,
 }
 
-_trace_id: dict = {"current": ""}
+# Seeded with a real UUID so votes recorded before the controller's first
+# _new_trace_id() call (e.g. direct graph invocation from LangGraph Studio)
+# never carry an empty trace_id — evaluate_pending_trades matches by trace_id.
+_trace_id: dict = {"current": _uuid_mod.uuid4().hex[:8]}
 
 
 def _new_trace_id() -> str:

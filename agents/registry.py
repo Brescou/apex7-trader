@@ -1,4 +1,8 @@
-"""core.registry — single multi-agent graph builder + UI metadata."""
+"""agents.registry — single multi-agent graph builder + UI metadata.
+
+Lives in ``agents/`` (not ``core/``) because it imports ``agents.multi`` and
+``core/`` must never depend on ``agents/``.
+"""
 
 from agents.multi import build_multi_graph
 from core.data import Portfolio

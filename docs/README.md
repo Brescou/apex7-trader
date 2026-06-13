@@ -214,6 +214,7 @@ apex7-trader/
 │
 ├── agents/                         # Agent graph and shared logic
 │   ├── multi.py                    # Multi-agent graph (4 specialists + arbitration)
+│   ├── registry.py                 # Single graph builder + UI metadata
 │   └── shared/
 │       ├── state.py                # AgentState, MultiAgentState TypedDicts
 │       ├── nodes.py                # Shared nodes, DB helpers, sim engine, _llm()
@@ -225,8 +226,7 @@ apex7-trader/
 │   ├── data.py                     # Portfolio (thread-safe), LiveFeed
 │   ├── backtest.py                 # run_backtest(), compare_strategies()
 │   ├── indicators.py               # Canonical RSI implementation
-│   ├── metrics.py                  # Sharpe/Sortino/drawdown/Kelly (pure functions)
-│   └── registry.py                 # Single graph builder + UI metadata
+│   └── metrics.py                  # Sharpe/Sortino/drawdown/Kelly (pure functions)
 │
 ├── dashboard/                      # Dash UI
 │   ├── __init__.py                 # create_app() entry point
@@ -498,7 +498,7 @@ g.add_edge("my_node", "risk_check")
 2. Add the node function in `agents/multi.py`
 3. Add it to the `Send()` fan-out in `_route_to_agents()`
 4. Add an edge to `arbitrate`
-5. Update `WEIGHTS` dict and `core/registry.py` description
+5. Update `WEIGHTS` dict and `agents/registry.py` description
 
 ### Add a new ticker
 

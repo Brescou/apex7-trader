@@ -60,6 +60,7 @@ apex7-trader/
 ├── agents/
 │   ├── __init__.py
 │   ├── multi.py           ← unique multi-agent graph
+│   ├── registry.py        ← single graph builder + UI metadata (imports agents.multi)
 │   └── shared/
 │       ├── __init__.py
 │       ├── state.py       ← AgentState, MultiAgentState TypedDicts
@@ -77,8 +78,7 @@ apex7-trader/
 │   ├── notifications.py   ← optional Discord webhook (trades, digest, weekly, evaluation, …)
 │   ├── external_data.py   ← FRED series + CNN Fear & Greed (HTTP, TTL caches)
 │   ├── backtest.py        ← run_backtest, compare_strategies (yfinance history)
-│   ├── indicators.py      ← Shared RSI implementation
-│   └── registry.py        ← single graph builder + UI metadata
+│   └── indicators.py      ← Shared RSI implementation
 ├── dashboard/
 │   ├── __init__.py        ← create_app()
 │   ├── server.py          ← Dash() init + design tokens
@@ -167,7 +167,7 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `core/external_data.py` | `fetch_fred_latest`, `fetch_fred_release_dates` (release schedule), `fetch_macro_indicators`, `fetch_fear_greed` (CNN) |
 | `core/backtest.py` | Functional API (`fetch_historical`, `compute_indicators`, `run_backtest`, `compare_strategies`) |
 | `core/indicators.py` | Canonical `rsi()`, `ema()`, `macd()`, `bollinger_bands()`, `bb_position()` — used across agents, backtest, market_data |
-| `core/registry.py` | Single `get_graph(p)` + `get_graph_info()` UI metadata |
+| `agents/registry.py` | Single `get_graph(p)` + `get_graph_info()` UI metadata (in `agents/` because it imports `agents.multi`) |
 | `config.py` | All constants, loaded from `.env` |
 | `market_data/` | Package terminal — `macro`, `quotes`, `news`, `earnings`, `charts`, `sectors`, `correlation`, `economic_calendar`, `screener` ; **zéro** import `agents`/`dashboard` |
 | `langgraph.json` | LangGraph Studio config — exposes both compiled graphs |
@@ -369,7 +369,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`trades.db` soft migration** — on startup, `agents/shared/db.py` tries `ALTER TABLE trades ADD COLUMN source …` and `ADD COLUMN trace_id …`, and silently catches `OperationalError` if columns exist. Do not remove these blocks.
 - **`research` goes directly to `risk_check`** — `research_node` does not loop back to `arbitrate`. This is intentional.
 - **`LiveFeed` not wired into graph nodes** — `LiveFeed` is wired into `Portfolio.fetch_prices()` only; it is not a LangGraph node.
-- **`core/registry.py` description** — update `GRAPH_INFO["description"]` if a 5th specialist is added to `agents/multi.py`.
+- **`agents/registry.py` description** — update `GRAPH_INFO["description"]` if a 5th specialist is added to `agents/multi.py`. The registry lives in `agents/` (moved from `core/`) because it imports `agents.multi` and `core/` must never depend on `agents/`.
 - **Postmortem thread only in `dashboard/controller.py`** — `run_daily_postmortem()` is never called from `main.py`. It only runs when the full Dash app is started.
 - **`market_data` caches** — macro 60s, watchlist 10s (`market_data.caches`) pour limiter yfinance. Cache mémoire uniquement ; reset au redémarrage. Un **circuit breaker yfinance** (`yf_circuit_open` / `record_yf_failure` / `record_yf_success` dans `caches.py`) s'ouvre après 3 échecs consécutifs et sert le cache stale pendant 60 s — câblé dans `quotes.py` et `macro.py`.
 - **Sentiment Twitter neutre sans token** — `_fetch_sentiment_sync` retourne `0.0` par symbole quand `X_BEARER_TOKEN` est absent (plus de bruit aléatoire ±0.3 traité comme signal).
@@ -388,7 +388,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`/health` and agent liveness** — `dashboard/server.py` returns HTTP **503** when `portfolio.is_dead` (or no portfolio), **200** when alive; JSON includes `status` (`ok` / `dead`) and `agent_alive`.
 - **Zero-price stop-loss** — `execute_node` runs SL only when `sl_avg > 0`, `sl_price > 0`, and the quote is plausible: `sl_price > 1.0`, or both cost basis and quote are ≤ $1 (penny stocks). Otherwise it skips SL and logs a warning (`Skipping stop-loss check…`) — avoids bogus ticks (e.g. yfinance 0 / stale sub-dollar quote vs a normal-cost basis) without spamming every cycle on legitimate sub-dollar names.
 - **Backtest vs live RSI** — `core/backtest.py` `compute_indicators()` uses `core.indicators.rsi()` for `RSI_14` (same function as agents). Do not reintroduce pandas EWM for RSI.
-- **`test_sqlite_schema` fails on a clean clone** — `tests/test_smoke.py` asserts `trades.db` exists, but `_ensure_db()` is lazy and only runs on first write. The test must call `_ensure_db()` before asserting the schema.
+- **`test_sqlite_schema` runs against a temp DB** — `tests/test_smoke.py` redirects `_get_db_path` to a temp file (mirroring the `tmp_db` fixture, but fixture-free so the legacy runner works), calls `_ensure_db()` there, and never writes the project `trades.db`.
 - **Token budget resets daily** — `_maybe_reset_token_counter()` in `agents/shared/llm.py` is called at the start of each `_llm()` invocation and resets `_token_counter` at midnight. **`_maybe_reset_token_counter()` acquiert `_token_counter_lock` lui-même** — ne jamais l’appeler depuis une section déjà verrouillée par `_token_counter_lock`, sinon deadlock.
 - **All LLM specialist votes validated by Pydantic** — `technician_node`, `analyst_node`, `risk_manager_node`, `macro_watcher_node` and `arbitrate_node` all pass raw LLM JSON through their respective `validate_*_vote()` / `validate_decision()` functions from `agents/shared/schemas.py`.
 - **`was_correct` is deferred** — `agent_memory.was_correct` reflects the actual market move 5 trading days after the trade (resolved by `evaluate_pending_trades`), not the arbitration consensus. Right after a trade, `was_correct IS NULL`; the dashboard shows `⏳ Calibrating` per agent until ≥ 5 evaluated votes accumulate.

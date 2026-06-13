@@ -14,9 +14,9 @@ from agents.shared.nodes import (
 )
 from agents.shared.watchlist import get_watchlist
 from agents.multi import run_daily_digest, run_daily_postmortem, run_weekly_report
+from agents.registry import get_graph
 from config import AGENT_INTERVAL, POSTMORTEM_HOUR
 from core.data import Portfolio
-from core.registry import get_graph
 
 logger = logging.getLogger("apex7.controller")
 

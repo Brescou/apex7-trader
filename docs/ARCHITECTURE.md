@@ -26,6 +26,7 @@ apex7-trader/
 ├── agents/
 │   ├── __init__.py
 │   ├── multi.py           ← unique multi-agent graph (4 specialists + arbitration)
+│   ├── registry.py        ← graph builder + UI metadata (imports agents.multi)
 │   └── shared/
 │       ├── __init__.py
 │       ├── state.py       ← AgentState, MultiAgentState TypedDicts
@@ -43,8 +44,7 @@ apex7-trader/
 │   ├── notifications.py  ← Discord (trades, digest, weekly, evaluation)
 │   ├── external_data.py  ← FRED + CNN Fear & Greed
 │   ├── backtest.py        ← run_backtest, compare_strategies
-│   ├── indicators.py      ← Shared RSI implementation
-│   └── registry.py        ← graph builder + UI metadata (single graph)
+│   └── indicators.py      ← Shared RSI implementation
 ├── dashboard/
 │   ├── __init__.py        ← create_app()
 │   ├── server.py          ← Dash() init + design tokens + /health endpoint
@@ -105,10 +105,10 @@ main.py
         └── dashboard.callbacks.* (all @app.callback)
               ├── core.data (Portfolio)
               ├── core.backtest (run_backtest)
-              ├── core.registry (get_graph)
+              ├── agents.registry (get_graph)
               └── market_data (fetch_*)
 
-core.registry
+agents.registry
   └── agents.multi (build_multi_graph)
         └── agents.shared.nodes, agents.shared.state
               └── core.data (Portfolio)
@@ -272,7 +272,7 @@ three modes; the routing happens inside each node):
 
 Shared nodes are implemented in `agents/shared/nodes.py` (with SQLite in `agents/shared/db.py`, `_llm` in `agents/shared/llm.py`, deferred evaluation in `agents/shared/eval.py`) and reused by `agents/multi.py`: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`.
 
-`core/registry.py` exposes a single `get_graph(portfolio)` returning the compiled multi-agent graph and `get_graph_info()` returning UI metadata.
+`agents/registry.py` exposes a single `get_graph(portfolio)` returning the compiled multi-agent graph and `get_graph_info()` returning UI metadata. It lives in `agents/` because it imports `agents.multi` — `core/` must never depend on `agents/`.
 
 ## SQLite Schema
 

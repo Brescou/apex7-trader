@@ -1,5 +1,7 @@
 """APEX-7 — Terminal tab — symbol chart, news, and comparison callbacks."""
 
+import logging
+
 import plotly.graph_objects as go
 from dash import Input, Output, State, dcc, html, no_update
 
@@ -28,6 +30,8 @@ from dashboard.server import (
     app,
 )
 
+logger = logging.getLogger("apex7.terminal.charts")
+
 
 def _fallback_active_symbol(symbol) -> str:
     if symbol:
@@ -54,7 +58,8 @@ def _fundamentals_strip(symbol: str) -> html.Div:
     """
     try:
         f = fetch_fundamentals(symbol)
-    except Exception:
+    except Exception as exc:
+        logger.debug("fundamentals strip: fetch failed for %s: %s", symbol, exc)
         f = {}
 
     cells = [
@@ -130,7 +135,8 @@ def _update_news(symbol, _):
 
     try:
         items = fetch_news(sym)
-    except Exception:
+    except Exception as exc:
+        logger.warning("news panel: fetch_news failed for %s: %s", sym, exc)
         items = []
 
     if not items:
@@ -230,7 +236,8 @@ def _update_news_content(symbol, _, active_tab):
 
     try:
         items = fetch_news(sym)
-    except Exception:
+    except Exception as exc:
+        logger.warning("news content: fetch_news failed for %s: %s", sym, exc)
         items = []
 
     if not items:
@@ -465,7 +472,8 @@ def _update_comparison(period, symbols):
 
     try:
         data = fetch_comparison(symbols, period or "1mo")
-    except Exception:
+    except Exception as exc:
+        logger.warning("comparison chart: fetch failed for %s: %s", symbols, exc)
         data = {}
 
     palette = [BLUE, PURPLE, GREEN, RED, ORANGE]

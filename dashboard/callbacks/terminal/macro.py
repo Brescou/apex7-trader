@@ -1,5 +1,6 @@
 """APEX-7 — Terminal tab — macro bar, sector rotation, correlation matrix, economic calendar."""
 
+import logging
 import math
 
 import plotly.graph_objects as go
@@ -34,6 +35,8 @@ from dashboard.callbacks.terminal._shared import (
     _MACRO_BAR_EXTRA_CACHE_SEC,
     _MACRO_KEYS,
 )
+
+logger = logging.getLogger("apex7.terminal.macro")
 
 
 def _fear_greed_bar_bucket(score: int) -> tuple[str, str]:
@@ -90,7 +93,8 @@ def _mini_macro_chart(spark_data, chg):
 def _update_macro_bar(_):
     try:
         data = fetch_macro()
-    except Exception:
+    except Exception as exc:
+        logger.warning("macro bar: fetch_macro failed: %s", exc)
         data = {}
 
     _lbl = {
@@ -132,7 +136,8 @@ def _update_macro_bar(_):
 
         try:
             spark = fetch_sparkline(yf_sym)
-        except Exception:
+        except Exception as exc:
+            logger.debug("macro bar: sparkline failed for %s: %s", yf_sym, exc)
             spark = []
 
         mini = _mini_macro_chart(spark, float(chg) if chg is not None else None)
@@ -172,7 +177,8 @@ def _update_macro_bar(_):
 
     try:
         fg = fetch_fear_greed(max_cache_sec=_MACRO_BAR_EXTRA_CACHE_SEC)
-    except Exception:
+    except Exception as exc:
+        logger.warning("macro bar: fear & greed fetch failed: %s", exc)
         fg = None
     if fg and fg.get("score") is not None:
         sc = int(fg["score"])
@@ -204,7 +210,8 @@ def _update_macro_bar(_):
     try:
         fed_obs = fetch_fred_latest("FEDFUNDS", max_cache_sec=_MACRO_BAR_EXTRA_CACHE_SEC)
         y10_obs = fetch_fred_latest("DGS10", max_cache_sec=_MACRO_BAR_EXTRA_CACHE_SEC)
-    except Exception:
+    except Exception as exc:
+        logger.warning("macro bar: FRED fetch failed: %s", exc)
         fed_obs = y10_obs = None
 
     fed_val = fed_obs.get("value") if fed_obs else None
@@ -322,7 +329,8 @@ def _update_sector_rotation(_):
     periods = _SECTOR_HEAT_PERIODS
     try:
         grid = fetch_sector_performance(periods)
-    except Exception:
+    except Exception as exc:
+        logger.warning("sector rotation: fetch_sector_performance failed: %s", exc)
         grid = {}
 
     if not grid:
@@ -447,7 +455,8 @@ def _update_correlation_matrix(period, _tick, wl_data):
 
     try:
         payload = fetch_correlation_matrix(syms, period=period)
-    except Exception:
+    except Exception as exc:
+        logger.warning("correlation matrix: fetch failed for %s: %s", syms, exc)
         payload = {"symbols": syms, "matrix": []}
 
     symbols = payload.get("symbols") or []
@@ -543,7 +552,8 @@ def _update_economic_calendar(_, wl_data):
     symbols = wl_data if isinstance(wl_data, list) and wl_data else get_watchlist()
     try:
         rows = build_economic_calendar_rows(symbols, horizon_days=120)
-    except Exception:
+    except Exception as exc:
+        logger.warning("economic calendar: build rows failed: %s", exc)
         rows = []
 
     if not rows:

@@ -7,9 +7,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
+from agents.registry import get_graph, get_graph_info
 from config import INITIAL_BALANCE
 from core.data import Portfolio
-from core.registry import get_graph, get_graph_info
 from dashboard.layout.classify import _classify_v2
 from dashboard.layout.emotions import _cycle, _emotion, _thinking
 

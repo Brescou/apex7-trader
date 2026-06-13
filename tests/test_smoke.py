@@ -20,7 +20,7 @@ def test_imports():
     import config  # noqa: F401
     from core.data import Portfolio, LiveFeed  # noqa: F401
     from core.backtest import run_backtest  # noqa: F401
-    from core.registry import get_graph  # noqa: F401
+    from agents.registry import get_graph  # noqa: F401
 
 
 def test_portfolio_basic(portfolio):
@@ -178,21 +178,33 @@ def test_backtest_run():
 
 
 def test_sqlite_schema():
-    """Schema check — uses lazy DB init so a clean clone passes (Finding 5.1)."""
+    """Schema check against a temp DB — never touches the project ``trades.db``.
+
+    Avoids pytest fixtures so the legacy ``python tests/test_smoke.py`` runner
+    keeps working; the redirect mirrors the ``tmp_db`` fixture in conftest.
+    """
     import sqlite3
+    import tempfile
     from pathlib import Path
 
-    from agents.shared.nodes import _ensure_db
+    import agents.shared.db as db_mod
 
-    _ensure_db()
+    orig_get_db_path = db_mod._get_db_path
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "schema_check.db"
+        db_mod._get_db_path = lambda: db_path
+        try:
+            db_mod._db_initialized_paths.discard(str(db_path))
+            db_mod._ensure_db()
+            assert db_path.is_file(), f"schema DB not created at {db_path}"
 
-    db_path = Path(__file__).parent.parent / "trades.db"
-    assert db_path.is_file(), f"trades.db not created at {db_path}"
-
-    con = sqlite3.connect(db_path)
-    cursor = con.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    tables = {row[0] for row in cursor.fetchall()}
-    con.close()
+            con = sqlite3.connect(db_path)
+            cursor = con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = {row[0] for row in cursor.fetchall()}
+            con.close()
+        finally:
+            db_mod._get_db_path = orig_get_db_path
+            db_mod._db_initialized_paths.discard(str(db_path))
 
     required_tables = {"trades", "patterns", "agent_memory", "postmortem", "watchlist"}
     for table in required_tables:

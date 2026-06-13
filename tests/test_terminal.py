@@ -42,6 +42,23 @@ def _dash_collect_text(node) -> list[str]:
     return _dash_collect_text(children)
 
 
+def _reset_macro_cache() -> None:
+    from market_data import caches
+
+    caches._macro_cache["data"] = None
+    caches._macro_cache["ts"] = 0.0
+    caches.record_yf_success()
+
+
+def _reset_watchlist_cache() -> None:
+    from market_data import caches
+
+    caches._watchlist_cache["data"] = None
+    caches._watchlist_cache["ts"] = 0.0
+    caches._watchlist_cache["key"] = ""
+    caches.record_yf_success()
+
+
 def _reset_sector_cache() -> None:
     from market_data import caches
 
@@ -58,13 +75,53 @@ def _reset_corr_cache() -> None:
     caches._corr_matrix_cache["key"] = ""
 
 
+class _FakeTicker:
+    """Offline yfinance stand-in — deterministic rising closes + canned news.
+
+    Keeps ``test_fetch_macro`` / ``test_fetch_watchlist_prices`` /
+    ``test_fetch_news`` hermetic (no network, no rate-limit flakiness).
+    """
+
+    def __init__(self, symbol):
+        self.symbol = symbol
+
+    def history(self, period="5d", interval="1d", **_kwargs):
+        n = 260 if period == "1y" else 5
+        idx = pd.date_range("2026-01-02", periods=n, freq="D")
+        close = np.linspace(100.0, 110.0, n)
+        volume = np.full(n, 2_000_000)
+        return pd.DataFrame({"Close": close, "Volume": volume}, index=idx)
+
+    @property
+    def news(self):
+        return [
+            {
+                "content": {
+                    "title": f"{self.symbol} rallies on earnings beat",
+                    "provider": {"displayName": "TestWire"},
+                    "canonicalUrl": {"url": "https://example.com/a"},
+                    "pubDate": "2026-06-11T12:00:00Z",
+                }
+            },
+            {
+                "title": f"{self.symbol} slides after downgrade",
+                "publisher": "TestWire",
+                "link": "https://example.com/b",
+                "providerPublishTime": 1765000000,
+            },
+        ]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_fetch_macro():
+    import market_data as md
     from market_data import fetch_macro
 
-    result = fetch_macro()
+    _reset_macro_cache()
+    with patch.object(md.yf, "Ticker", _FakeTicker):
+        result = fetch_macro()
     assert isinstance(result, dict), f"fetch_macro must return dict, got {type(result)}"
     assert len(result) > 0, "fetch_macro returned empty dict"
     if "updated_at" in result:
@@ -76,13 +133,19 @@ def test_fetch_macro():
         assert "change_pct" in val, f"Missing 'change_pct' in macro entry {key}"
         assert "direction" in val, f"Missing 'direction' in macro entry {key}"
         assert val["direction"] in ("up", "down", "flat"), f"Invalid direction: {val['direction']}"
+        # Rising fake closes (107.5 → 110.0) must classify as "up".
+        assert val["price"] == 110.0, f"Unexpected price for {key}: {val['price']}"
+        assert val["direction"] == "up", f"Expected 'up' for {key}, got {val['direction']}"
 
 
 def test_fetch_watchlist_prices():
+    import market_data as md
     from market_data import fetch_watchlist_prices
 
     symbols = ["AAPL", "MSFT"]
-    result = fetch_watchlist_prices(symbols)
+    _reset_watchlist_cache()
+    with patch.object(md.yf, "Ticker", _FakeTicker):
+        result = fetch_watchlist_prices(symbols)
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"
     for sym in symbols:
         assert sym in result, f"Missing symbol {sym} in result"
@@ -101,13 +164,19 @@ def test_fetch_watchlist_prices():
             assert k in entry, f"Missing key '{k}' in watchlist entry for {sym}"
         assert isinstance(entry["above_ma20"], bool), f"above_ma20 must be bool for {sym}"
         assert isinstance(entry["rsi_14"], (float, int, type(None))), f"rsi_14 type error for {sym}"
+        # Monotonically rising fake closes → last price 110.0, above the MA20.
+        assert entry["price"] == 110.0, f"Unexpected price for {sym}: {entry['price']}"
+        assert entry["above_ma20"] is True, f"Expected above_ma20=True for {sym}"
 
 
 def test_fetch_news():
+    import market_data as md
     from market_data import fetch_news
 
-    result = fetch_news("AAPL")
+    with patch.object(md.yf, "Ticker", _FakeTicker):
+        result = fetch_news("AAPL")
     assert isinstance(result, list), f"fetch_news must return list, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 fake news items, got {len(result)}"
     for item in result:
         assert "title" in item, f"News item missing 'title': {item}"
         assert "source" in item, f"News item missing 'source': {item}"
@@ -119,6 +188,11 @@ def test_fetch_news():
             "negative",
             "neutral",
         ), f"Invalid sentiment: {item['sentiment']}"
+    # Modern (content dict) and legacy (flat) yfinance news shapes both parse.
+    assert result[0]["title"] == "AAPL rallies on earnings beat"
+    assert result[0]["source"] == "TestWire"
+    assert result[0]["url"] == "https://example.com/a"
+    assert result[1]["title"] == "AAPL slides after downgrade"
 
 
 def test_run_screener():

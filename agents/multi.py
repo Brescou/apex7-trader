@@ -233,7 +233,7 @@ def _record_vote(
     the matching trade. Without it, the UPDATE matches zero rows and
     accuracy stays NULL forever (Review v5 Finding 3.2).
     """
-    _db_write(
+    ok = _db_write(
         "INSERT INTO agent_memory "
         "(timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source,trace_id) "
         "VALUES (?,?,?,?,?,NULL,NULL,?,?)",
@@ -247,6 +247,13 @@ def _record_vote(
             _get_trace_id(),
         ),
     )
+    if not ok:
+        logger.warning(
+            "vote not persisted (agent_memory gap → skews dynamic weights): %s %s %s",
+            agent_name,
+            action,
+            symbol,
+        )
 
 
 # ── Specialist node scaffolding (shared by the 4 LLM specialists) ────────────
