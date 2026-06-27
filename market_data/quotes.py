@@ -36,6 +36,8 @@ def _finnhub_overlay(symbols: list[str], stale: dict) -> dict:
             "volume": base.get("volume", 0),
             "high_52w": base.get("high_52w"),
             "low_52w": base.get("low_52w"),
+            "day_high": base.get("day_high"),
+            "day_low": base.get("day_low"),
             "rsi_14": base.get("rsi_14", 50.0),
             "above_ma20": base.get("above_ma20", False),
             "macd_hist": base.get("macd_hist", 0.0),
@@ -77,6 +79,8 @@ def fetch_watchlist_prices(symbols: list[str]) -> dict:
                         "volume": 0,
                         "high_52w": None,
                         "low_52w": None,
+                        "day_high": None,
+                        "day_low": None,
                         "rsi_14": None,
                         "above_ma20": False,
                         "macd_hist": 0.0,
@@ -84,6 +88,8 @@ def fetch_watchlist_prices(symbols: list[str]) -> dict:
                     }
                     continue
                 closes = hist["Close"].tolist()
+                highs = hist["High"].tolist()
+                lows = hist["Low"].tolist()
                 volumes = hist["Volume"].tolist()
                 price = round(closes[-1], 2)
                 prev = closes[-2]
@@ -92,6 +98,8 @@ def fetch_watchlist_prices(symbols: list[str]) -> dict:
                 volume = int(volumes[-1]) if volumes else 0
                 high_52w = round(max(closes), 2)
                 low_52w = round(min(closes), 2)
+                day_high = round(highs[-1], 2) if highs else None
+                day_low = round(lows[-1], 2) if lows else None
                 rsi_14 = rsi(closes, 14)
                 above_ma20 = (
                     price > (sum(closes[-20:]) / min(20, len(closes)))
@@ -107,6 +115,8 @@ def fetch_watchlist_prices(symbols: list[str]) -> dict:
                     "volume": volume,
                     "high_52w": high_52w,
                     "low_52w": low_52w,
+                    "day_high": day_high,
+                    "day_low": day_low,
                     "rsi_14": rsi_14 if rsi_14 is not None else 50.0,
                     "above_ma20": bool(above_ma20),
                     "macd_hist": round(macd_hist, 3),
@@ -121,6 +131,8 @@ def fetch_watchlist_prices(symbols: list[str]) -> dict:
                     "volume": 0,
                     "high_52w": None,
                     "low_52w": None,
+                    "day_high": None,
+                    "day_low": None,
                     "rsi_14": 50.0,
                     "above_ma20": False,
                     "macd_hist": 0.0,

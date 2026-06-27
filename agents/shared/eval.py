@@ -137,11 +137,13 @@ def evaluate_pending_trades(now: datetime | None = None) -> int:
             # risk_manager and macro_watcher always vote HOLD — leaving their
             # rows NULL keeps ``_compute_dynamic_weights`` from blending in
             # noise (Review v5 Finding 4.4).
+            # eval_pct_change stores |move| so dynamic-weight computation can
+            # give larger moves more signal (magnitude-weighted accuracy).
             _db_write(
-                "UPDATE agent_memory SET was_correct = ? "
+                "UPDATE agent_memory SET was_correct = ?, eval_pct_change = ? "
                 "WHERE trace_id = ? AND was_correct IS NULL "
                 "AND vote IN ('BUY', 'SELL')",
-                (was_correct, trace_id),
+                (was_correct, abs(pct_change), trace_id),
             )
         _db_write(
             "UPDATE pending_evaluations SET evaluated = 1 WHERE id = ?",

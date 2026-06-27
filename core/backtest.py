@@ -3,6 +3,7 @@
 import pandas as pd
 import yfinance as yf
 
+from config import COMMISSION_PCT, SLIPPAGE_PCT
 from core import metrics
 from core.indicators import rsi
 
@@ -121,8 +122,10 @@ def _simulate(
         if in_position and position_price > 0:
             loss_pct = (price - position_price) / position_price
             if loss_pct <= -stop_loss_pct:
-                proceeds = position_shares * price
-                cash += proceeds
+                effective_sell = price * (1 - SLIPPAGE_PCT)
+                proceeds = position_shares * effective_sell
+                commission = proceeds * COMMISSION_PCT
+                cash += proceeds - commission
                 trades.append(
                     {
                         "date": str(idx.date()) if hasattr(idx, "date") else str(idx),
@@ -150,10 +153,12 @@ def _simulate(
 
         if buy_signal and not in_position and cash > 1:
             alloc = cash * 0.95
-            shares = alloc / price
-            cash -= alloc
+            effective_buy = price * (1 + SLIPPAGE_PCT)
+            commission = alloc * COMMISSION_PCT
+            shares = alloc / effective_buy
+            cash -= alloc + commission
             position_shares = shares
-            position_price = price
+            position_price = effective_buy
             in_position = True
             trades.append(
                 {
@@ -166,8 +171,10 @@ def _simulate(
             )
 
         elif sell_signal and in_position:
-            proceeds = position_shares * price
-            cash += proceeds
+            effective_sell = price * (1 - SLIPPAGE_PCT)
+            proceeds = position_shares * effective_sell
+            commission = proceeds * COMMISSION_PCT
+            cash += proceeds - commission
             trades.append(
                 {
                     "date": str(idx.date()) if hasattr(idx, "date") else str(idx),
@@ -186,7 +193,9 @@ def _simulate(
 
     if in_position and len(df) > 0:
         last_price = float(df["Close"].iloc[-1])
-        cash += position_shares * last_price
+        effective_close = last_price * (1 - SLIPPAGE_PCT)
+        final_proceeds = position_shares * effective_close
+        cash += final_proceeds - final_proceeds * COMMISSION_PCT
         if equity_curve:
             equity_curve[-1] = cash
 

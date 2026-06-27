@@ -118,6 +118,10 @@ def _watchlist_render_signature(
                 d.get("volume", 0),
                 d.get("macd_hist", 0.0),
                 d.get("bb_pos", "mid"),
+                d.get("high_52w"),
+                d.get("low_52w"),
+                d.get("day_high"),
+                d.get("day_low"),
             )
         )
     return json.dumps(
@@ -176,6 +180,10 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
         rsi = d.get("rsi_14")
         above = d.get("above_ma20", None)
         volume = d.get("volume", 0)
+        high_52w = d.get("high_52w")
+        low_52w = d.get("low_52w")
+        day_high = d.get("day_high")
+        day_low = d.get("day_low")
         chg_col = GREEN if chg_pct >= 0 else RED
         dot_col = _DOT_PALETTE[i % len(_DOT_PALETTE)]
         active = sym == active_sym
@@ -340,6 +348,37 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
                         "marginBottom": "6px",
                     },
                 ),
+                # 52w high/low + day range row
+                html.Div(
+                    [
+                        html.Span(
+                            f"52W H: ${high_52w:.2f}" if high_52w is not None else "52W H: —",
+                            style={"fontSize": "9px", "color": GREEN},
+                        ),
+                        html.Span(
+                            f"L: ${low_52w:.2f}" if low_52w is not None else "L: —",
+                            style={"fontSize": "9px", "color": RED, "marginLeft": "6px"},
+                        ),
+                        html.Span(
+                            "·",
+                            style={"fontSize": "9px", "color": TEXT_DIM, "marginLeft": "6px"},
+                        ),
+                        html.Span(
+                            f"Day H: ${day_high:.2f}" if day_high is not None else "Day H: —",
+                            style={"fontSize": "9px", "color": TEXT_DIM, "marginLeft": "6px"},
+                        ),
+                        html.Span(
+                            f"L: ${day_low:.2f}" if day_low is not None else "L: —",
+                            style={"fontSize": "9px", "color": TEXT_DIM, "marginLeft": "4px"},
+                        ),
+                    ],
+                    style={
+                        "display": "flex",
+                        "alignItems": "center",
+                        "marginTop": "4px",
+                        "marginBottom": "2px",
+                    },
+                ),
                 # RSI + MA20 + MACD + BB + VOL row
                 html.Div(
                     [
@@ -368,7 +407,7 @@ def _update_watchlist(watchlist, _, active_sym, screener_active, screener_result
                         "alignItems": "center",
                         "flexWrap": "wrap",
                         "gap": "6px",
-                        "marginTop": "6px",
+                        "marginTop": "4px",
                         "marginBottom": "6px",
                     },
                 ),
@@ -441,9 +480,15 @@ def _select_symbol(n_clicks_list):
     State("screener-chg-min", "value"),
     State("screener-chg-max", "value"),
     State("screener-flags", "value"),
+    State("screener-pe-max", "value"),
+    State("screener-beta-max", "value"),
+    State("screener-mktcap-min", "value"),
+    State("screener-sort", "value"),
     prevent_initial_call=True,
 )
-def _run_screener(_, watchlist, rsi_range, chg_min, chg_max, flags):
+def _run_screener(
+    _, watchlist, rsi_range, chg_min, chg_max, flags, pe_max, beta_max, mktcap_min, sort_by
+):
     wl = watchlist or []
     if not wl:
         return (
@@ -458,7 +503,12 @@ def _run_screener(_, watchlist, rsi_range, chg_min, chg_max, flags):
     rsi_min = (rsi_range or [0, 100])[0]
     rsi_max = (rsi_range or [0, 100])[1]
 
-    filters: dict = {"rsi_min": rsi_min, "rsi_max": rsi_max}
+    filters: dict = {
+        "rsi_min": rsi_min,
+        "rsi_max": rsi_max,
+        "sort_by": sort_by or "change_pct",
+        "sort_desc": True,
+    }
     if chg_min is not None:
         try:
             filters["change_pct_min"] = float(chg_min)
@@ -474,6 +524,22 @@ def _run_screener(_, watchlist, rsi_range, chg_min, chg_max, flags):
         filters["above_ma20"] = True
     if "high_volume" in flags:
         filters["volume_min"] = 1_000_000
+    if pe_max is not None:
+        try:
+            filters["pe_max"] = float(pe_max)
+        except (TypeError, ValueError):
+            pass
+    if beta_max is not None:
+        try:
+            filters["beta_max"] = float(beta_max)
+        except (TypeError, ValueError):
+            pass
+    if mktcap_min is not None:
+        try:
+            # Input is in $B; convert to raw value
+            filters["mktcap_min"] = float(mktcap_min) * 1e9
+        except (TypeError, ValueError):
+            pass
 
     try:
         results = run_screener(wl, filters)
@@ -737,6 +803,72 @@ def _check_alerts(_, alerts, watchlist):
                     "borderLeft": f"3px solid {YELLOW}",
                     "borderRadius": "0 2px 2px 0",
                     "marginBottom": "3px",
+                },
+            )
+        )
+
+    # Technical alerts: auto-detect RSI extremes and volume spikes
+    tech_alerts = []
+    all_syms_wl = list(set(watchlist or []))
+    if all_syms_wl:
+        try:
+            wl_prices = fetch_watchlist_prices(all_syms_wl)
+            for sym, d in wl_prices.items():
+                if d.get("price") is None:
+                    continue
+                rsi_v = d.get("rsi_14")
+                if rsi_v is not None:
+                    try:
+                        rsi_f = float(rsi_v)
+                        if rsi_f <= 25:
+                            tech_alerts.append(
+                                html.Div(
+                                    f"⬇ {sym}: RSI {rsi_f:.0f} — EXTREME OVERSOLD",
+                                    style={
+                                        "fontSize": "10px",
+                                        "color": GREEN,
+                                        "padding": "2px 0",
+                                    },
+                                )
+                            )
+                        elif rsi_f >= 75:
+                            tech_alerts.append(
+                                html.Div(
+                                    f"⬆ {sym}: RSI {rsi_f:.0f} — EXTREME OVERBOUGHT",
+                                    style={
+                                        "fontSize": "10px",
+                                        "color": RED,
+                                        "padding": "2px 0",
+                                    },
+                                )
+                            )
+                    except (TypeError, ValueError):
+                        pass
+        except Exception as exc:
+            logger.debug("tech alerts: fetch failed: %s", exc)
+
+    if tech_alerts:
+        list_items.append(
+            html.Div(
+                [
+                    html.Div(
+                        "TECHNICAL",
+                        style={
+                            "fontSize": "8px",
+                            "color": TEXT_DIM,
+                            "letterSpacing": "0.12em",
+                            "fontWeight": "700",
+                            "marginBottom": "4px",
+                            "marginTop": "8px",
+                        },
+                    )
+                ]
+                + tech_alerts,
+                style={
+                    "padding": "4px 8px",
+                    "background": BG_CARD,
+                    "borderLeft": f"3px solid {YELLOW}",
+                    "borderRadius": "0 2px 2px 0",
                 },
             )
         )

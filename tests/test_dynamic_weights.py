@@ -118,5 +118,5 @@ def test_concurrent_calls_are_serialised(tmp_db, fresh_cache) -> None:
     # All threads receive a consistent dict (same keys, same values).
     assert all(r == results[0] for r in results)
     # The cache prevents re-reading the DB more than once for the burst.
-    # 8 threads × 4 agent reads would be 32 calls without the lock.
-    assert call_count["n"] <= 4, f"DB hit too many times under concurrency: {call_count['n']}"
+    # 8 threads × 6 agent reads would be 48 calls without the lock.
+    assert call_count["n"] <= 6, f"DB hit too many times under concurrency: {call_count['n']}"

@@ -3,11 +3,13 @@
 import logging
 
 import plotly.graph_objects as go
-from dash import Input, Output, State, dcc, html, no_update
+from plotly.subplots import make_subplots
+from dash import ALL, Input, Output, State, ctx, dcc, html, no_update
 
 from agents.shared.watchlist import get_watchlist
 from market_data import (
     fetch_comparison,
+    fetch_earnings_calendar,
     fetch_fundamentals,
     fetch_news,
     fetch_ohlcv,
@@ -31,6 +33,8 @@ from dashboard.server import (
 )
 
 logger = logging.getLogger("apex7.terminal.charts")
+
+_CHART_PERIODS = ["1d", "5d", "1mo", "3mo", "6mo", "1y"]
 
 
 def _fallback_active_symbol(symbol) -> str:
@@ -121,6 +125,62 @@ def _fundamentals_strip(symbol: str) -> html.Div:
             "borderRadius": "3px",
         },
     )
+
+
+def _period_selector(current_period: str) -> html.Div:
+    """Row of period toggle buttons."""
+    btns = []
+    for p in _CHART_PERIODS:
+        active = p == current_period
+        btns.append(
+            html.Button(
+                p.upper(),
+                id={"type": "chart-period-btn", "index": p},
+                n_clicks=0,
+                style={
+                    "background": f"{BLUE}33" if active else "transparent",
+                    "border": f"1px solid {BLUE if active else BORDER}",
+                    "color": BLUE if active else TEXT_DIM,
+                    "fontFamily": FONT,
+                    "fontSize": "8px",
+                    "padding": "2px 7px",
+                    "cursor": "pointer",
+                    "borderRadius": "2px",
+                    "letterSpacing": "0.08em",
+                    "transition": "all 0.1s",
+                },
+            )
+        )
+    return html.Div(
+        btns,
+        style={
+            "display": "flex",
+            "gap": "4px",
+            "padding": "4px 8px 2px",
+            "justifyContent": "flex-end",
+        },
+    )
+
+
+def _ma_series(closes: list, n: int) -> list | None:
+    """Simple moving average; returns None when insufficient data."""
+    if len(closes) < n:
+        return None
+    result = [None] * (n - 1)
+    for i in range(n - 1, len(closes)):
+        result.append(sum(closes[i - n + 1 : i + 1]) / n)
+    return result
+
+
+@app.callback(
+    Output("chart-period-store", "data"),
+    Input({"type": "chart-period-btn", "index": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def _update_chart_period(n_clicks_list):
+    if not any(n for n in n_clicks_list if n):
+        return no_update
+    return ctx.triggered_id["index"]
 
 
 @app.callback(
@@ -333,101 +393,197 @@ def _update_news_content(symbol, _, active_tab):
 @app.callback(
     Output("chart-overlay-content", "children"),
     Input("terminal-active-symbol", "data"),
+    Input("chart-period-store", "data"),
     State("main-tabs", "value"),
 )
-def _update_chart_overlay(symbol, active_tab):
+def _update_chart_overlay(symbol, period, active_tab):
     if active_tab != "terminal" or not symbol:
         return no_update
 
-    data = fetch_ohlcv(symbol, period="1mo")
+    period = period or "1mo"
+    data = fetch_ohlcv(symbol, period=period)
     if not data:
         return html.Div(
             f"No data for {symbol}",
-            style={
-                "color": TEXT_DIM,
-                "fontSize": "11px",
-                "padding": "12px",
-            },
+            style={"color": TEXT_DIM, "fontSize": "11px", "padding": "12px"},
         )
 
-    closes = [d["close"] for d in data]
     dates = [d["date"] for d in data]
-    color = GREEN if closes[-1] >= closes[0] else RED
-    max_idx = closes.index(max(closes))
-    min_idx = closes.index(min(closes))
+    opens = [d["open"] for d in data]
+    highs = [d["high"] for d in data]
+    lows = [d["low"] for d in data]
+    closes = [d["close"] for d in data]
+    volumes = [d["volume"] for d in data]
 
-    h = color.lstrip("#")
-    r_c, g_c, b_c = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    ma20 = _ma_series(closes, 20)
+    ma50 = _ma_series(closes, 50)
+    ma200 = _ma_series(closes, 200)
 
-    fig = go.Figure()
+    # Earnings annotations on the price chart
+    earnings_dates: set[str] = set()
+    try:
+        cal = fetch_earnings_calendar([symbol])
+        entry = cal.get(symbol)
+        if entry and entry.get("earnings_date"):
+            earnings_dates.add(str(entry["earnings_date"])[:10])
+    except Exception:
+        pass
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        row_heights=[0.73, 0.27],
+        vertical_spacing=0.02,
+    )
+
+    # Candlestick
     fig.add_trace(
-        go.Scatter(
+        go.Candlestick(
             x=dates,
-            y=closes,
-            mode="lines",
-            line=dict(color=color, width=1.5),
-            fill="tozeroy",
-            fillcolor=f"rgba({r_c},{g_c},{b_c},0.06)",
+            open=opens,
+            high=highs,
+            low=lows,
+            close=closes,
+            name=symbol,
+            increasing_line_color="#22c55e",
+            decreasing_line_color="#ef4444",
+            increasing_fillcolor="#22c55e",
+            decreasing_fillcolor="#ef4444",
             showlegend=False,
-        )
+            line=dict(width=1),
+        ),
+        row=1,
+        col=1,
     )
+
+    if ma20:
+        fig.add_trace(
+            go.Scatter(
+                x=dates,
+                y=ma20,
+                mode="lines",
+                name="MA20",
+                line=dict(color=YELLOW, width=1),
+            ),
+            row=1,
+            col=1,
+        )
+    if ma50:
+        fig.add_trace(
+            go.Scatter(
+                x=dates,
+                y=ma50,
+                mode="lines",
+                name="MA50",
+                line=dict(color=BLUE, width=1),
+            ),
+            row=1,
+            col=1,
+        )
+    if ma200:
+        fig.add_trace(
+            go.Scatter(
+                x=dates,
+                y=ma200,
+                mode="lines",
+                name="MA200",
+                line=dict(color=PURPLE, width=1, dash="dot"),
+            ),
+            row=1,
+            col=1,
+        )
+
+    # Volume bars (green if close >= open, red otherwise)
+    vol_colors = ["#22c55e" if c >= o else "#ef4444" for c, o in zip(closes, opens)]
     fig.add_trace(
-        go.Scatter(
-            x=[dates[max_idx]],
-            y=[closes[max_idx]],
-            mode="markers+text",
-            marker=dict(color=YELLOW, size=5),
-            text=[f"${closes[max_idx]:.2f}"],
-            textposition="top center",
-            textfont=dict(size=9, color=YELLOW),
+        go.Bar(
+            x=dates,
+            y=volumes,
+            name="Volume",
+            marker_color=vol_colors,
+            marker_opacity=0.55,
             showlegend=False,
-        )
+        ),
+        row=2,
+        col=1,
     )
-    fig.add_trace(
-        go.Scatter(
-            x=[dates[min_idx]],
-            y=[closes[min_idx]],
-            mode="markers+text",
-            marker=dict(color=RED, size=5),
-            text=[f"${closes[min_idx]:.2f}"],
-            textposition="bottom center",
-            textfont=dict(size=9, color=RED),
-            showlegend=False,
-        )
+
+    # Earnings marker (vertical dashed line annotation)
+    annotations = []
+    for ed in earnings_dates:
+        if ed in dates:
+            annotations.append(
+                dict(
+                    x=ed,
+                    yref="paper",
+                    y=0,
+                    y1=1,
+                    xref="x",
+                    type="line",
+                    line=dict(color=ORANGE, width=1, dash="dot"),
+                )
+            )
+            annotations.append(
+                dict(
+                    x=ed,
+                    y=1.0,
+                    xref="x",
+                    yref="paper",
+                    text="E",
+                    showarrow=False,
+                    font=dict(size=9, color=ORANGE),
+                    bgcolor=f"{ORANGE}22",
+                    bordercolor=ORANGE,
+                    borderwidth=1,
+                    xanchor="center",
+                )
+            )
+
+    common_axis = dict(
+        showgrid=True,
+        gridcolor=BORDER,
+        gridwidth=1,
+        tickfont=dict(size=9, color=TEXT_DIM, family=FONT),
+        showline=False,
+        zeroline=False,
     )
+
     fig.update_layout(
         title=dict(
-            text=f"{symbol} — 1mo",
-            font=dict(size=11, color=TEXT_DIM),
+            text=f"{symbol} — {period.upper()}",
+            font=dict(size=11, color=TEXT_DIM, family=FONT),
             x=0,
         ),
         paper_bgcolor=BG_CARD,
         plot_bgcolor=BG_CARD,
-        margin=dict(l=8, r=8, t=32, b=24),
-        height=200,
-        showlegend=False,
-        xaxis=dict(
-            showgrid=True,
-            gridcolor=BORDER,
-            tickfont=dict(size=9, color=TEXT_DIM),
-            showline=False,
-            zeroline=False,
+        margin=dict(l=8, r=8, t=28, b=4),
+        height=300,
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            x=0,
+            y=1.06,
+            font=dict(size=8, color=TEXT_DIM, family=FONT),
+            bgcolor="rgba(0,0,0,0)",
+            traceorder="normal",
         ),
-        yaxis=dict(
-            showgrid=True,
-            gridcolor=BORDER,
-            tickfont=dict(size=9, color=TEXT_DIM),
-            tickprefix="$",
-            showline=False,
-            zeroline=False,
-        ),
+        xaxis_rangeslider_visible=False,
+        xaxis=dict(**common_axis),
+        xaxis2=dict(**common_axis),
+        yaxis=dict(**common_axis, tickprefix="$"),
+        yaxis2=dict(**{**common_axis, "tickformat": "~s"}),
+        annotations=annotations,
+        font=dict(family=FONT, color=TEXT_MAIN, size=9),
     )
+
     return html.Div(
         [
+            _period_selector(period),
             dcc.Graph(
                 figure=fig,
                 config={"displayModeBar": False},
-                style={"height": "200px"},
+                style={"height": "300px"},
             ),
             _fundamentals_strip(symbol),
         ]

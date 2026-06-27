@@ -202,6 +202,97 @@ class MacroVote(BaseModel):
         return max(-1.0, min(1.0, v))
 
 
+class EconomistVote(BaseModel):
+    """Validates economist agent vote — provides macro cycle context, no direction."""
+
+    agent: str = Field(default="economist")
+    economic_regime: str = Field(default="transitional")
+    rate_trajectory: str = Field(default="pausing")
+    yield_curve: str = Field(default="normal")
+    inflation_regime: str = Field(default="moderate")
+    economic_score: float = Field(default=0.0, ge=-1.0, le=1.0)
+    reasoning: str = Field(default="")
+
+    @field_validator("economic_regime", mode="before")
+    @classmethod
+    def validate_regime(cls, v: str) -> str:
+        valid = {"expansion", "slowdown", "recession", "recovery", "transitional"}
+        if not isinstance(v, str) or v.lower() not in valid:
+            return "transitional"
+        return v.lower()
+
+    @field_validator("rate_trajectory", mode="before")
+    @classmethod
+    def validate_rate(cls, v: str) -> str:
+        valid = {"hiking", "pausing", "cutting"}
+        if not isinstance(v, str) or v.lower() not in valid:
+            return "pausing"
+        return v.lower()
+
+    @field_validator("yield_curve", mode="before")
+    @classmethod
+    def validate_curve(cls, v: str) -> str:
+        valid = {"normal", "flat", "inverted"}
+        if not isinstance(v, str) or v.lower() not in valid:
+            return "normal"
+        return v.lower()
+
+    @field_validator("inflation_regime", mode="before")
+    @classmethod
+    def validate_inflation(cls, v: str) -> str:
+        valid = {"high", "moderate", "low"}
+        if not isinstance(v, str) or v.lower() not in valid:
+            return "moderate"
+        return v.lower()
+
+    @field_validator("economic_score", mode="before")
+    @classmethod
+    def clamp_score(cls, v: float) -> float:
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(-1.0, min(1.0, v))
+
+
+class GeoPoliticianVote(BaseModel):
+    """Validates geopolitician agent vote — evaluates geopolitical risk, no direction."""
+
+    agent: str = Field(default="geopolitician")
+    geopolitical_risk: int = Field(default=3, ge=0, le=10)
+    risk_regions: list[str] = Field(default_factory=list)
+    affected_sectors: list[str] = Field(default_factory=list)
+    geo_bias: str = Field(default="neutral")
+    geo_score: float = Field(default=0.0, ge=-1.0, le=1.0)
+    reasoning: str = Field(default="")
+
+    @field_validator("geopolitical_risk", mode="before")
+    @classmethod
+    def clamp_geo_risk(cls, v: int) -> int:
+        try:
+            v = int(v)
+        except (TypeError, ValueError):
+            return 3
+        return max(0, min(10, v))
+
+    @field_validator("geo_bias", mode="before")
+    @classmethod
+    def validate_bias(cls, v: str) -> str:
+        valid = {"cautious", "neutral", "favorable"}
+        if not isinstance(v, str) or v.lower() not in valid:
+            return "neutral"
+        return v.lower()
+
+    @field_validator("geo_score", mode="before")
+    @classmethod
+    def clamp_score(cls, v: float) -> float:
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(-1.0, min(1.0, v))
+
+
 # ── Validation helpers ───────────────────────────────────────────────────────
 
 
@@ -243,3 +334,19 @@ def validate_macro_vote(raw: dict) -> dict:
         return MacroVote(**raw).model_dump()
     except Exception:
         return MacroVote().model_dump()
+
+
+def validate_economist_vote(raw: dict) -> dict:
+    """Validate a raw economist vote. Returns validated dict."""
+    try:
+        return EconomistVote(**raw).model_dump()
+    except Exception:
+        return EconomistVote().model_dump()
+
+
+def validate_geo_vote(raw: dict) -> dict:
+    """Validate a raw geopolitician vote. Returns validated dict."""
+    try:
+        return GeoPoliticianVote(**raw).model_dump()
+    except Exception:
+        return GeoPoliticianVote().model_dump()

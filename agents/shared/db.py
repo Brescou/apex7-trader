@@ -92,6 +92,13 @@ CREATE TABLE IF NOT EXISTS watchlist (
     added_at TEXT NOT NULL,
     source   TEXT DEFAULT 'manual'
 );
+CREATE TABLE IF NOT EXISTS cycle_states (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT NOT NULL,
+    cycle_num   INTEGER,
+    source      TEXT DEFAULT 'live',
+    state_json  TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_pending_eval_due
     ON pending_evaluations (evaluated, eval_after_date);
 """
@@ -178,6 +185,11 @@ def _init_db() -> None:
                 con.execute(
                     "ALTER TABLE pending_evaluations ADD COLUMN retry_count INTEGER DEFAULT 0"
                 )
+                con.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                con.execute("ALTER TABLE agent_memory ADD COLUMN eval_pct_change REAL")
                 con.commit()
             except sqlite3.OperationalError:
                 pass

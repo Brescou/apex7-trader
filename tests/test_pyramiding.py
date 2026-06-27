@@ -6,17 +6,20 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.shared.nodes import risk_check_node
+from config import SLIPPAGE_PCT
 from core.data import Portfolio
 
 _SYM = "AAPL"
 
 
 def test_pyramid_buy_recalculates_avg() -> None:
-    """Two equal-share adds at 150 and 130 → weighted average 140."""
+    """Two equal-amount adds at 150 and 130 → avg_price midpoint scaled by (1+SLIPPAGE_PCT)."""
     portfolio = Portfolio()
     assert portfolio.buy(_SYM, 150.0, 150.0)["success"]
     assert portfolio.buy(_SYM, 130.0, 130.0)["success"]
-    assert abs(portfolio.positions[_SYM]["avg_price"] - 140.0) < 1e-6
+    # Both buys have amount==price so they get equal shares; avg is the mid effective price.
+    expected_avg = 140.0 * (1 + SLIPPAGE_PCT)
+    assert abs(portfolio.positions[_SYM]["avg_price"] - expected_avg) < 1e-4
     assert portfolio.positions[_SYM]["layers"] == 2
 
 
@@ -32,11 +35,12 @@ def test_pyramid_max_layers() -> None:
 
 
 def test_pyramid_watermark_unchanged() -> None:
-    """High watermark stays at first entry high after a lower pyramid add."""
+    """High watermark stays at first entry effective price after a lower pyramid add."""
     portfolio = Portfolio()
     portfolio.buy(_SYM, 150.0, 150.0)
     portfolio.buy(_SYM, 130.0, 130.0)
-    assert portfolio.high_watermarks.get(_SYM) == 150.0
+    expected_wm = 150.0 * (1 + SLIPPAGE_PCT)
+    assert abs(portfolio.high_watermarks.get(_SYM, 0) - expected_wm) < 1e-4
 
 
 def test_pyramid_full_sell_clears_layers() -> None:

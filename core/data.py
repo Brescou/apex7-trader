@@ -14,12 +14,14 @@ from datetime import datetime
 import yfinance as yf
 
 from config import (
+    COMMISSION_PCT,
     DEATH_THRESHOLD,
     INITIAL_BALANCE,
     MAX_ALLOC_PCT,
     MAX_PYRAMID_LAYERS,
     PORTFOLIO_SAVE_ENABLED,
     PORTFOLIO_STATE_PATH,
+    SLIPPAGE_PCT,
     USE_LIVEFEED,
     WATCHLIST,
 )
@@ -93,12 +95,17 @@ class Portfolio:
         with self._lock:
             if price <= 0:
                 return {"success": False, "error": "Invalid price"}
-            max_amount = self.cash * (MAX_ALLOC_PCT / 100)
-            amount_usd = min(amount_usd, max_amount, self.cash)
+            # Reserve cash for commission so total outflow = amount + commission
+            max_affordable = self.cash / (1 + COMMISSION_PCT)
+            max_amount = max_affordable * (MAX_ALLOC_PCT / 100)
+            amount_usd = min(amount_usd, max_amount, max_affordable)
             if amount_usd < 1:
                 return {"success": False, "error": "Insufficient cash"}
             px = float(price)
-            new_shares = amount_usd / px
+            # Buyer pays a slightly worse price due to spread/market impact
+            effective_px = px * (1 + SLIPPAGE_PCT)
+            new_shares = amount_usd / effective_px
+            commission = amount_usd * COMMISSION_PCT
 
             if symbol in self.positions:
                 existing = self.positions[symbol]
@@ -111,23 +118,23 @@ class Portfolio:
                 old_shares = float(existing["shares"])
                 old_avg = float(existing.get("avg_price", existing.get("avg_cost", 0)))
                 total_shares = old_shares + new_shares
-                new_avg = (old_shares * old_avg + new_shares * px) / total_shares
+                new_avg = (old_shares * old_avg + new_shares * effective_px) / total_shares
                 existing["avg_price"] = new_avg
                 existing["shares"] = total_shares
                 existing["layers"] = layers + 1
-                self.cash -= amount_usd
+                self.cash -= amount_usd + commission
                 trade_shares = new_shares
             else:
-                self.cash -= amount_usd
+                self.cash -= amount_usd + commission
                 self.positions[symbol] = {
                     "shares": new_shares,
-                    "avg_price": px,
+                    "avg_price": effective_px,
                     "layers": 1,
                     "opened_at": datetime.now().isoformat(),
                     "tp_taken": False,
                 }
                 trade_shares = new_shares
-                fp = px
+                fp = effective_px
                 if not math.isnan(fp) and fp > 0:
                     self.high_watermarks[symbol] = max(self.high_watermarks.get(symbol, fp), fp)
 
@@ -138,6 +145,7 @@ class Portfolio:
                 "shares": round(trade_shares, 6),
                 "price": round(px, 2),
                 "amount": round(amount_usd, 2),
+                "commission": round(commission, 4),
             }
             self.trade_history.append(trade)
             result = {"success": True, **trade}
@@ -167,8 +175,11 @@ class Portfolio:
                 return {"success": False, "error": "No position"}
             pos = self.positions[symbol]
             shares = pos["shares"] * (sell_pct / 100)
-            amount = shares * px
-            self.cash += amount
+            # Seller receives a slightly worse price due to spread/market impact
+            effective_px = px * (1 - SLIPPAGE_PCT)
+            amount = shares * effective_px
+            commission = amount * COMMISSION_PCT
+            self.cash += amount - commission
             if sell_pct >= 100:
                 del self.positions[symbol]
                 self.high_watermarks.pop(symbol, None)
@@ -181,6 +192,7 @@ class Portfolio:
                 "shares": round(shares, 6),
                 "price": round(px, 2),
                 "amount": round(amount, 2),
+                "commission": round(commission, 4),
             }
             self.trade_history.append(trade)
             result = {"success": True, **trade}

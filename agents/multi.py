@@ -2,6 +2,8 @@
 
 import json
 import logging
+import math
+import os
 import random
 import threading
 import time
@@ -14,6 +16,7 @@ from langgraph.types import Send
 from agents.shared.nodes import (
     HAIKU_ID,
     SONNET_ID,
+    EVAL_SIGNIFICANCE_PCT,
     _db_read,
     _db_write,
     _entry,
@@ -43,6 +46,8 @@ from agents.shared.nodes import (
 from agents.shared.prompts import (
     ANALYST_SYSTEM_PROMPT,
     ARBITRATE_SYSTEM_PROMPT,
+    ECONOMIST_SYSTEM_PROMPT,
+    GEOPOLITICIAN_SYSTEM_PROMPT,
     MACRO_WATCHER_SYSTEM_PROMPT,
     RISK_MANAGER_SYSTEM_PROMPT,
     TECHNICIAN_SYSTEM_PROMPT,
@@ -50,6 +55,8 @@ from agents.shared.prompts import (
 from agents.shared.schemas import (
     validate_analyst_vote,
     validate_decision,
+    validate_economist_vote,
+    validate_geo_vote,
     validate_macro_vote,
     validate_risk_vote,
     validate_tech_vote,
@@ -72,11 +79,18 @@ logger = logging.getLogger("apex7.multi")
 # WEIGHTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Poids statiques de chaque spécialiste dans la décision finale.
+# Technician + Analyst votent sur la DIRECTION (BUY/SELL/HOLD) et portent 60 % du poids.
+# Les 4 autres (Risk, Macro, Economist, Geo) ne votent pas sur la direction :
+# ils contribuent au baseline HOLD et déclenchent des filtres de protection.
+# Ces valeurs sont blendées dynamiquement avec la précision historique dès 5 trades évalués.
 WEIGHTS = {
-    "technician": 0.30,
-    "analyst": 0.35,
-    "risk_manager": 0.20,  # does NOT vote on direction
-    "macro_watcher": 0.15,
+    "technician": 0.28,
+    "analyst": 0.32,
+    "risk_manager": 0.15,
+    "macro_watcher": 0.10,
+    "economist": 0.10,
+    "geopolitician": 0.05,
 }
 
 # Map risk_manager sizing recommendation → SELL exit percentage.
@@ -96,21 +110,129 @@ _weights_lock = threading.Lock()
 _WEIGHTS_CACHE_TTL_SEC = 600
 _MIN_EVALUATED_VOTES = 5
 
+# ── Slow-agent vote cache ─────────────────────────────────────────────────────
+# Economist and Geopolitician consume Sonnet+web or heavy FRED data that changes
+# slowly (FRED: daily/monthly; geopolitics: hourly at best). Reusing the last
+# vote for up to _SLOW_AGENT_TTL_SEC avoids a redundant LLM call every cycle
+# while still refreshing when genuinely new information may have arrived.
+_SLOW_AGENT_TTL_SEC = int(os.environ.get("SLOW_AGENT_TTL_SEC", "900"))  # default 15 min
+_slow_agent_cache: dict[str, dict] = {}  # agent_name → {"vote": dict, "ts": float}
+_slow_agent_lock = threading.Lock()
+
+
+def _get_cached_vote(agent_name: str) -> dict | None:
+    """Return a cached vote if it is still within TTL, else None."""
+    with _slow_agent_lock:
+        entry = _slow_agent_cache.get(agent_name)
+        if entry and (time.time() - entry["ts"]) < _SLOW_AGENT_TTL_SEC:
+            return dict(entry["vote"])
+        return None
+
+
+def _set_cached_vote(agent_name: str, vote: dict) -> None:
+    """Store a freshly computed vote in the slow-agent cache."""
+    with _slow_agent_lock:
+        _slow_agent_cache[agent_name] = {"vote": dict(vote), "ts": time.time()}
+
+
+def _portfolio_correlation(target: str, held_symbols: list[str]) -> float:
+    """Max absolute Pearson correlation between target symbol and any held position.
+
+    Uses in-memory price histories (_live_price_history / _sim_price_history)
+    so no extra network call is needed. Returns 0.0 when insufficient history.
+    """
+    import numpy as np
+
+    hist = _sim_price_history if _sim_mode["enabled"] else _live_price_history
+    target_hist = hist.get(target, [])
+    if len(target_hist) < 10:
+        return 0.0
+
+    max_corr = 0.0
+    for sym in held_symbols:
+        if sym == target:
+            return 1.0
+        sym_hist = hist.get(sym, [])
+        n = min(len(target_hist), len(sym_hist))
+        if n < 10:
+            continue
+        try:
+            a = np.array(target_hist[-n:], dtype=float)
+            b = np.array(sym_hist[-n:], dtype=float)
+            corr = abs(float(np.corrcoef(a, b)[0, 1]))
+            if not math.isnan(corr):
+                max_corr = max(max_corr, corr)
+        except Exception:
+            pass
+    return max_corr
+
+
+def _persist_cycle_state(
+    cycle_num: int,
+    arbitration: dict,
+    votes: list[dict],
+    action_scores: dict,
+) -> None:
+    """Write a compact JSON snapshot of the cycle decision for post-hoc replay.
+
+    Keeps the last 200 rows (pruned every 50th cycle) so the table stays small.
+    Fail-silent: a persistence error must never interrupt the trading loop.
+    """
+    try:
+        snapshot = {
+            "cycle": cycle_num,
+            "action": arbitration.get("action"),
+            "symbol": arbitration.get("symbol"),
+            "confidence": round(float(arbitration.get("confidence", 0)), 3),
+            "action_scores": {k: round(v, 3) for k, v in action_scores.items()},
+            "votes": [
+                {
+                    "agent": v.get("agent", ""),
+                    "action": v.get("action", ""),
+                    "confidence": round(float(v.get("confidence", 0)), 3),
+                    "symbol": v.get("symbol", ""),
+                }
+                for v in votes
+            ],
+        }
+        source = _record_source()
+        _db_write(
+            "INSERT INTO cycle_states (timestamp, cycle_num, source, state_json) "
+            "VALUES (?,?,?,?)",
+            (_ts(), cycle_num, source, json.dumps(snapshot)),
+        )
+        if cycle_num % 50 == 0:
+            _db_write(
+                "DELETE FROM cycle_states WHERE id NOT IN "
+                "(SELECT id FROM cycle_states ORDER BY id DESC LIMIT 200)",
+                (),
+            )
+    except Exception as exc:
+        logger.debug("cycle_state persistence failed: %s", exc)
+
 
 def _read_agent_accuracies() -> dict[str, float | None]:
-    """Evaluated vote accuracy per specialist (same basis as dynamic weights)."""
+    """Magnitude-weighted vote accuracy per specialist.
 
+    Each evaluated vote is weighted by the size of the subsequent price move
+    (capped at 3× the significance threshold) so votes that were correct on
+    large moves carry more signal than those correct on borderline moves.
+    Falls back to equal-weight average for rows without ``eval_pct_change``.
+    """
     agents = list(WEIGHTS.keys())
     accuracy: dict[str, float | None] = {}
     for agent in agents:
         rows = _db_read(
-            "SELECT was_correct FROM agent_memory "
+            "SELECT was_correct, COALESCE(eval_pct_change, ?) FROM agent_memory "
             "WHERE agent_name=? AND was_correct IS NOT NULL "
             "ORDER BY timestamp DESC LIMIT 50",
-            (agent,),
+            (EVAL_SIGNIFICANCE_PCT, agent),
         )
         if len(rows) >= _MIN_EVALUATED_VOTES:
-            accuracy[agent] = sum(r[0] for r in rows) / len(rows)
+            # Weight = min(|move| / threshold, 3) — larger moves count up to 3×
+            weights = [min(abs(float(r[1])) / EVAL_SIGNIFICANCE_PCT, 3.0) for r in rows]
+            total_w = sum(weights) or 1.0
+            accuracy[agent] = sum(int(r[0]) * w for r, w in zip(rows, weights)) / total_w
         else:
             accuracy[agent] = None
     return accuracy
@@ -557,6 +679,105 @@ def sim_macro_watcher(state: MultiAgentState) -> dict:
     return {"agent_votes": [vote], "macro_vote": vote, "log": logs}
 
 
+def sim_economist(state: MultiAgentState) -> dict:
+    pv = _portfolio_value(state)
+    logs = [_entry("[SIM][ECON] economic cycle analysis")]
+
+    health = pv / INITIAL_BALANCE
+    if health < 0.7:
+        regime, trajectory, curve, inflation, score = (
+            "recession",
+            "cutting",
+            "inverted",
+            "low",
+            -0.7,
+        )
+    elif health > 1.3:
+        regime, trajectory, curve, inflation, score = (
+            "expansion",
+            "hiking",
+            "normal",
+            "moderate",
+            0.5,
+        )
+    else:
+        regime, trajectory, curve, inflation, score = (
+            "transitional",
+            "pausing",
+            "flat",
+            "moderate",
+            0.0,
+        )
+
+    reason = f"[SIM] Régime: {regime}. Trajectoire taux: {trajectory}. Score éco: {score:+.1f}."
+    vote = _build_vote(
+        "economist",
+        "HOLD",
+        "",
+        0.5,
+        0,
+        reason,
+        extra={
+            "agent_name": "Economist",
+            "economic_regime": regime,
+            "rate_trajectory": trajectory,
+            "yield_curve": curve,
+            "inflation_regime": inflation,
+            "economic_score": round(score, 2),
+            "signals": [
+                f"Economic regime: {regime}",
+                f"Rate trajectory: {trajectory}",
+                f"Yield curve: {curve}",
+                f"Inflation regime: {inflation}",
+                f"Economic score: {score:+.1f}",
+            ],
+        },
+    )
+    logs.append(_entry(f"[SIM][ECON] {regime} rate={trajectory} score={score:+.1f}"))
+    _record_vote("economist", "", "HOLD", 0.5, _record_source())
+    return {"agent_votes": [vote], "economist_vote": vote, "log": logs}
+
+
+def sim_geopolitician(state: MultiAgentState) -> dict:
+    sentiment = state.get("sentiment", {})
+    logs = [_entry("[SIM][GEO] geopolitical risk assessment")]
+
+    avg_sent = sum(sentiment.values()) / max(len(sentiment), 1)
+    if avg_sent < -0.3:
+        risk, regions, sectors, bias, score = 7, ["Global"], ["energy", "defense"], "cautious", -0.5
+    elif avg_sent > 0.3:
+        risk, regions, sectors, bias, score = 2, [], [], "favorable", 0.2
+    else:
+        risk, regions, sectors, bias, score = 4, ["Middle East"], ["energy"], "neutral", -0.1
+
+    reason = f"[SIM] Risque géopolitique {risk}/10. Biais: {bias}. Score: {score:+.1f}."
+    vote = _build_vote(
+        "geopolitician",
+        "HOLD",
+        "",
+        0.5,
+        0,
+        reason,
+        extra={
+            "agent_name": "Geopolitician",
+            "geopolitical_risk": risk,
+            "risk_regions": regions,
+            "affected_sectors": sectors,
+            "geo_bias": bias,
+            "geo_score": round(score, 2),
+            "signals": [
+                f"Geopolitical risk: {risk}/10",
+                f"Risk regions: {regions or ['Aucune tension majeure']}",
+                f"Affected sectors: {sectors or ['N/A']}",
+                f"Geopolitical bias: {bias}",
+            ],
+        },
+    )
+    logs.append(_entry(f"[SIM][GEO] risk={risk}/10 bias={bias} score={score:+.1f}"))
+    _record_vote("geopolitician", "", "HOLD", 0.5, _record_source())
+    return {"agent_votes": [vote], "geo_vote": vote, "log": logs}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SUPERVISOR NODE
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -602,13 +823,20 @@ def supervisor_node(state: MultiAgentState) -> dict:
 
 
 def _route_to_agents(state: MultiAgentState) -> list:
-    """Fan-out via Send to 4 parallel agents."""
+    """Fan-out via Send to 6 parallel agents.
+
+    LangGraph exécute les 6 nœuds en parallèle dans des threads séparés.
+    Chaque agent reçoit une copie du state complet et produit un vote indépendant.
+    Les 6 votes convergent ensuite vers ``arbitrate_node`` (fan-in implicite de LangGraph).
+    """
     base = dict(state)
     return [
         Send("technician", {**base, "agent_role": "technician"}),
         Send("analyst", {**base, "agent_role": "analyst"}),
         Send("risk_manager", {**base, "agent_role": "risk_manager"}),
         Send("macro_watcher", {**base, "agent_role": "macro_watcher"}),
+        Send("economist", {**base, "agent_role": "economist"}),
+        Send("geopolitician", {**base, "agent_role": "geopolitician"}),
     ]
 
 
@@ -618,6 +846,9 @@ def _route_to_agents(state: MultiAgentState) -> list:
 
 
 def technician_node(state: MultiAgentState) -> dict:
+    # Analyse purement chartiste : RSI(14) sur _live_price_history, MACD, Bollinger.
+    # Vote BUY si RSI < 35 (survente), SELL si RSI > 65 + position ouverte (surachat).
+    # Modèle : Haiku (rapide, pas de web search — données techniques suffisent).
     if _no_llm_mode():
         return sim_technician(state)
 
@@ -677,6 +908,9 @@ def technician_node(state: MultiAgentState) -> dict:
 
 
 def analyst_node(state: MultiAgentState) -> dict:
+    # Analyse fondamentale + sentiment : news récentes, score Twitter (-1 → +1), catalyseurs.
+    # Seul agent avec web_search=True → peut chercher des infos en temps réel via Claude.
+    # Modèle : Sonnet (raisonnement plus profond nécessaire pour interpréter les actualités).
     if _no_llm_mode():
         return sim_analyst(state)
 
@@ -728,6 +962,9 @@ def analyst_node(state: MultiAgentState) -> dict:
 
 
 def risk_manager_node(state: MultiAgentState) -> dict:
+    # Ne vote PAS sur la direction — fournit un score de risque (0-10) et un sizing
+    # (FULL / HALF / QUARTER / SKIP). Un risk_score > 8 veto le BUY dans arbitrate_node.
+    # Calcule Kelly depuis les vrais postmortems (≥ 5 trades clôturés), sinon priors conservateurs.
     if _no_llm_mode():
         return sim_risk_manager(state)
 
@@ -813,6 +1050,9 @@ def risk_manager_node(state: MultiAgentState) -> dict:
 
 
 def macro_watcher_node(state: MultiAgentState) -> dict:
+    # Détermine le régime de marché global (risk-on / risk-off / transitional).
+    # Consomme les données FRED (taux FED, 10Y) + CNN Fear & Greed Index + sentiment agrégé.
+    # Un régime risk-off réduit de 50 % le score BUY composite dans arbitrate_node.
     if _no_llm_mode():
         return sim_macro_watcher(state)
 
@@ -826,15 +1066,13 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
     avg_sent = sum(sentiment.values()) / max(len(sentiment), 1)
 
     system = _with_lessons(MACRO_WATCHER_SYSTEM_PROMPT, recent_lessons)
-    macro_indicators = state.get("macro_indicators") or {}
     fear_greed = state.get("fear_greed")
+    # FRED data moved to economist_node — macro_watcher focuses on short-term sentiment only.
     system += (
-        f"\n\nDonnées macro FRED : {json.dumps(macro_indicators, default=str)}. "
-        f"Fear & Greed Index : {json.dumps(fear_greed, default=str) if fear_greed else 'N/A'}."
+        f"\n\nFear & Greed Index : {json.dumps(fear_greed, default=str) if fear_greed else 'N/A'}."
     )
     user = (
-        f"MACRO ANALYSIS — Cycle #{state['round']}\n\n"
-        f"PORTFOLIO HEALTH: ${pv:.2f} ({pv/INITIAL_BALANCE:.0%} of initial)\n"
+        f"MARKET SENTIMENT ANALYSIS — Cycle #{state['round']}\n\n"
         f"SENTIMENT AGRÉGÉ: {avg_sent:+.2f} (-1=très baissier, +1=très haussier)\n"
         f"SENTIMENT PAR SYMBOLE: {json.dumps(sentiment, indent=2)}\n"
         f"DIVERSIFICATION: {len(pos)}/{MAX_POSITIONS} positions\n\n"
@@ -874,12 +1112,142 @@ def macro_watcher_node(state: MultiAgentState) -> dict:
     return _emit_vote("macro_watcher", "macro_vote", vote, logs)
 
 
+def economist_node(state: MultiAgentState) -> dict:
+    # Analyse le cycle économique long : courbe des taux, trajectoire Fed, inflation, PMI.
+    # Fournit un economic_score (-1 → +1) qui peut freiner les BUY en contexte récessif.
+    # Modèle : Haiku (données FRED structurées fournies — pas de web search nécessaire).
+    # Cache 15 min (SLOW_AGENT_TTL_SEC) : les données FRED changent au mieux quotidiennement.
+    if _no_llm_mode():
+        return sim_economist(state)
+
+    cached = _get_cached_vote("economist")
+    if cached:
+        logs = [
+            _entry(
+                f"economist: cached vote reused (TTL {_SLOW_AGENT_TTL_SEC}s) — "
+                f"{cached.get('economic_regime','?')} score={cached.get('economic_score',0):+.2f}"
+            )
+        ]
+        return {"agent_votes": [cached], "economist_vote": cached, "log": logs}
+
+    pv = _portfolio_value(state)
+    macro_indicators = state.get("macro_indicators") or {}
+    logs = [_entry("economist: macro cycle analysis")]
+
+    recent_lessons = _recent_lessons("economist")
+    system = _with_lessons(ECONOMIST_SYSTEM_PROMPT, recent_lessons)
+    user = (
+        f"ECONOMIC CYCLE ANALYSIS — Cycle #{state['round']}\n\n"
+        f"DONNÉES MACRO FRED :\n{json.dumps(macro_indicators, indent=2, default=str)}\n\n"
+        f"PORTFOLIO HEALTH: ${pv:.2f} ({pv/INITIAL_BALANCE:.0%} du capital initial)\n\n"
+        f"BRIEF SUPERVISEUR: {state.get('supervisor_brief', '')[:200]}\n\n"
+        "Retourne ce JSON uniquement :\n"
+        '{\n  "agent": "economist",\n'
+        '  "economic_regime": "expansion|slowdown|recession|recovery|transitional",\n'
+        '  "rate_trajectory": "hiking|pausing|cutting",\n'
+        '  "yield_curve": "normal|flat|inverted",\n'
+        '  "inflation_regime": "high|moderate|low",\n'
+        '  "economic_score": 0.0,\n'
+        '  "reasoning": "2 phrases"\n}'
+    )
+
+    vote = _invoke_specialist(
+        haiku, HAIKU_ID, user, system, 400, validate_economist_vote, "Economist"
+    )
+    vote.setdefault("action", "HOLD")
+    vote.setdefault("symbol", "")
+    vote.setdefault("confidence", 0.5)
+    vote.setdefault("allocation_pct", 0)
+    vote["signals"] = [
+        f"Economic regime: {vote.get('economic_regime', 'N/A')}",
+        f"Rate trajectory: {vote.get('rate_trajectory', 'N/A')}",
+        f"Yield curve: {vote.get('yield_curve', 'N/A')}",
+        f"Inflation regime: {vote.get('inflation_regime', 'N/A')}",
+        f"Economic score: {vote.get('economic_score', 0.0):+.2f}",
+    ]
+    logs.append(
+        _entry(
+            f"economist: {vote.get('economic_regime','?')} rate={vote.get('rate_trajectory','?')} "
+            f"score={vote.get('economic_score',0):+.2f}"
+        )
+    )
+    _set_cached_vote("economist", vote)
+    return _emit_vote("economist", "economist_vote", vote, logs)
+
+
+def geopolitician_node(state: MultiAgentState) -> dict:
+    # Évalue les risques géopolitiques en temps réel (conflits, sanctions, élections).
+    # web_search=True car les événements géopolitiques nécessitent des infos actuelles.
+    # Un geo_risk > 7 dampène les BUY de 50 % dans arbitrate_node.
+    # Modèle : Sonnet (interprétation nuancée des tensions internationales).
+    # Cache 15 min (SLOW_AGENT_TTL_SEC) : les situations géo évoluent à l'heure, pas à la minute.
+    if _no_llm_mode():
+        return sim_geopolitician(state)
+
+    cached = _get_cached_vote("geopolitician")
+    if cached:
+        logs = [
+            _entry(
+                f"geopolitician: cached vote reused (TTL {_SLOW_AGENT_TTL_SEC}s) — "
+                f"risk={cached.get('geopolitical_risk',3)}/10 "
+                f"score={cached.get('geo_score',0):+.2f}"
+            )
+        ]
+        return {"agent_votes": [cached], "geo_vote": cached, "log": logs}
+
+    logs = [_entry("geopolitician: geopolitical risk assessment")]
+    recent_lessons = _recent_lessons("geopolitician")
+    system = _with_lessons(GEOPOLITICIAN_SYSTEM_PROMPT, recent_lessons)
+    user = (
+        f"GEOPOLITICAL RISK ASSESSMENT — Cycle #{state['round']}\n\n"
+        f"NEWS RÉCENTES:\n{(state.get('news') or 'Aucune news')[:400]}\n\n"
+        f"BRIEF SUPERVISEUR: {state.get('supervisor_brief', '')[:200]}\n\n"
+        "Retourne ce JSON uniquement :\n"
+        '{\n  "agent": "geopolitician",\n'
+        '  "geopolitical_risk": 3,\n'
+        '  "risk_regions": ["région1"],\n'
+        '  "affected_sectors": ["secteur1"],\n'
+        '  "geo_bias": "cautious|neutral|favorable",\n'
+        '  "geo_score": 0.0,\n'
+        '  "reasoning": "2 phrases"\n}'
+    )
+
+    vote = _invoke_specialist(
+        sonnet, SONNET_ID, user, system, 400, validate_geo_vote, "Geopolitician", web_search=True
+    )
+    vote.setdefault("action", "HOLD")
+    vote.setdefault("symbol", "")
+    vote.setdefault("confidence", 0.5)
+    vote.setdefault("allocation_pct", 0)
+    vote["signals"] = [
+        f"Geopolitical risk: {vote.get('geopolitical_risk', 3)}/10",
+        f"Risk regions: {vote.get('risk_regions', []) or ['Aucune tension majeure']}",
+        f"Affected sectors: {vote.get('affected_sectors', []) or ['N/A']}",
+        f"Geopolitical bias: {vote.get('geo_bias', 'neutral')}",
+        f"Geo score: {vote.get('geo_score', 0.0):+.2f}",
+    ]
+    logs.append(
+        _entry(
+            f"geopolitician: risk={vote.get('geopolitical_risk',3)}/10 "
+            f"bias={vote.get('geo_bias','neutral')} "
+            f"score={vote.get('geo_score',0):+.2f}"
+        )
+    )
+    _set_cached_vote("geopolitician", vote)
+    return _emit_vote("geopolitician", "geo_vote", vote, logs)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ARBITRATION NODE
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 def arbitrate_node(state: MultiAgentState) -> dict:
+    # ── PHASE 1 : agrégation des votes ────────────────────────────────────────
+    # Chaque spécialiste a déposé un vote dans state["agent_votes"].
+    # L'arbitre calcule un score composite pondéré pour chaque action possible,
+    # puis applique des filtres déterministes avant de passer la main au LLM Sonnet
+    # qui rédige la synthèse finale (reasoning, émotion, market_intel).
     votes = state.get("agent_votes", [])
     logs = [_entry(f"arbitrate: {len(votes)} votes received — computing decision")]
 
@@ -888,7 +1256,13 @@ def arbitrate_node(state: MultiAgentState) -> dict:
     ana_v = vote_map.get("analyst", {})
     risk_v = vote_map.get("risk_manager", {})
     macro_v = vote_map.get("macro_watcher", {})
+    eco_v = vote_map.get("economist", {})
+    geo_v = vote_map.get("geopolitician", {})
 
+    # ── PHASE 2 : calcul du score composite ───────────────────────────────────
+    # Formule : score(action) += poids_agent × confiance_agent
+    # Seuls Technician et Analyst votent sur la direction ; Risk et Macro alimentent
+    # un HOLD de base (ils freinent les décisions actives plutôt qu'ils n'en proposent).
     dynamic_weights = _compute_dynamic_weights()
     logs.append(_entry(f"arbitrate: weights_used={dynamic_weights}"))
 
@@ -901,9 +1275,18 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         conf = float(v.get("confidence", 0.5))
         action_scores[action] = action_scores.get(action, 0.0) + weight * conf
 
-    # Apply HOLD weight for macro + risk as a baseline
-    hold_weight = dynamic_weights["risk_manager"] * 0.5 + dynamic_weights["macro_watcher"] * 0.5
+    # Apply HOLD weight for macro + risk + economist + geo as a baseline
+    hold_weight = (
+        dynamic_weights["risk_manager"] * 0.4
+        + dynamic_weights["macro_watcher"] * 0.25
+        + dynamic_weights.get("economist", 0.0) * 0.25
+        + dynamic_weights.get("geopolitician", 0.0) * 0.1
+    )
     action_scores["HOLD"] += hold_weight * 0.5
+
+    # ── PHASE 3 : filtres déterministes (avant LLM) ───────────────────────────
+    # Ces filtres s'appliquent même si le LLM n'est pas disponible.
+    # Ils protègent le capital contre les conditions de marché extrêmes.
 
     # Risk veto: risk_score > 8 heavily penalises BUY
     risk_score = float(risk_v.get("risk_score", 5))
@@ -918,6 +1301,28 @@ def arbitrate_node(state: MultiAgentState) -> dict:
     if regime == "risk-off":
         action_scores["BUY"] *= 0.5
         logs.append(_entry("arbitrate: MACRO FILTER — risk-off → BUY dampened", "warning"))
+
+    # Economic headwind: negative economic cycle dampens BUY
+    economic_score = float(eco_v.get("economic_score", 0.0))
+    if economic_score < -0.5:
+        action_scores["BUY"] *= 0.6
+        logs.append(
+            _entry(
+                f"arbitrate: ECONOMIC HEADWIND — score={economic_score:.2f} → BUY dampened",
+                "warning",
+            )
+        )
+
+    # Geopolitical risk: high risk dampens BUY
+    geo_risk = float(geo_v.get("geopolitical_risk", 3))
+    if geo_risk > 7:
+        action_scores["BUY"] *= 0.5
+        logs.append(
+            _entry(
+                f"arbitrate: GEO RISK HIGH — risk={geo_risk:.0f}/10 → BUY dampened",
+                "warning",
+            )
+        )
 
     final_action = max(action_scores, key=action_scores.get)
     composite_conf = action_scores[final_action]
@@ -939,6 +1344,23 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         "strong" if composite_conf > 0.6 else ("moderate" if composite_conf > 0.4 else "weak")
     )
 
+    # Portfolio-level correlation risk: damp BUY when the target is highly
+    # correlated with an existing position (concentration risk without diversification).
+    positions = state.get("positions") or {}
+    if final_action == "BUY" and symbol and positions:
+        max_corr = _portfolio_correlation(symbol, list(positions.keys()))
+        if max_corr > 0.7:
+            action_scores["BUY"] *= 0.75
+            final_action = max(action_scores, key=action_scores.get)
+            composite_conf = action_scores[final_action]
+            logs.append(
+                _entry(
+                    f"arbitrate: CORRELATION RISK — {symbol} corr={max_corr:.2f} with "
+                    f"open positions → BUY×0.75",
+                    "warning",
+                )
+            )
+
     votes_summary = json.dumps(
         [{k: vv for k, vv in v.items() if k not in ("key_indicators",)} for v in votes],
         indent=2,
@@ -954,8 +1376,9 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         )
         market_intel = macro_v.get("reasoning", "")
         reasoning = (
-            f"BUY={action_scores['BUY']:.2f} | SELL={action_scores['SELL']:.2f} | "
-            f"HOLD={action_scores['HOLD']:.2f}. Risk {risk_score:.0f}/10. {regime}."
+            f"BUY={action_scores['BUY']:.2f} SELL={action_scores['SELL']:.2f} "
+            f"HOLD={action_scores['HOLD']:.2f} | Risk {risk_score:.0f}/10 | {regime} | "
+            f"Éco: {economic_score:+.1f} | Géo: {geo_risk:.0f}/10"
         )
     else:
         system_arb = ARBITRATE_SYSTEM_PROMPT
@@ -964,6 +1387,9 @@ def arbitrate_node(state: MultiAgentState) -> dict:
             f"VOTES:\n{votes_summary}\n\n"
             f"SCORES COMPOSITES:\n"
             f"  BUY={action_scores['BUY']:.3f} | SELL={action_scores['SELL']:.3f} | HOLD={action_scores['HOLD']:.3f}\n\n"
+            f"CONTEXTE SUPPLÉMENTAIRE:\n"
+            f"  Cycle économique: {eco_v.get('economic_regime','?')} | Score éco: {economic_score:+.2f}\n"
+            f"  Risque géopolitique: {geo_risk:.0f}/10 | Bias géo: {geo_v.get('geo_bias','neutral')} | Score: {float(geo_v.get('geo_score',0)):+.2f}\n\n"
             f"DÉCISION CALCULÉE: {final_action} {symbol} (conf={composite_conf:.2f})\n"
             f"Risk score: {risk_score:.0f}/10 | Régime: {regime} | Max alloc: {max_alloc:.0f}%\n"
             f"Agents dissidents: {dissenting}\n\n"
@@ -1028,14 +1454,7 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         "symbol": symbol,
         "allocation_pct": min(float(max_alloc), MAX_ALLOC_PCT),
         "confidence": composite_conf,
-        "reasoning": (
-            reasoning
-            if not _no_llm_mode()
-            else (
-                f"BUY={action_scores['BUY']:.2f} SELL={action_scores['SELL']:.2f} "
-                f"HOLD={action_scores['HOLD']:.2f} | Risk {risk_score:.0f}/10 | {regime}"
-            )
-        ),
+        "reasoning": reasoning,
         "dissenting_agents": dissenting,
         "consensus_level": consensus,
         "thoughts": thoughts,
@@ -1078,6 +1497,9 @@ def arbitrate_node(state: MultiAgentState) -> dict:
     }
     arbitration["sell_pct"] = final_sell_pct
 
+    # ── PHASE 5 : décision finale ─────────────────────────────────────────────
+    # Si confiance < 0.72 et qu'on n'a pas encore fait de recherche, on renvoie
+    # vers research_node (web search Sonnet) avant risk_check — max 2 itérations.
     skip_res = state.get("skip_research", False) or composite_conf >= 0.72
 
     # ``was_correct`` is no longer set here — it was tautological (consensus
@@ -1093,6 +1515,8 @@ def arbitrate_node(state: MultiAgentState) -> dict:
     )
     if thoughts:
         logs.append(_entry(f"thoughts: {thoughts[:120]}"))
+
+    _persist_cycle_state(state["round"], arbitration, votes, action_scores)
 
     return {
         "arbitration": arbitration,
@@ -1549,6 +1973,8 @@ def build_multi_graph(portfolio: Portfolio):
     g.add_node("analyst", analyst_node)
     g.add_node("risk_manager", risk_manager_node)
     g.add_node("macro_watcher", macro_watcher_node)
+    g.add_node("economist", economist_node)
+    g.add_node("geopolitician", geopolitician_node)
     g.add_node("arbitrate", arbitrate_node)
 
     # Edges: linear start
@@ -1556,18 +1982,20 @@ def build_multi_graph(portfolio: Portfolio):
     g.add_edge("load_memory", "fetch_data")
     g.add_edge("fetch_data", "supervisor")
 
-    # Fan-out from supervisor to 4 parallel agents
+    # Fan-out from supervisor to 6 parallel agents
     g.add_conditional_edges(
         "supervisor",
         _route_to_agents,
-        ["technician", "analyst", "risk_manager", "macro_watcher"],
+        ["technician", "analyst", "risk_manager", "macro_watcher", "economist", "geopolitician"],
     )
 
-    # Fan-in: all 4 parallel agents → arbitrate
+    # Fan-in: all 6 parallel agents → arbitrate
     g.add_edge("technician", "arbitrate")
     g.add_edge("analyst", "arbitrate")
     g.add_edge("risk_manager", "arbitrate")
     g.add_edge("macro_watcher", "arbitrate")
+    g.add_edge("economist", "arbitrate")
+    g.add_edge("geopolitician", "arbitrate")
 
     # Arbitrate routing: confident → risk_check, uncertain → research → risk_check
     g.add_conditional_edges(

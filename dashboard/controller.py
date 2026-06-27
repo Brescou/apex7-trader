@@ -173,6 +173,55 @@ def _run_digest_and_weekly_at_postmortem_hour(portfolio: Portfolio, now: datetim
     _last_postmortem_date = today
 
 
+def _reconcile_portfolio_state(port: "Portfolio") -> None:
+    """Compare JSON-loaded state with trades.db to detect divergence after crash.
+
+    Reconstructs implied cash from the trade ledger and warns when it diverges
+    from ``portfolio_state.json`` by more than $5 (rounding / commission tolerance).
+    Purely diagnostic — never mutates the portfolio.
+    """
+    from config import INITIAL_BALANCE
+
+    try:
+        from agents.shared.db import _db_read, _ensure_db
+
+        _ensure_db()
+        rows = _db_read("SELECT action, amount_usd FROM trades ORDER BY id ASC")
+    except Exception as exc:
+        logger.warning("reconcile: could not read trades.db: %s", exc)
+        return
+
+    if not rows:
+        return
+
+    implied_cash = float(INITIAL_BALANCE)
+    for action, amount_usd in rows:
+        try:
+            amt = float(amount_usd or 0)
+        except (TypeError, ValueError):
+            continue
+        if action == "BUY":
+            implied_cash -= amt
+        elif action == "SELL":
+            implied_cash += amt
+
+    diff = abs(implied_cash - port.cash)
+    if diff > 5.0:
+        logger.warning(
+            "Portfolio reconciliation: loaded cash=%.2f vs trades.db implied=%.2f "
+            "(drift $%.2f) — possible crash recovery or commission mismatch",
+            port.cash,
+            implied_cash,
+            diff,
+        )
+    else:
+        logger.info(
+            "Portfolio reconciliation OK: cash=%.2f (drift $%.2f)",
+            port.cash,
+            diff,
+        )
+
+
 def start_controller() -> None:
     """Create the live portfolio and start agent + postmortem threads.
 
@@ -185,6 +234,16 @@ def start_controller() -> None:
             return
         _state["portfolio"] = Portfolio()
         port = _state["portfolio"]
+        if port.load_state():
+            logger.info(
+                "Portfolio state loaded from %s",
+                (
+                    port.PORTFOLIO_STATE_PATH
+                    if hasattr(port, "PORTFOLIO_STATE_PATH")
+                    else "portfolio_state.json"
+                ),
+            )
+            _reconcile_portfolio_state(port)
         _state["thread"] = _launch(port)
         threading.Thread(
             target=_postmortem_loop,

@@ -90,7 +90,12 @@ class _FakeTicker:
         idx = pd.date_range("2026-01-02", periods=n, freq="D")
         close = np.linspace(100.0, 110.0, n)
         volume = np.full(n, 2_000_000)
-        return pd.DataFrame({"Close": close, "Volume": volume}, index=idx)
+        high = close * 1.01
+        low = close * 0.99
+        return pd.DataFrame(
+            {"Open": close * 0.999, "High": high, "Low": low, "Close": close, "Volume": volume},
+            index=idx,
+        )
 
     @property
     def news(self):

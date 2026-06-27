@@ -12,6 +12,7 @@ from market_data import (
     build_economic_calendar_rows,
     fetch_correlation_matrix,
     fetch_macro,
+    fetch_ohlcv,
     fetch_sector_performance,
     fetch_sparkline,
 )
@@ -207,17 +208,81 @@ def _update_macro_bar(_):
         )
     )
 
+    # Extra macro symbols: Gold (GLD), Oil (USO), EUR/USD (EURUSD=X)
+    _EXTRA_TICKERS = [("GOLD", "GLD"), ("OIL", "USO"), ("EUR/USD", "EURUSD=X")]
+    for label, sym in _EXTRA_TICKERS:
+        try:
+            ohlcv = fetch_ohlcv(sym, period="5d")
+            if ohlcv and len(ohlcv) >= 2:
+                price = ohlcv[-1]["close"]
+                prev = ohlcv[-2]["close"]
+                chg = round((price - prev) / prev * 100, 2) if prev else 0.0
+                dirn = "up" if chg > 0.05 else ("down" if chg < -0.05 else "flat")
+                price_str = f"{price:.2f}" if label != "EUR/USD" else f"{price:.4f}"
+                arrow = "▲ " if dirn == "up" else ("▼ " if dirn == "down" else "")
+                chg_col = GREEN if dirn == "up" else (RED if dirn == "down" else TEXT_DIM)
+                chg_str = f"{arrow}{chg:+.2f}%"
+            else:
+                price_str = "—"
+                chg_str = "—"
+                chg_col = TEXT_DIM
+        except Exception as exc:
+            logger.debug("macro bar: extra ticker %s failed: %s", sym, exc)
+            price_str = "—"
+            chg_str = "—"
+            chg_col = TEXT_DIM
+
+        bar_divs.append(
+            html.Div(
+                [
+                    html.Span(label, style=_lbl),
+                    html.Div(
+                        [
+                            html.Span(
+                                price_str,
+                                style={
+                                    "fontSize": "18px",
+                                    "fontWeight": "bold",
+                                    "color": TEXT_MAIN,
+                                    "lineHeight": "1.1",
+                                    "fontFamily": FONT,
+                                },
+                            ),
+                            html.Span(
+                                chg_str,
+                                style={"fontSize": "11px", "color": chg_col, "marginLeft": "6px"},
+                            ),
+                        ],
+                        style={"display": "flex", "alignItems": "baseline"},
+                    ),
+                ],
+                style={**_cell, "padding": "0 12px"},
+            )
+        )
+
     try:
         fed_obs = fetch_fred_latest("FEDFUNDS", max_cache_sec=_MACRO_BAR_EXTRA_CACHE_SEC)
         y10_obs = fetch_fred_latest("DGS10", max_cache_sec=_MACRO_BAR_EXTRA_CACHE_SEC)
+        y2_obs = fetch_fred_latest("DGS2", max_cache_sec=_MACRO_BAR_EXTRA_CACHE_SEC)
     except Exception as exc:
         logger.warning("macro bar: FRED fetch failed: %s", exc)
-        fed_obs = y10_obs = None
+        fed_obs = y10_obs = y2_obs = None
 
     fed_val = fed_obs.get("value") if fed_obs else None
     y10_val = y10_obs.get("value") if y10_obs else None
-    fed_str = f"FED: {float(fed_val):.2f}%" if fed_val is not None else "FED: —"
-    y10_str = f"10Y: {float(y10_val):.2f}%" if y10_val is not None else "10Y: —"
+    y2_val = y2_obs.get("value") if y2_obs else None
+    fed_str = f"{float(fed_val):.2f}%" if fed_val is not None else "—"
+    y10_str = f"{float(y10_val):.2f}%" if y10_val is not None else "—"
+
+    # 10Y-2Y spread: positive = normal curve, negative = inverted
+    if y10_val is not None and y2_val is not None:
+        spread = float(y10_val) - float(y2_val)
+        spread_col = GREEN if spread > 0 else RED
+        spread_str = f"{spread:+.2f}%"
+    else:
+        spread = None
+        spread_col = TEXT_DIM
+        spread_str = "—"
 
     bar_divs.append(
         html.Div(
@@ -253,6 +318,32 @@ def _update_macro_bar(_):
             style={**_cell, "padding": "0 14px"},
         )
     )
+    bar_divs.append(
+        html.Div(
+            [
+                html.Span("SPREAD", style=_lbl),
+                html.Span(
+                    spread_str,
+                    style={
+                        "fontSize": "15px",
+                        "fontWeight": "bold",
+                        "color": spread_col,
+                        "fontFamily": FONT,
+                    },
+                ),
+                html.Span(
+                    "10Y-2Y",
+                    style={"fontSize": "9px", "color": TEXT_DIM, "marginTop": "2px"},
+                ),
+            ],
+            style={
+                **_cell,
+                "padding": "0 10px",
+                "alignItems": "center",
+                "gap": "1px",
+            },
+        )
+    )
 
     ts = data.get("updated_at", "")
     ts_el = html.Span(
@@ -276,7 +367,14 @@ def _update_macro_bar(_):
     return [_cell_with_right_rule(d, i) for i, d in enumerate(bar_divs)] + [ts_el]
 
 
-def _calendar_event_line(row: dict) -> str:
+_IMPORTANCE_COLORS = {
+    "high": RED,
+    "medium": YELLOW,
+    "low": GRAY,
+}
+
+
+def _calendar_event_label(row: dict) -> str:
     """Single-line label for an economic calendar row (earnings vs macro)."""
     ed = row["event_date"]
     mon = ed.strftime("%b")
@@ -285,11 +383,16 @@ def _calendar_event_line(row: dict) -> str:
         sym = row.get("symbol") or "?"
         d = int(row["days_until"])
         unit = "1 day" if d == 1 else f"{d} days"
-        return f"{sym} earnings in {unit} ⚠️"
+        return f"{sym} earnings in {unit}"
     ev = row.get("event") or ""
     if ev == "FOMC":
-        return f"FOMC meeting {mon} {day} 📌"
-    return f"{ev} release {mon} {day} 📌"
+        return f"FOMC meeting — {mon} {day}"
+    return f"{ev} release — {mon} {day}"
+
+
+# keep the old name as an alias so other code that imports it still works
+def _calendar_event_line(row: dict) -> str:
+    return _calendar_event_label(row)
 
 
 def _calendar_badge(days: int) -> tuple[str, str | None]:
@@ -564,15 +667,23 @@ def _update_economic_calendar(_, wl_data):
 
     out: list = []
     for row in rows:
-        line = _calendar_event_line(row)
-        badge_txt, badge_col = _calendar_badge(int(row["days_until"]))
+        label = _calendar_event_label(row)
+        days = int(row["days_until"])
+        badge_txt, badge_col = _calendar_badge(days)
         date_iso = row["event_date"].isoformat()
+        importance = (row.get("importance") or "medium").lower()
+        imp_col = _IMPORTANCE_COLORS.get(importance, GRAY)
+
+        # Optional time string (macro events only)
+        time_str = row.get("time") or ""
+        prev_val = row.get("previous")
+        exp_val = row.get("expected")
+
         badge_el = (
             html.Span(
                 badge_txt,
                 style={
                     "fontSize": "8px",
-                    "marginLeft": "8px",
                     "padding": "2px 6px",
                     "borderRadius": "2px",
                     "border": f"1px solid {badge_col}",
@@ -584,21 +695,54 @@ def _update_economic_calendar(_, wl_data):
             if badge_txt
             else None
         )
+
+        # Importance dot (●)
+        imp_dot = html.Span(
+            "●",
+            style={
+                "fontSize": "7px",
+                "color": imp_col,
+                "marginRight": "6px",
+                "flexShrink": "0",
+            },
+        )
+
+        # Previous / Expected line (macro events only)
+        prev_exp_parts = []
+        if prev_val is not None:
+            prev_exp_parts.append(f"Prev: {prev_val}")
+        if exp_val is not None:
+            prev_exp_parts.append(f"Exp: {exp_val}")
+        prev_exp_el = (
+            html.Span(
+                "  ·  ".join(prev_exp_parts),
+                style={"fontSize": "9px", "color": TEXT_DIM, "marginLeft": "4px"},
+            )
+            if prev_exp_parts
+            else None
+        )
+
+        date_line = html.Div(
+            date_iso + (f"  {time_str}" if time_str else ""),
+            style={
+                "fontSize": "10px",
+                "color": TEXT_DIM,
+                "minWidth": "80px",
+                "flexShrink": "0",
+                "fontVariantNumeric": "tabular-nums",
+            },
+        )
+
         out.append(
             html.Div(
                 [
+                    date_line,
                     html.Div(
-                        date_iso,
-                        style={
-                            "fontSize": "10px",
-                            "color": TEXT_DIM,
-                            "minWidth": "78px",
-                            "flexShrink": "0",
-                            "fontVariantNumeric": "tabular-nums",
-                        },
-                    ),
-                    html.Div(
-                        [html.Span(line, style={"fontSize": "11px", "color": TEXT_MAIN})]
+                        [
+                            imp_dot,
+                            html.Span(label, style={"fontSize": "11px", "color": TEXT_MAIN}),
+                        ]
+                        + ([prev_exp_el] if prev_exp_el else [])
                         + ([badge_el] if badge_el else []),
                         style={
                             "flex": "1",
@@ -612,8 +756,8 @@ def _update_economic_calendar(_, wl_data):
                 style={
                     "display": "flex",
                     "gap": "10px",
-                    "padding": "8px 0",
-                    "borderLeft": f"2px solid {BORDER}",
+                    "padding": "7px 0",
+                    "borderLeft": f"2px solid {imp_col}",
                     "paddingLeft": "12px",
                     "marginLeft": "2px",
                 },

@@ -51,7 +51,12 @@ def test_portfolio_multi_symbol(portfolio):
     assert r2["success"], f"pyramid buy should succeed: {r2}"
     aapl = portfolio.positions["AAPL"]
     assert aapl.get("layers", 1) == 2
-    exp_avg = (200.0 + 100.0) / (2.0 + 100.0 / 105.0)
+    # avg_price uses effective_px (price × (1+SLIPPAGE_PCT)) for both legs.
+    from config import SLIPPAGE_PCT
+
+    ep1 = 100.0 * (1 + SLIPPAGE_PCT)
+    ep2 = 105.0 * (1 + SLIPPAGE_PCT)
+    exp_avg = 300.0 / (200.0 / ep1 + 100.0 / ep2)
     assert abs(float(aapl["avg_price"]) - exp_avg) < 1e-6
 
     r3 = portfolio.buy("MSFT", 200.0, 400.0)

@@ -74,4 +74,6 @@ class MultiAgentState(TypedDict):
     analyst_vote: Optional[dict]
     risk_vote: Optional[dict]
     macro_vote: Optional[dict]
+    economist_vote: Optional[dict]
+    geo_vote: Optional[dict]
     arbitration: Optional[dict]

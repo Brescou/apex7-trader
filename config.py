@@ -25,13 +25,21 @@ DEATH_THRESHOLD = 50.0
 MAX_POSITIONS = 3
 MAX_ALLOC_PCT = 40
 MAX_PYRAMID_LAYERS = int(os.getenv("MAX_PYRAMID_LAYERS", "3"))
-AGENT_INTERVAL = 30
+# Increased from 30s: 2 parallel Sonnet+web_search agents (Analyst + Geopolitician)
+# can each take 10-30s; at 30s the cycle would constantly overrun its own interval.
+AGENT_INTERVAL = 90
 
 SIMULATION_MODE = os.getenv("SIMULATION_MODE", "false").lower() == "true"
 SIM_VOLATILITY = float(os.getenv("SIM_VOLATILITY", "0.02"))  # 2% par défaut
 SIM_DRIFT = float(os.getenv("SIM_DRIFT", "0.0001"))  # léger biais haussier
 
 STOP_LOSS_PCT = 0.05
+
+# Transaction costs — applied in Portfolio.buy/sell and backtest._simulate.
+# COMMISSION_PCT: broker fee as fraction of trade notional (IB ~0.1% for stocks).
+# SLIPPAGE_PCT: market impact / spread estimate (0.05% is conservative for large-caps).
+COMMISSION_PCT = float(os.getenv("COMMISSION_PCT", "0.001"))
+SLIPPAGE_PCT = float(os.getenv("SLIPPAGE_PCT", "0.0005"))
 
 # ── Trade lifecycle guards (execute_node) ─────────────────────────────────────
 TAKE_PROFIT_PCT = 0.10  # partial take-profit trigger: price ≥ avg_price × (1 + 10%)
