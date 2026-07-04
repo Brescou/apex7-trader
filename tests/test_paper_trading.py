@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 
 import agents.multi as multi_mod
+import agents.shared.modes as modes_mod
 import agents.shared.nodes as nodes
 from agents.shared.nodes import (
     get_paper_mode,
@@ -32,8 +33,17 @@ from core.data import Portfolio
 
 @pytest.fixture(autouse=True)
 def reset_modes(monkeypatch):
-    """Each test starts with every mode flag off; ``.env`` writes are silenced."""
-    monkeypatch.setattr(nodes, "_write_env_var", lambda *a, **kw: None)
+    """Each test starts with every mode flag off; ``.env`` writes are silenced.
+
+    ``set_paper_mode``/``set_simulation_mode`` call ``_write_env_var`` as an
+    unqualified name resolved in *their own* module's globals
+    (``agents.shared.modes``), not wherever a caller re-imported it from —
+    patching ``agents.shared.nodes._write_env_var`` (a separate binding to
+    the same function, re-exported for hot-switching) silently misses it,
+    so these tests were writing PAPER_MODE/SIMULATION_MODE to the real
+    project ``.env`` on every run.
+    """
+    monkeypatch.setattr(modes_mod, "_write_env_var", lambda *a, **kw: None)
     nodes._sim_mode["enabled"] = False
     nodes._paper_mode["enabled"] = False
     yield
@@ -66,6 +76,7 @@ def _make_state(action: str = "BUY", symbol: str = "AAPL") -> dict:
         "emotion": "FOCUSED",
         "prices": {symbol: 150.0},
         "known_patterns": [],
+        "execution_result": {"success": True, "shares": 0.5, "price": 150.0, "amount": 75.0},
     }
 
 
@@ -104,8 +115,12 @@ def test_paper_mode_uses_real_prices() -> None:
 # ── 2. No Anthropic call anywhere in paper mode ──────────────────────────────
 
 
-def test_paper_mode_no_llm_calls() -> None:
-    """``_llm`` must never be invoked while a node runs under paper mode."""
+def test_paper_mode_no_llm_calls(tmp_db) -> None:
+    """``_llm`` must never be invoked while a node runs under paper mode.
+
+    ``arbitrate_node`` persists ``cycle_states`` on every call — needs
+    ``tmp_db`` so that write doesn't land in the project's real DB.
+    """
     nodes._paper_mode["enabled"] = True
 
     state = {

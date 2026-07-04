@@ -6,35 +6,34 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def sim_mode():
+def sim_mode(monkeypatch):
     """Force simulation mode and disable portfolio saves for all tests.
 
-    Sets env vars *before* any APEX-7 module is imported, then also
-    toggles the runtime ``_sim_mode`` dict that nodes.py uses for
-    hot-switching.
+    ``config.PORTFOLIO_SAVE_ENABLED`` is read into ``core.data`` as a module
+    attribute at import time, which happens during pytest collection —
+    *before* this fixture body runs. Setting the env var here is a no-op for
+    that value, so it must be monkeypatched directly on the ``config``
+    module (read dynamically by ``Portfolio.save_state``) to actually take
+    effect. The runtime ``_sim_mode``/``_paper_mode`` dicts are also toggled
+    directly since nodes.py hot-switches on them regardless of env vars.
     """
+    import config
+
+    monkeypatch.setattr(config, "PORTFOLIO_SAVE_ENABLED", False)
     os.environ["SIMULATION_MODE"] = "true"
-    os.environ["PORTFOLIO_SAVE_ENABLED"] = "false"
     os.environ["USE_LIVEFEED"] = "false"
 
-    try:
-        from agents.shared.nodes import _sim_mode
+    from agents.shared.nodes import _paper_mode, _sim_mode
 
-        _sim_mode["enabled"] = True
-    except ImportError:
-        pass
+    _sim_mode["enabled"] = True
+    _paper_mode["enabled"] = False
 
     yield
 
-    try:
-        from agents.shared.nodes import _sim_mode
-
-        _sim_mode["enabled"] = True
-    except ImportError:
-        pass
+    _sim_mode["enabled"] = True
+    _paper_mode["enabled"] = False
 
     os.environ.pop("SIMULATION_MODE", None)
-    os.environ.pop("PORTFOLIO_SAVE_ENABLED", None)
     os.environ.pop("USE_LIVEFEED", None)
 
 

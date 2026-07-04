@@ -1,15 +1,26 @@
 """agents.shared.schemas — Pydantic validation for LLM decision outputs."""
 
+import math
+
 from pydantic import BaseModel, Field, field_validator
 
 # ── Shared validators ────────────────────────────────────────────────────────
 
 
 def _clamp_pct(v: float, default: float = 0.0) -> float:
-    """Clamp a percentage value to [0, 100]. Used as a before-validator."""
+    """Clamp a percentage value to [0, 100]. Used as a before-validator.
+
+    NaN must be rejected explicitly: ``max(lo, min(hi, v))`` silently
+    returns the UPPER bound for NaN (every comparison against NaN is False,
+    so ``min(100.0, nan)`` keeps ``100.0``, then ``max(0.0, 100.0)`` keeps
+    ``100.0``) — turning a value that should be treated as entirely
+    invalid into the maximum allowed allocation instead of the default.
+    """
     try:
         v = float(v)
     except (TypeError, ValueError):
+        return default
+    if math.isnan(v) or math.isinf(v):
         return default
     return max(0.0, min(100.0, v))
 
@@ -36,6 +47,8 @@ class _ActionConfidenceMixin(BaseModel):
         try:
             v = float(v)
         except (TypeError, ValueError):
+            return 0.5
+        if math.isnan(v) or math.isinf(v):
             return 0.5
         if v > 1.0:
             v = v / 100.0
@@ -160,9 +173,12 @@ class RiskVote(BaseModel):
     @classmethod
     def clamp_var(cls, v: float) -> float:
         try:
-            return max(0.0, float(v))
+            v = float(v)
         except (TypeError, ValueError):
             return 0.0
+        if math.isnan(v) or math.isinf(v):
+            return 0.0
+        return max(0.0, v)
 
 
 class MacroVote(BaseModel):
@@ -198,6 +214,8 @@ class MacroVote(BaseModel):
         try:
             v = float(v)
         except (TypeError, ValueError):
+            return 0.0
+        if math.isnan(v) or math.isinf(v):
             return 0.0
         return max(-1.0, min(1.0, v))
 
@@ -252,6 +270,8 @@ class EconomistVote(BaseModel):
             v = float(v)
         except (TypeError, ValueError):
             return 0.0
+        if math.isnan(v) or math.isinf(v):
+            return 0.0
         return max(-1.0, min(1.0, v))
 
 
@@ -289,6 +309,8 @@ class GeoPoliticianVote(BaseModel):
         try:
             v = float(v)
         except (TypeError, ValueError):
+            return 0.0
+        if math.isnan(v) or math.isinf(v):
             return 0.0
         return max(-1.0, min(1.0, v))
 

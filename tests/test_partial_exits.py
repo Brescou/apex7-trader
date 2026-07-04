@@ -111,8 +111,12 @@ def _make_buy_state(*, symbol: str = "AAPL", in_position: bool) -> dict:
     }
 
 
-def test_arbitrate_pyramid_flag_and_confidence_discount() -> None:
-    """BUY on an already-open symbol sets ``is_pyramid`` and lowers confidence ~20%."""
+def test_arbitrate_pyramid_flag_and_confidence_discount(tmp_db) -> None:
+    """BUY on an already-open symbol sets ``is_pyramid`` and lowers confidence ~20%.
+
+    ``arbitrate_node`` persists ``cycle_states`` on every call — needs
+    ``tmp_db`` so that write doesn't land in the project's real DB.
+    """
     base = arbitrate_node(_make_buy_state(in_position=False))
     pyr = arbitrate_node(_make_buy_state(in_position=True))
     assert base["decision"]["action"] == "BUY"
@@ -182,45 +186,101 @@ def test_risk_check_rejects_pyramid_over_alloc_cap() -> None:
     assert "pyramidale" in (out["decision"].get("_risk_reason") or "").lower()
 
 
+def test_risk_check_rejects_buy_at_zero_price() -> None:
+    """symbol in prices with a 0.0 quote must fail closed, not PASS a BUY
+    that portfolio.buy() would then silently reject.
+    """
+    sym = "AAPL"
+    state = {
+        "decision": {"action": "BUY", "symbol": sym, "allocation_pct": 10, "sell_pct": 100},
+        "prices": {sym: 0.0},
+        "positions": {},
+        "balance": 5000.0,
+    }
+    out = risk_check_node(state)
+    assert out["decision"].get("_risk_passed") is False
+    assert "prix invalide" in (out["decision"].get("_risk_reason") or "").lower()
+
+
+def test_risk_check_rejects_buy_at_nan_price() -> None:
+    sym = "AAPL"
+    state = {
+        "decision": {"action": "BUY", "symbol": sym, "allocation_pct": 10, "sell_pct": 100},
+        "prices": {sym: float("nan")},
+        "positions": {},
+        "balance": 5000.0,
+    }
+    out = risk_check_node(state)
+    assert out["decision"].get("_risk_passed") is False
+
+
+def test_risk_check_rejects_sell_with_missing_price() -> None:
+    """A position exists but the symbol's quote isn't in state["prices"]
+    (e.g. yfinance dropped it this tick) — must fail closed, not PASS a
+    SELL that portfolio.sell() would then silently reject at price=0.
+    """
+    sym = "AAPL"
+    state = {
+        "decision": {"action": "SELL", "symbol": sym, "sell_pct": 100},
+        "prices": {},
+        "positions": {sym: {"shares": 1.0, "avg_price": 100.0}},
+        "balance": 1000.0,
+    }
+    out = risk_check_node(state)
+    assert out["decision"].get("_risk_passed") is False
+    assert "prix invalide" in (out["decision"].get("_risk_reason") or "").lower()
+
+
+def test_risk_check_rejects_sell_at_zero_price() -> None:
+    sym = "AAPL"
+    state = {
+        "decision": {"action": "SELL", "symbol": sym, "sell_pct": 100},
+        "prices": {sym: 0.0},
+        "positions": {sym: {"shares": 1.0, "avg_price": 100.0}},
+        "balance": 1000.0,
+    }
+    out = risk_check_node(state)
+    assert out["decision"].get("_risk_passed") is False
+
+
 # ── Sizing → sell_pct mapping ────────────────────────────────────────────────
 
 
-def test_arbitrate_full_sell() -> None:
+def test_arbitrate_full_sell(tmp_db) -> None:
     out = arbitrate_node(_make_state(sizing="FULL"))
     assert out["decision"]["action"] == "SELL"
     assert out["decision"]["sell_pct"] == 100.0
 
 
-def test_arbitrate_half_sell() -> None:
+def test_arbitrate_half_sell(tmp_db) -> None:
     out = arbitrate_node(_make_state(sizing="HALF"))
     assert out["decision"]["sell_pct"] == 50.0
 
 
-def test_arbitrate_quarter_sell() -> None:
+def test_arbitrate_quarter_sell(tmp_db) -> None:
     out = arbitrate_node(_make_state(sizing="QUARTER"))
     assert out["decision"]["sell_pct"] == 25.0
 
 
-def test_arbitrate_skip_sell() -> None:
-    """SKIP → sell_pct=0 → ``risk_check_node`` rejects the trade.
-
-    The arbitration still emits a SELL decision, but the downstream risk gate
-    fails (``0 < sell_pct <= 100``), so ``execute_node`` is bypassed by the
-    ``_risk_passed = False`` flag.
+def test_arbitrate_skip_sell(tmp_db) -> None:
+    """SKIP is a BUY-sizing signal ("commit no new capital") — it must never
+    neuter an already-decided SELL down to a 0% no-op exit, exactly when the
+    risk_manager judges conditions worst and exiting matters most. The SELL
+    proceeds at full size (capped only by the technician's own sell_pct), and
+    the downstream risk gate passes it through.
     """
     state = _make_state(sizing="SKIP")
     arb_out = arbitrate_node(state)
-    assert arb_out["decision"]["sell_pct"] == 0.0
+    assert arb_out["decision"]["sell_pct"] == 100.0
 
     # Drive the risk gate with the resulting decision.
     state_after = {**state, **arb_out}
     risk_out = risk_check_node(state_after)
     decision_post = risk_out["decision"]
-    assert decision_post.get("_risk_passed") is False
-    assert "sell_pct" in (decision_post.get("_risk_reason") or "")
+    assert decision_post.get("_risk_passed") is True
 
 
-def test_sell_pct_min_of_risk_and_tech() -> None:
+def test_sell_pct_min_of_risk_and_tech(tmp_db) -> None:
     """If technician restricts the exit, arbitrate uses the smaller value."""
     out = arbitrate_node(_make_state(sizing="HALF", tech_sell_pct=25))
     assert out["decision"]["sell_pct"] == 25.0
@@ -234,7 +294,6 @@ def test_sell_pct_persisted_in_db(tmp_db) -> None:
     _sim_mode["enabled"] = True  # skip Anthropic LLM lesson call
 
     portfolio = Portfolio()
-    # Pretend a SELL just happened so ``last_trade`` lookup succeeds.
     portfolio.trade_history.append(
         {
             "time": "2026-05-01T12:00:00",
@@ -258,6 +317,7 @@ def test_sell_pct_persisted_in_db(tmp_db) -> None:
         "emotion": "FOCUSED",
         "prices": {"AAPL": 150.0},
         "known_patterns": [],
+        "execution_result": {"success": True, "shares": 0.25, "price": 150.0, "amount": 37.5},
     }
 
     save_memory = make_save_memory_node(portfolio)

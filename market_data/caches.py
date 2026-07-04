@@ -40,6 +40,14 @@ _earnings_cache: dict[str, Any] = {"data": None, "ts": 0.0, "key": ""}
 _earnings_lock = threading.Lock()
 EARNINGS_TTL = 300  # 5 min
 
+# Per-(symbol, max_items) TTL cache — matches the "news-interval" Dash
+# callback cadence (120s) so the two panels driven by that same interval
+# (headline strip + news content) share one fetch instead of double-hitting
+# yfinance every tick (Review Finding, market_data/news.py).
+_news_cache: dict[str, dict[str, Any]] = {}
+_news_lock = threading.Lock()
+NEWS_CACHE_SEC = 120
+
 
 def macro_ttl() -> float:
     return float(MARKET_DATA_CACHE_SEC)

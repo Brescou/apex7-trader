@@ -2,6 +2,7 @@
 
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -12,13 +13,19 @@ PASSWORD = "s3cret-test"
 
 @pytest.fixture
 def client(monkeypatch):
-    """Flask test client with auth enabled (password monkeypatched)."""
+    """Flask test client with auth enabled (password monkeypatched).
+
+    ``create_app()`` calls ``start_controller()`` — a real Portfolio + a live
+    agent thread pointed at the real project ``trades_sim.db``. Mocked so
+    this only exercises the auth gate, not a background trading loop.
+    """
     import config
 
     monkeypatch.setattr(config, "DASHBOARD_PASSWORD", PASSWORD)
     from dashboard import create_app
 
-    app = create_app()
+    with patch("dashboard.controller.start_controller"):
+        app = create_app()
     with app.server.test_client() as c:
         yield c
 
@@ -31,7 +38,8 @@ def open_client(monkeypatch):
     monkeypatch.setattr(config, "DASHBOARD_PASSWORD", "")
     from dashboard import create_app
 
-    app = create_app()
+    with patch("dashboard.controller.start_controller"):
+        app = create_app()
     with app.server.test_client() as c:
         yield c
 
@@ -71,6 +79,28 @@ def test_wrong_password_rejected(client):
     assert b"Invalid password" in resp.data
     # still locked out
     assert client.get("/").status_code == 302
+
+
+def test_non_ascii_password_does_not_crash_login(monkeypatch):
+    """hmac.compare_digest on two `str` raises TypeError for non-ASCII
+    content — DASHBOARD_PASSWORD containing e.g. accented characters must
+    not turn every /login POST into an unhandled 500 (Review Finding).
+    """
+    import config
+
+    non_ascii_password = "Sécurité2026!"
+    monkeypatch.setattr(config, "DASHBOARD_PASSWORD", non_ascii_password)
+    from dashboard import create_app
+
+    with patch("dashboard.controller.start_controller"):
+        app = create_app()
+    with app.server.test_client() as c:
+        wrong = c.post("/login", data={"password": "wrong"})
+        assert wrong.status_code == 401
+
+        correct = c.post("/login", data={"password": non_ascii_password})
+        assert correct.status_code == 302
+        assert c.get("/").status_code == 200
 
 
 def test_login_logout_flow(client):

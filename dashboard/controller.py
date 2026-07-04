@@ -119,6 +119,11 @@ def _agent_loop(p: Portfolio) -> None:
         except Exception as e:
             with _controller_lock:
                 _state["last_error"] = str(e)
+                # thinking was set True before graph.invoke() — an exception
+                # here must still clear it, or the UI's "thinking" indicator
+                # stays lit for the whole retry sleep even though no LLM work
+                # is actually happening.
+                _state["thinking"] = False
             p.log(f"Cycle error: {e}", "error")
             p.log(traceback.format_exc(), "error")
         if p.is_dead:
@@ -180,13 +185,26 @@ def _reconcile_portfolio_state(port: "Portfolio") -> None:
     from ``portfolio_state.json`` by more than $5 (rounding / commission tolerance).
     Purely diagnostic — never mutates the portfolio.
     """
-    from config import INITIAL_BALANCE
+    from config import COMMISSION_PCT, INITIAL_BALANCE
 
     try:
         from agents.shared.db import _db_read, _ensure_db
 
         _ensure_db()
-        rows = _db_read("SELECT action, amount_usd FROM trades ORDER BY id ASC")
+        # Scoped to this portfolio's own life (``created_at``, persisted
+        # across restarts by save_state/load_state) — trades.db is never
+        # purged across a death+RESET cycle, so replaying every row since
+        # the very first trade ever would mix a prior life's ledger into
+        # this one's reconciliation and produce a bogus drift warning (or
+        # mask a real one of similar magnitude).
+        created_at = getattr(port, "created_at", None)
+        if created_at:
+            rows = _db_read(
+                "SELECT action, amount_usd FROM trades WHERE timestamp >= ? ORDER BY id ASC",
+                (created_at,),
+            )
+        else:
+            rows = _db_read("SELECT action, amount_usd FROM trades ORDER BY id ASC")
     except Exception as exc:
         logger.warning("reconcile: could not read trades.db: %s", exc)
         return
@@ -200,10 +218,14 @@ def _reconcile_portfolio_state(port: "Portfolio") -> None:
             amt = float(amount_usd or 0)
         except (TypeError, ValueError):
             continue
+        # Portfolio.buy()/sell() debit/credit amount +/- commission, not
+        # amount alone — omitting it here made implied_cash drift higher
+        # than the real cash by the sum of every trade's commission.
+        commission = amt * COMMISSION_PCT
         if action == "BUY":
-            implied_cash -= amt
+            implied_cash -= amt + commission
         elif action == "SELL":
-            implied_cash += amt
+            implied_cash += amt - commission
 
     diff = abs(implied_cash - port.cash)
     if diff > 5.0:
@@ -247,7 +269,6 @@ def start_controller() -> None:
         _state["thread"] = _launch(port)
         threading.Thread(
             target=_postmortem_loop,
-            args=(port,),
             daemon=True,
             name="apex7-postmortem",
         ).start()
@@ -263,10 +284,21 @@ def start_controller() -> None:
         pass
 
 
-def _postmortem_loop(p: Portfolio) -> None:
+def _postmortem_loop() -> None:
+    """Runs forever, re-reading the *current* portfolio from ``_state`` each tick.
+
+    Must not close over a fixed ``Portfolio`` instance — a RESET (or a
+    LIVE/PAPER <-> SIM mode swap) replaces ``_state["portfolio"]`` with a
+    fresh object, and a stale reference here would keep running the daily
+    postmortem/digest/weekly report against a dead, discarded portfolio.
+    """
     while True:
         time.sleep(60)
         now = datetime.now()
+        with _controller_lock:
+            p = _state.get("portfolio")
+        if p is None:
+            continue
 
         # Resolve any due pending trade evaluations every minute — independent
         # of the daily postmortem schedule. Skipped in simulation mode because

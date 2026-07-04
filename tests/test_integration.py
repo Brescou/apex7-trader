@@ -237,12 +237,15 @@ def test_simulation_mode_toggle():
     """Test that simulation mode can be toggled.
 
     Mocks ``_write_env_var`` so toggling does not mutate the developer's ``.env``
-    (Finding 5.2).
+    (Finding 5.2). Patched on ``agents.shared.modes`` — where
+    ``set_simulation_mode`` resolves the unqualified name from — not on
+    ``agents.shared.nodes``'s separate re-exported binding, which the call
+    never actually goes through.
     """
     from agents.shared.nodes import get_simulation_mode, set_simulation_mode
 
     original = get_simulation_mode()
-    with patch("agents.shared.nodes._write_env_var"):
+    with patch("agents.shared.modes._write_env_var"):
         try:
             set_simulation_mode(True)
             assert get_simulation_mode() is True

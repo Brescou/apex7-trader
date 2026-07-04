@@ -41,6 +41,7 @@ class AgentState(TypedDict):
     # Control
     alive: bool
     skip_research: bool
+    execution_result: Optional[dict]  # portfolio.buy()/sell() outcome from execute_node
 
 
 class MultiAgentState(TypedDict):
@@ -66,6 +67,7 @@ class MultiAgentState(TypedDict):
     log: Annotated[List[dict], operator.add]
     alive: bool
     skip_research: bool
+    execution_result: Optional[dict]  # portfolio.buy()/sell() outcome from execute_node
     # ── Multi-agent specific ──────────────────────────────────────────────────
     supervisor_brief: str
     agent_role: str

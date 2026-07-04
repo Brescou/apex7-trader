@@ -12,6 +12,7 @@ import os
 import sqlite3
 import sys
 import threading
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -70,6 +71,30 @@ def test_blend_when_some_agents_have_history(tmp_db, fresh_cache) -> None:
     # Pending agents should still be present with non-zero weight.
     assert out["risk_manager"] > 0
     assert out["macro_watcher"] > 0
+
+
+def test_lone_agent_bad_accuracy_gets_less_weight_than_good_accuracy(fresh_cache) -> None:
+    """A single evaluated agent's accuracy must blend on an absolute 0..1
+    scale. The old formula normalized accuracy against the sum of *all*
+    evaluated agents' accuracies — with only one agent evaluated, that sum
+    IS its own accuracy, so acc_norm = accuracy/accuracy = 1.0 regardless
+    of whether the real score was 10% or 90%. A systematically wrong agent
+    got treated identically to a perfect one.
+    """
+
+    def _weight_for(acc_value: float) -> float:
+        multi_mod._cached_weights = {}
+        multi_mod._weights_computed_at = 0.0
+        accuracies = {a: (acc_value if a == "geopolitician" else None) for a in WEIGHTS}
+        with patch.object(multi_mod, "_read_agent_accuracies", return_value=accuracies):
+            return _compute_dynamic_weights()["geopolitician"]
+
+    bad = _weight_for(0.1)
+    good = _weight_for(0.9)
+    assert bad < good, (
+        f"a 10%-accurate lone agent got weight {bad:.4f}, a 90%-accurate one got "
+        f"{good:.4f} — the bad agent must end up with strictly less weight"
+    )
 
 
 def test_logs_evaluated_and_pending(tmp_db, fresh_cache, caplog) -> None:

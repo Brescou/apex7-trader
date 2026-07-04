@@ -1,9 +1,11 @@
 """Fil d’actualités yfinance pour un symbole."""
 
+import time
 from datetime import datetime
 
 from config import NEWS_MAX_ITEMS
 
+from market_data.caches import NEWS_CACHE_SEC, _news_cache, _news_lock
 from market_data.compat import yf
 from market_data.helpers import classify_sentiment, format_age
 
@@ -12,7 +14,27 @@ def fetch_news(symbol: str, max_items: int = NEWS_MAX_ITEMS) -> list[dict]:
     """
     Fetch recent headlines for a symbol via yfinance Ticker.news.
     Returns title, source, age, url, sentiment.
+
+    Cached ``NEWS_CACHE_SEC`` seconds per (symbol, max_items) — unlike every
+    other market_data fetcher this used to hit yfinance on every call, and
+    two Dash callbacks driven by the same "news-interval" fire back-to-back
+    for the same symbol each tick (Review Finding).
     """
+    cache_key = f"{symbol}|{max_items}"
+    now = time.time()
+    with _news_lock:
+        cached = _news_cache.get(cache_key)
+        if cached is not None and (now - cached["ts"]) < NEWS_CACHE_SEC:
+            return cached["data"]
+
+    result = _fetch_news_uncached(symbol, max_items)
+
+    with _news_lock:
+        _news_cache[cache_key] = {"data": result, "ts": time.time()}
+    return result
+
+
+def _fetch_news_uncached(symbol: str, max_items: int) -> list[dict]:
     try:
         ticker = yf.Ticker(symbol)
         raw_news = ticker.news or []

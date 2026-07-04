@@ -6,13 +6,27 @@ from datetime import datetime
 
 import yfinance as yf
 
-from agents.shared.db import _db_read, _db_write
+from agents.shared.db import _db_read, _db_read_at, _db_write_at
 from agents.shared.modes import get_runtime_mode, get_simulation_mode
 
 logger = logging.getLogger("apex7")
 
 EVAL_SIGNIFICANCE_PCT = 0.01  # 1% move required to declare a vote correct/wrong
 _MAX_EVAL_RETRIES = 10  # abandon evaluation after this many consecutive price-fetch failures
+
+
+def _get_db_path():
+    """Delegate to ``agents.shared.db`` so tests can patch ``db._get_db_path`` reliably.
+
+    A plain ``from agents.shared.db import _get_db_path`` binds this module's
+    own copy of the function object at import time — ``monkeypatch.setattr``
+    on ``agents.shared.db._get_db_path`` (e.g. the ``tmp_db`` fixture)
+    wouldn't be visible here, and this function's writes would silently
+    target the real project DB instead of the test's temp file.
+    """
+    from agents.shared import db as _db
+
+    return _db._get_db_path()
 
 
 def _fast_last_price(symbol: str) -> float | None:
@@ -55,6 +69,14 @@ def evaluate_pending_trades(now: datetime | None = None) -> int:
     """
     when_dt = now or datetime.now()
     when = when_dt.isoformat()
+    # Resolved once and reused for every read/write below (via _db_write_at /
+    # _db_read_at) instead of the mode-dependent _db_write / _db_read, which
+    # re-resolve _get_db_path() on every call. Without this, a mode switch
+    # mid-loop (e.g. the UI toggling LIVE -> PAPER while this function is
+    # still iterating due rows) could route later rows' UPDATEs to a
+    # different DB file than the SELECT that produced them, silently
+    # orphaning pending_evaluations/agent_memory rows in the wrong file.
+    db_path = _get_db_path()
     rows = _db_read(
         "SELECT id, trade_id, trace_id, symbol, action, entry_price, "
         "entry_date, eval_after_date FROM pending_evaluations "
@@ -70,7 +92,8 @@ def evaluate_pending_trades(now: datetime | None = None) -> int:
         pe_id, _trade_id, trace_id, symbol, action, entry_price, entry_date, _eval_after = row
         action_u = (action or "HOLD").upper()
         if action_u not in ("BUY", "SELL"):
-            _db_write(
+            _db_write_at(
+                db_path,
                 "UPDATE pending_evaluations SET evaluated = 1 WHERE id = ?",
                 (pe_id,),
             )
@@ -78,13 +101,14 @@ def evaluate_pending_trades(now: datetime | None = None) -> int:
 
         current_price = _fast_last_price(symbol)
         if current_price is None:
-            _db_write(
+            _db_write_at(
+                db_path,
                 "UPDATE pending_evaluations "
                 "SET retry_count = COALESCE(retry_count, 0) + 1 WHERE id = ?",
                 (pe_id,),
             )
-            count_row = _db_read(
-                "SELECT retry_count FROM pending_evaluations WHERE id = ?", (pe_id,)
+            count_row = _db_read_at(
+                db_path, "SELECT retry_count FROM pending_evaluations WHERE id = ?", (pe_id,)
             )
             retry_count = int(count_row[0][0]) if count_row else 0
             if retry_count >= _MAX_EVAL_RETRIES:
@@ -94,7 +118,9 @@ def evaluate_pending_trades(now: datetime | None = None) -> int:
                     action_u,
                     retry_count,
                 )
-                _db_write("UPDATE pending_evaluations SET evaluated = 1 WHERE id = ?", (pe_id,))
+                _db_write_at(
+                    db_path, "UPDATE pending_evaluations SET evaluated = 1 WHERE id = ?", (pe_id,)
+                )
             else:
                 logger.info(
                     "evaluate_pending_trades: skip %s %s (no spot price, retry %d/%d)",
@@ -110,7 +136,8 @@ def evaluate_pending_trades(now: datetime | None = None) -> int:
         except (TypeError, ValueError):
             entry = 0.0
         if entry <= 0:
-            _db_write(
+            _db_write_at(
+                db_path,
                 "UPDATE pending_evaluations SET evaluated = 1 WHERE id = ?",
                 (pe_id,),
             )
@@ -133,19 +160,35 @@ def evaluate_pending_trades(now: datetime | None = None) -> int:
                 was_correct = None
 
         if trace_id:
-            # Only directional votes (BUY/SELL) are scored against the market.
+            # Only score votes that actually agreed with the executed trade's
+            # direction AND symbol — a dissenting agent (opposite action, or a
+            # BUY/SELL on a different symbol the arbitrator didn't act on)
+            # must stay NULL, not inherit the winning direction's verdict.
             # risk_manager and macro_watcher always vote HOLD — leaving their
             # rows NULL keeps ``_compute_dynamic_weights`` from blending in
             # noise (Review v5 Finding 4.4).
             # eval_pct_change stores |move| so dynamic-weight computation can
             # give larger moves more signal (magnitude-weighted accuracy).
-            _db_write(
+            wrote_verdict = _db_write_at(
+                db_path,
                 "UPDATE agent_memory SET was_correct = ?, eval_pct_change = ? "
                 "WHERE trace_id = ? AND was_correct IS NULL "
-                "AND vote IN ('BUY', 'SELL')",
-                (was_correct, abs(pct_change), trace_id),
+                "AND vote = ? AND symbol = ?",
+                (was_correct, abs(pct_change), trace_id, action_u, symbol),
             )
-        _db_write(
+            if not wrote_verdict:
+                # Don't mark ``evaluated`` — the verdict never landed in
+                # agent_memory, so retrying next tick is the only way it
+                # isn't silently lost forever.
+                logger.error(
+                    "evaluate_pending_trades: failed to persist was_correct "
+                    "for trace_id=%s symbol=%s — will retry",
+                    trace_id,
+                    symbol,
+                )
+                continue
+        _db_write_at(
+            db_path,
             "UPDATE pending_evaluations SET evaluated = 1 WHERE id = ?",
             (pe_id,),
         )

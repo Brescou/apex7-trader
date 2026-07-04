@@ -174,6 +174,76 @@ def test_fetch_watchlist_prices():
         assert entry["above_ma20"] is True, f"Expected above_ma20=True for {sym}"
 
 
+def test_fetch_watchlist_prices_releases_lock_during_network_io():
+    """``fetch_watchlist_prices`` must not hold ``_watchlist_lock`` for the
+    whole batch of sequential yfinance calls — otherwise every other caller
+    (check-alerts callback, screener, API routes) freezes behind it for as
+    long as the network fetch takes (Review Finding, market_data/quotes.py
+    line 57). Verified by blocking inside a fake ``.history()`` call and
+    confirming the lock can still be acquired from another thread while the
+    fetch is in flight.
+    """
+    import threading
+    import time as time_mod
+
+    import market_data as md
+    from market_data import caches, fetch_watchlist_prices
+
+    _reset_watchlist_cache()
+
+    entered_history = threading.Event()
+    release_history = threading.Event()
+
+    class _BlockingTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+
+        def history(self, period="5d", interval="1d", **_kwargs):
+            entered_history.set()
+            release_history.wait(timeout=2.0)
+            n = 260 if period == "1y" else 5
+            idx = pd.date_range("2026-01-02", periods=n, freq="D")
+            close = np.linspace(100.0, 110.0, n)
+            volume = np.full(n, 2_000_000)
+            return pd.DataFrame(
+                {
+                    "Open": close * 0.999,
+                    "High": close * 1.01,
+                    "Low": close * 0.99,
+                    "Close": close,
+                    "Volume": volume,
+                },
+                index=idx,
+            )
+
+    result_holder: dict = {}
+
+    def _run():
+        with patch.object(md.yf, "Ticker", _BlockingTicker):
+            result_holder["result"] = fetch_watchlist_prices(["AAPL"])
+
+    worker = threading.Thread(target=_run)
+    worker.start()
+    try:
+        assert entered_history.wait(timeout=2.0), "fetch never reached the network call"
+        # The fetch is now blocked *inside* the fake network call. If the
+        # lock were held for the whole loop (the pre-fix behaviour), this
+        # acquire would time out.
+        acquired = caches._watchlist_lock.acquire(timeout=1.0)
+        try:
+            assert acquired, "_watchlist_lock was held during the network I/O call"
+        finally:
+            if acquired:
+                caches._watchlist_lock.release()
+    finally:
+        release_history.set()
+        worker.join(timeout=5.0)
+
+    assert not worker.is_alive()
+    assert result_holder.get("result", {}).get("AAPL", {}).get("price") == 110.0
+    time_mod.sleep(0)  # let the worker's cache write settle before other tests run
+
+
 def test_fetch_news():
     import market_data as md
     from market_data import fetch_news
@@ -201,93 +271,118 @@ def test_fetch_news():
 
 
 def test_run_screener():
+    """Hermetic — mocks yfinance via ``_FakeTicker`` (Review Finding: this
+    test previously hit the real network with no mocks and no assertions
+    that would fail on empty/missing data, so a rate-limited or offline run
+    passed without ever exercising the filtering logic).
+    """
+    import market_data as md
     from market_data import run_screener
 
     symbols = ["AAPL", "MSFT", "GOOGL"]
-    result = run_screener(symbols, {})
-    assert isinstance(result, list), f"run_screener must return list, got {type(result)}"
+    _reset_watchlist_cache()
+    with patch.object(md.yf, "Ticker", _FakeTicker):
+        result = run_screener(symbols, {})
+        result2 = run_screener(symbols, {"rsi_min": 0})
+        result3 = run_screener(symbols, {"rsi_min": 150})
 
-    result2 = run_screener(symbols, {"rsi_min": 0})
-    assert isinstance(result2, list)
-
-    result3 = run_screener(symbols, {"rsi_min": 150})
-    assert result3 == [], f"Expected empty list for impossible filter, got {result3}"
-
+    assert isinstance(result, list) and len(result) == 3
+    # _FakeTicker's monotonically rising closes → RSI saturates at 100.
     for entry in result:
-        assert "symbol" in entry, f"Screener entry missing 'symbol': {entry}"
+        assert entry["symbol"] in symbols
+        assert entry["rsi_14"] == 100.0
+        assert entry["price"] == 110.0
+
+    assert isinstance(result2, list) and len(result2) == 3
+
+    assert result3 == [], f"Expected empty list for impossible filter, got {result3}"
 
 
 def test_fetch_sparkline():
-    """Test fetch_sparkline if available; gracefully skip if not yet implemented."""
-    import market_data
-
-    if not hasattr(market_data, "fetch_sparkline"):
-        import pytest
-
-        pytest.skip("fetch_sparkline not yet in market_data")
-
+    """Hermetic — mocks yfinance via ``_FakeTicker`` (Review Finding: was
+    hitting the real network with a self-neutering ``if len(result) == 0:
+    return``, so a rate-limited/offline run silently skipped every
+    assertion below it).
+    """
+    import market_data as md
     from market_data import fetch_sparkline
 
-    result = fetch_sparkline("AAPL")
-    assert isinstance(result, list), f"fetch_sparkline must return list, got {type(result)}"
-    if len(result) == 0:
-        return
+    from market_data import caches
+
+    caches._sparkline_cache.pop("AAPL", None)
+
+    with patch.object(md.yf, "Ticker", _FakeTicker):
+        result = fetch_sparkline("AAPL")
+
+    assert isinstance(result, list) and len(result) == 5
     first = result[0]
-    assert "time" in first, f"Sparkline entry missing 'time': {first}"
-    assert "price" in first, f"Sparkline entry missing 'price': {first}"
-    assert "open" in first, f"Sparkline entry missing 'open': {first}"
-    assert isinstance(first["price"], (int, float)), f"price must be numeric: {first['price']}"
+    assert first["price"] == 100.0
+    assert first["open"] == pytest.approx(100.0 * 0.999)
+    assert result[-1]["price"] == 110.0
+    for row in result:
+        assert isinstance(row["price"], (int, float))
+        assert "time" in row
 
 
 def test_fetch_comparison():
-    """Test fetch_comparison if available; gracefully skip if not yet implemented."""
-    import market_data
-
-    if not hasattr(market_data, "fetch_comparison"):
-        import pytest
-
-        pytest.skip("fetch_comparison not yet in market_data")
-
+    """Hermetic — mocks yfinance via ``_FakeTicker`` (Review Finding: was
+    hitting the real network with a self-neutering ``if not result:
+    return``, so a rate-limited/offline run silently skipped every
+    assertion below it).
+    """
+    import market_data as md
     from market_data import fetch_comparison
 
-    result = fetch_comparison(["AAPL", "MSFT"], period="1mo")
-    assert isinstance(result, dict), f"fetch_comparison must return dict, got {type(result)}"
-    if not result:
-        return
+    from market_data import caches
+
+    caches._comparison_cache.clear()
+
+    with patch.object(md.yf, "Ticker", _FakeTicker):
+        result = fetch_comparison(["AAPL", "MSFT"], period="1mo")
+
+    assert isinstance(result, dict)
     for sym in ["AAPL", "MSFT"]:
         assert sym in result, f"Missing symbol {sym} in comparison result"
         series = result[sym]
-        assert isinstance(series, list), f"Series for {sym} must be list"
-        if len(series) > 0:
-            first = series[0]
-            assert "date" in first, f"Comparison entry missing 'date': {first}"
-            assert "value" in first, f"Comparison entry missing 'value': {first}"
-            assert (
-                first["value"] == 100.0
-            ), f"First value must be normalized to 100.0, got {first['value']}"
+        assert len(series) == 5
+        assert series[0]["value"] == 100.0, "first point must normalize to 100.0"
+        assert series[-1]["value"] == pytest.approx(110.0)
 
 
 def test_cache_behavior():
-    """Verify that repeated calls return cached data."""
+    """Repeated calls within the TTL must return the cached result without
+    re-hitting yfinance (Review Finding: the pre-fix version hit the real
+    network with no mocks; two consecutive real calls trivially "matched"
+    whenever both failed identically, so it never actually verified caching).
+    """
     from market_data import fetch_watchlist_prices
 
     symbols = ["AAPL"]
-    result1 = fetch_watchlist_prices(symbols)
-    result2 = fetch_watchlist_prices(symbols)
+    _reset_watchlist_cache()
 
-    assert isinstance(result1, dict) and isinstance(result2, dict)
-    assert set(result1.keys()) == set(
-        result2.keys()
-    ), f"Cache inconsistency: {result1.keys()} vs {result2.keys()}"
-    for sym in symbols:
-        if result1[sym]["price"] is not None and result2[sym]["price"] is not None:
-            assert (
-                result1[sym]["price"] == result2[sym]["price"]
-            ), f"Cache miss: prices differ for {sym}: {result1[sym]['price']} vs {result2[sym]['price']}"
+    call_count = {"n": 0}
+
+    class _CountingTicker(_FakeTicker):
+        def history(self, *a, **kw):
+            call_count["n"] += 1
+            return super().history(*a, **kw)
+
+    with patch("market_data.quotes.yf.Ticker", _CountingTicker):
+        result1 = fetch_watchlist_prices(symbols)
+        result2 = fetch_watchlist_prices(symbols)
+
+    assert result1 == result2
+    assert call_count["n"] == 1, (
+        "second call within the cache TTL must not re-invoke yfinance — "
+        f"saw {call_count['n']} calls"
+    )
 
 
 def test_sector_performance(monkeypatch) -> None:
-    """Sector grid uses ``yf.download`` closes; two ETFs → +10% first→last."""
+    """Sector grid uses one batched ``yf.download`` call for both ETFs
+    (Review Finding: was one download call per ETF per period) → +10%
+    first→last for each ticker, parsed out of the MultiIndex ``Close`` block.
+    """
     import market_data as md
 
     monkeypatch.setattr("market_data.sectors._SECTOR_ETFS", {"Tech": "XLK", "Finance": "XLF"})
@@ -295,14 +390,17 @@ def test_sector_performance(monkeypatch) -> None:
 
     idx = pd.date_range("2026-01-01", periods=10, freq="D")
 
-    def _fake_download(_ticker, **_kwargs):
-        close = np.linspace(100.0, 110.0, len(idx))
-        return pd.DataFrame({"Close": close}, index=idx)
+    def _fake_download(tickers, **_kwargs):
+        close = {t: np.linspace(100.0, 110.0, len(idx)) for t in tickers}
+        df = pd.DataFrame(close, index=idx)
+        df.columns = pd.MultiIndex.from_product([["Close"], df.columns])
+        return df
 
-    monkeypatch.setattr(md.yf, "download", _fake_download)
-    out = md.fetch_sector_performance(["1mo"])
+    with patch("market_data.sectors.yf.download", side_effect=_fake_download) as mock_dl:
+        out = md.fetch_sector_performance(["1mo"])
     assert out["Tech"]["1mo"] == pytest.approx(10.0, rel=1e-9)
     assert out["Finance"]["1mo"] == pytest.approx(10.0, rel=1e-9)
+    assert mock_dl.call_count == 1, "both ETFs must be fetched in a single batched download call"
 
 
 def test_sector_performance_fail_silent(monkeypatch) -> None:

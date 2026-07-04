@@ -1,0 +1,18 @@
+.wrap { flex: 1; overflow-y: auto; }
+.row {
+  display: flex; gap: 11px; align-items: baseline;
+  padding: 6px 16px; border-bottom: 1px solid var(--line2);
+}
+.row:hover { background: var(--hover); }
+.time { font-size: 10px; color: var(--faint); flex-shrink: 0; width: 60px; }
+.tag  { font-size: 9px; font-weight: 700; letter-spacing: .05em; flex-shrink: 0; width: 50px; }
+.msg  { font-size: 10.5px; color: var(--mid); line-height: 1.4; }
+
+.posTag    { color: var(--pos);    }
+.negTag    { color: var(--neg);    }
+.amberTag  { color: var(--amber);  }
+.blueTag   { color: var(--blue);   }
+.purpleTag { color: var(--purple); }
+.cyanTag   { color: var(--cyan);   }
+.orangeTag { color: var(--orange); }
+.dimTag    { color: var(--dim);    }

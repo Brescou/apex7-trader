@@ -1,6 +1,7 @@
 """Grille de performance des ETF sectoriels SPDR."""
 
 import logging
+import threading
 import time
 
 import pandas as pd
@@ -24,35 +25,50 @@ _SECTOR_ETFS: dict[str, str] = {
     "Staples": "XLP",
 }
 
+# Serializes the actual network fetch so concurrent cache-miss callers (e.g.
+# the Dash callback and a React API request landing at the same moment)
+# coalesce onto one fetch instead of each independently re-running the full
+# batch of downloads (Review Finding: thundering herd).
+_sector_fetch_lock = threading.Lock()
 
-def _sector_pct_change_from_download(etf: str, period: str) -> float | None:
-    """Return percent change first→last close for one ETF/period; ``None`` on failure."""
+
+def _sector_pct_changes_from_batch_download(
+    etfs: list[str], period: str
+) -> dict[str, float | None]:
+    """Percent change first→last close for many ETFs in ONE yf.download call.
+
+    Replaces one yf.download per ETF (11 ETFs x 3 periods = 33 sequential
+    downloads per refresh, Review Finding) with one batched call per period.
+    """
+    out: dict[str, float | None] = dict.fromkeys(etfs)
     try:
         df = yf.download(
-            etf,
+            etfs,
             period=period,
             interval="1d",
             progress=False,
             auto_adjust=True,
             threads=False,
         )
-        if df is None or len(df) < 2:
-            return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df = df.copy()
-            df.columns = df.columns.get_level_values(0)
-        closes = df["Close"].dropna()
-        if len(closes) < 2:
-            return None
-        first = float(closes.iloc[0])
-        last = float(closes.iloc[-1])
-        if first == 0:
-            return None
-        pct = (last - first) / first * 100.0
-        return round(float(pct), 2)
     except Exception:
-        logger.debug("sector performance failed for %s %s", etf, period, exc_info=False)
-        return None
+        logger.debug("batch sector download failed for period %s", period, exc_info=False)
+        return out
+    if df is None or df.empty or not isinstance(df.columns, pd.MultiIndex):
+        return out
+
+    closes = df["Close"]
+    for etf in etfs:
+        if etf not in closes.columns:
+            continue
+        series = closes[etf].dropna()
+        if len(series) < 2:
+            continue
+        first = float(series.iloc[0])
+        last = float(series.iloc[-1])
+        if first == 0:
+            continue
+        out[etf] = round((last - first) / first * 100.0, 2)
+    return out
 
 
 def fetch_sector_performance(
@@ -65,24 +81,39 @@ def fetch_sector_performance(
     if periods is None:
         periods = ["1d", "5d", "1mo"]
     cache_key = "|".join(periods)
-    with _sector_perf_lock:
-        now = time.time()
-        cached = _sector_perf_cache.get("data")
-        if (
-            cached is not None
-            and _sector_perf_cache.get("key") == cache_key
-            and (now - float(_sector_perf_cache.get("ts") or 0)) < SECTOR_CACHE_SEC
-        ):
-            return {k: dict(v) for k, v in cached.items()}
 
-    result: dict[str, dict[str, float | None]] = {}
-    for name, etf in _SECTOR_ETFS.items():
-        result[name] = {}
+    def _cached_if_fresh() -> dict[str, dict[str, float | None]] | None:
+        with _sector_perf_lock:
+            now = time.time()
+            cached = _sector_perf_cache.get("data")
+            if (
+                cached is not None
+                and _sector_perf_cache.get("key") == cache_key
+                and (now - float(_sector_perf_cache.get("ts") or 0)) < SECTOR_CACHE_SEC
+            ):
+                return {k: dict(v) for k, v in cached.items()}
+        return None
+
+    hit = _cached_if_fresh()
+    if hit is not None:
+        return hit
+
+    with _sector_fetch_lock:
+        # Re-check: another thread may have just finished fetching this same
+        # ``periods`` combination while we were waiting for the fetch lock.
+        hit = _cached_if_fresh()
+        if hit is not None:
+            return hit
+
+        etfs = list(_SECTOR_ETFS.values())
+        result: dict[str, dict[str, float | None]] = {name: {} for name in _SECTOR_ETFS}
         for period in periods:
-            result[name][period] = _sector_pct_change_from_download(etf, period)
+            batch = _sector_pct_changes_from_batch_download(etfs, period)
+            for name, etf in _SECTOR_ETFS.items():
+                result[name][period] = batch.get(etf)
 
-    with _sector_perf_lock:
-        _sector_perf_cache["data"] = result
-        _sector_perf_cache["key"] = cache_key
-        _sector_perf_cache["ts"] = time.time()
-    return {k: dict(v) for k, v in result.items()}
+        with _sector_perf_lock:
+            _sector_perf_cache["data"] = result
+            _sector_perf_cache["key"] = cache_key
+            _sector_perf_cache["ts"] = time.time()
+        return {k: dict(v) for k, v in result.items()}

@@ -1,12 +1,15 @@
 """Finnhub quote fallback — used when the yfinance circuit breaker is open.
 
-Only the ``/quote`` endpoint is used (free tier, no key required for plain
-US stock/ETF tickers; ``FINNHUB_API_KEY`` lifts the rate limit from 30 to 60
-req/min). Symbols with special characters (``^VIX``, ``DX-Y.NYB``) are
-silently skipped — they are not available on Finnhub free tier.
+Only the ``/quote`` endpoint is used. Despite older Finnhub free-tier docs,
+``/quote`` now rejects requests with no ``token`` param (401 "API key is
+invalid") for every symbol — set ``FINNHUB_API_KEY`` in ``.env`` or this
+fallback is a permanent no-op. Symbols with special characters (``^VIX``,
+``DX-Y.NYB``) are silently skipped — they are not available on Finnhub
+free tier regardless of key.
 
 Results are cached ``_FINNHUB_CACHE_SEC`` seconds per symbol. Network errors
-are swallowed (debug log only) so callers never raise.
+are swallowed (debug log only) so callers never raise; a missing API key is
+logged once at WARNING level so it doesn't disappear into debug noise.
 """
 
 import logging
@@ -24,6 +27,11 @@ _FINNHUB_CACHE_SEC = 10.0
 # Per-symbol TTL cache: {symbol: {"data": dict|None, "ts": float}}
 _fh_cache: dict[str, dict[str, Any]] = {}
 _fh_lock = threading.Lock()
+
+# Warn about a missing key once per process, not once per failed quote —
+# this fallback is only exercised while yfinance is already down, so a
+# per-call warning would flood the logs exactly when they matter most.
+_missing_key_warned = False
 
 
 def _api_key() -> str:
@@ -62,9 +70,20 @@ def fetch_finnhub_quote(symbol: str) -> dict[str, Any] | None:
             return cached["data"]
 
     key = _api_key()
-    url = f"{_FINNHUB_QUOTE_URL}?symbol={symbol}"
-    if key:
-        url += f"&token={key}"
+    if not key:
+        global _missing_key_warned
+        if not _missing_key_warned:
+            _missing_key_warned = True
+            logger.warning(
+                "FINNHUB_API_KEY not set — Finnhub /quote rejects unauthenticated "
+                "requests, so the yfinance-outage fallback will not work until it "
+                "is configured (this warning fires once per process)."
+            )
+        with _fh_lock:
+            _fh_cache[symbol] = {"data": None, "ts": time.time()}
+        return None
+
+    url = f"{_FINNHUB_QUOTE_URL}?symbol={symbol}&token={key}"
 
     result: dict[str, Any] | None = None
     try:

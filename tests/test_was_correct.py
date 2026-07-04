@@ -49,13 +49,15 @@ def _seed_pending(
         )
 
 
-def _seed_agent_memory(db_path, *, trace_id: str, agent_name: str = "technician") -> None:
+def _seed_agent_memory(
+    db_path, *, trace_id: str, agent_name: str = "technician", vote: str = "BUY"
+) -> None:
     with sqlite3.connect(db_path) as con:
         con.execute(
             "INSERT INTO agent_memory "
             "(timestamp,agent_name,symbol,vote,confidence,was_correct,lesson,source,trace_id) "
             "VALUES (?,?,?,?,?,NULL,NULL,'live',?)",
-            ("2026-04-25T12:00:00", agent_name, "AAPL", "BUY", 0.8, trace_id),
+            ("2026-04-25T12:00:00", agent_name, "AAPL", vote, 0.8, trace_id),
         )
 
 
@@ -140,6 +142,7 @@ def test_trade_creates_pending_evaluation(tmp_db) -> None:
         "emotion": "FOCUSED",
         "prices": {"AAPL": 150.0},
         "known_patterns": [],
+        "execution_result": {"success": True, "shares": 0.5, "price": 150.0, "amount": 75.0},
     }
     make_save_memory_node(p)(state)
 
@@ -173,7 +176,7 @@ def _setup_eval(db_path, trace: str, action: str, entry: float) -> None:
         entry_price=entry,
         eval_after=_due_yesterday(),
     )
-    _seed_agent_memory(db_path, trace_id=trace)
+    _seed_agent_memory(db_path, trace_id=trace, vote=action)
 
 
 def test_evaluate_buy_correct(tmp_db) -> None:

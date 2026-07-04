@@ -52,8 +52,12 @@ def test_stoploss_ignores_zero_price(caplog):
     assert "Skipping stop-loss for AAPL" in caplog.text
 
 
-def test_stoploss_triggers_on_real_drop():
-    """Drawdown from high watermark beyond ``STOP_LOSS_PCT`` triggers liquidation."""
+def test_stoploss_triggers_on_real_drop(tmp_db):
+    """Drawdown from high watermark beyond ``STOP_LOSS_PCT`` triggers liquidation.
+
+    A real trailing-stop fire persists a ``trades`` row (Batch B) — needs
+    ``tmp_db`` so that write doesn't land in the project's real trades.db.
+    """
     p = _portfolio_aapl_10_at_150()
     execute = make_execute_node(p)
 

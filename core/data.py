@@ -13,20 +13,27 @@ from datetime import datetime
 
 import yfinance as yf
 
+import config
 from config import (
     COMMISSION_PCT,
     DEATH_THRESHOLD,
     INITIAL_BALANCE,
-    MAX_ALLOC_PCT,
     MAX_PYRAMID_LAYERS,
-    PORTFOLIO_SAVE_ENABLED,
     PORTFOLIO_STATE_PATH,
     SLIPPAGE_PCT,
-    USE_LIVEFEED,
     WATCHLIST,
 )
 
 logger = logging.getLogger("apex7.portfolio")
+
+# In-memory caps for value_history / agent_log — well above every consumer's
+# slice ([-200:] in agents/shared/nodes.py + api/serializers.py, [-100:] /
+# [-80:] elsewhere) so trimming never drops data anyone reads, while
+# bounding the long-running agent-loop process's memory (Review Finding:
+# both lists previously grew without bound between save_state() calls,
+# which only truncate the on-disk copy).
+_MAX_VALUE_HISTORY = 500
+_MAX_AGENT_LOG = 500
 
 
 class Portfolio:
@@ -36,6 +43,11 @@ class Portfolio:
         # {symbol: {shares, avg_price, layers?, opened_at?, tp_taken?}}
         self.positions: dict[str, dict] = {}
         self.trade_history: list[dict] = []
+        # Marks the start of this "life" (fresh instance, i.e. process start
+        # or a RESET) — lets consumers like _reconcile_portfolio_state scope
+        # trades.db reads to only this life's trades, since the ledger is
+        # never purged across a death+RESET cycle.
+        self.created_at: str = datetime.now().isoformat()
         self.value_history: list[dict] = [
             {"time": datetime.now().isoformat(), "value": float(INITIAL_BALANCE)}
         ]
@@ -51,7 +63,12 @@ class Portfolio:
         syms = list(WATCHLIST) if symbols is None else symbols
         prices = {}
 
-        if USE_LIVEFEED:
+        # Read via the module (config.USE_LIVEFEED), not an unqualified
+        # import — `from config import USE_LIVEFEED` binds a frozen copy at
+        # import time, so tests/callers monkeypatching config.USE_LIVEFEED
+        # at runtime would silently have no effect here (Review Finding —
+        # same bug class as agents/shared/eval.py's _get_db_path).
+        if config.USE_LIVEFEED:
             try:
                 if self._livefeed is None or self._livefeed_symbols != syms:
                     self._livefeed = LiveFeed(syms)
@@ -59,7 +76,7 @@ class Portfolio:
                 result = self._livefeed.fetch()
                 if result:
                     with self._lock:
-                        self.last_prices = result
+                        self.last_prices = {**self.last_prices, **result}
                     return result
             except Exception:
                 pass
@@ -70,12 +87,12 @@ class Portfolio:
                 try:
                     prices[sym] = float(tickers.tickers[sym].fast_info.last_price)
                 except Exception:
-                    prices[sym] = self.last_prices.get(sym, 0.0)
+                    pass  # unknown quote: omit the key so callers fall back to avg_price
         except Exception as e:
             self.log(f"Price fetch error: {e}", "error")
-            prices = {s: self.last_prices.get(s, 0.0) for s in syms}
+            prices = {}
         with self._lock:
-            self.last_prices = prices
+            self.last_prices = {**self.last_prices, **prices}
         return prices
 
     def _total_value_unlocked(self, prices: dict[str, float] | None) -> float:
@@ -93,15 +110,23 @@ class Portfolio:
 
     def buy(self, symbol: str, amount_usd: float, price: float) -> dict:
         with self._lock:
-            if price <= 0:
-                return {"success": False, "error": "Invalid price"}
-            # Reserve cash for commission so total outflow = amount + commission
+            try:
+                px = float(price)
+            except (TypeError, ValueError):
+                logger.warning("Rejecting buy %s at invalid price %s", symbol, price)
+                return {"success": False, "error": f"invalid price: {price}"}
+            if px <= 0 or math.isnan(px):
+                logger.warning("Rejecting buy %s at invalid price %s", symbol, price)
+                return {"success": False, "error": f"invalid price: {price}"}
+            # Reserve cash for commission so total outflow = amount + commission.
+            # MAX_ALLOC_PCT sizing is the caller's responsibility (execute_node
+            # sizes off portfolio value); re-applying it here off cash alone
+            # would silently double-cap a legitimately-sized BUY whenever cash
+            # is a minority of total portfolio value (Review Finding).
             max_affordable = self.cash / (1 + COMMISSION_PCT)
-            max_amount = max_affordable * (MAX_ALLOC_PCT / 100)
-            amount_usd = min(amount_usd, max_amount, max_affordable)
+            amount_usd = min(amount_usd, max_affordable)
             if amount_usd < 1:
                 return {"success": False, "error": "Insufficient cash"}
-            px = float(price)
             # Buyer pays a slightly worse price due to spread/market impact
             effective_px = px * (1 + SLIPPAGE_PCT)
             new_shares = amount_usd / effective_px
@@ -217,6 +242,8 @@ class Portfolio:
         with self._lock:
             val = self._total_value_unlocked(prices)
             self.value_history.append({"time": datetime.now().isoformat(), "value": val})
+            if len(self.value_history) > _MAX_VALUE_HISTORY:
+                del self.value_history[:-_MAX_VALUE_HISTORY]
             if val > self.peak_value:
                 self.peak_value = val
 
@@ -256,6 +283,8 @@ class Portfolio:
         entry = {"time": datetime.now().isoformat(), "message": message, "level": level}
         with self._lock:
             self.agent_log.append(entry)
+            if len(self.agent_log) > _MAX_AGENT_LOG:
+                del self.agent_log[:-_MAX_AGENT_LOG]
         formatted = f"[APEX-7/{level.upper()}] {message}"
         lvl = level.lower()
         if lvl in ("error", "critical", "warning"):
@@ -264,7 +293,7 @@ class Portfolio:
             logger.info("%s", formatted)
 
     def save_state(self, path: str | None = None) -> None:
-        if not PORTFOLIO_SAVE_ENABLED:
+        if not config.PORTFOLIO_SAVE_ENABLED:
             return
         path = str(path or PORTFOLIO_STATE_PATH)
         with self._lock:
@@ -279,6 +308,7 @@ class Portfolio:
                     for sym in self.positions
                     if sym in self.high_watermarks
                 },
+                "created_at": self.created_at,
             }
         tmp_path = path + ".tmp"
         try:
@@ -304,6 +334,10 @@ class Portfolio:
             self.trade_history = state.get("trade_history", self.trade_history)[-50:]
             self.value_history = state.get("value_history", self.value_history)[-200:]
             self.peak_value = float(state.get("peak_value", self.peak_value))
+            # Missing from an older portfolio_state.json (written before this
+            # field existed) — keep the constructor's "now" default so an
+            # upgrade doesn't retroactively claim a life started days ago.
+            self.created_at = str(state.get("created_at") or self.created_at)
             hw = state.get("high_watermarks") or {}
             if isinstance(hw, dict):
                 self.high_watermarks = {k: float(v) for k, v in hw.items() if k in self.positions}

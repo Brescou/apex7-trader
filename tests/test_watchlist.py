@@ -100,3 +100,25 @@ def test_add_idempotent(tmp_db) -> None:
     add_to_watchlist("AAPL")  # 2ème ajout du même symbol
     count_after = len(get_watchlist())
     assert count_after == count_before, "Duplicate symbol inserted"
+
+
+@patch("agents.shared.watchlist.yf.Ticker")
+def test_add_default_symbol_persists_when_table_actually_empty(mock_ticker, tmp_db) -> None:
+    """A legitimately empty table (all symbols removed) must still let a
+    config-default symbol be re-added for real. get_watchlist()'s fallback
+    makes an empty table LOOK like it already contains every default
+    symbol; add_to_watchlist() must not use that ghost list for its
+    idempotency check, or it reports success without ever inserting a row
+    (Review Finding).
+    """
+    mock_ticker.return_value.history.return_value = pd.DataFrame({"Close": [1.0]})
+    with sqlite3.connect(str(tmp_db)) as con:
+        con.execute("DELETE FROM watchlist")
+        con.commit()
+
+    default_sym = list(WATCHLIST)[0]
+    assert add_to_watchlist(default_sym, source="manual") is True
+
+    with sqlite3.connect(str(tmp_db)) as con:
+        row = con.execute("SELECT symbol FROM watchlist WHERE symbol=?", (default_sym,)).fetchone()
+    assert row is not None, "add_to_watchlist reported success but never persisted a row"

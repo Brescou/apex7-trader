@@ -1,5 +1,6 @@
 """Tests for optional Discord notifications (mocked HTTP)."""
 
+import logging
 from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
@@ -55,6 +56,28 @@ def test_fail_silent_on_http_error(monkeypatch) -> None:
     monkeypatch.setattr("config.DISCORD_WEBHOOK_URL", "https://example.com/hook")
     with patch("core.notifications.httpx.post", side_effect=RuntimeError("network")):
         n.send_discord_alert("x", "y")
+
+
+def test_webhook_url_redacted_from_error_log(monkeypatch, caplog) -> None:
+    """A webhook URL carries a bearer token in its path — if an httpx
+    exception's string repr embeds the request URL (e.g. HTTPStatusError,
+    some connect errors), the raw URL/token must never reach the logs
+    (Review Finding — Batch L.4).
+    """
+    secret_url = "https://discord.com/api/webhooks/123456789/super-secret-token"
+    monkeypatch.setattr("config.DISCORD_WEBHOOK_URL", secret_url)
+
+    with caplog.at_level(logging.DEBUG, logger="apex7.notify"):
+        with patch(
+            "core.notifications.httpx.post",
+            side_effect=RuntimeError(f"Connection failed for url '{secret_url}'"),
+        ):
+            n.send_discord_alert("x", "y")
+
+    logged_text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "super-secret-token" not in logged_text
+    assert secret_url not in logged_text
+    assert "<redacted>" in logged_text
 
 
 def test_posts_use_five_second_timeout(monkeypatch) -> None:

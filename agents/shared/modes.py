@@ -1,18 +1,32 @@
 """Runtime mode toggles (live / paper / sim) and ``.env`` persistence."""
 
 import logging
+import threading
 from pathlib import Path
 
-from config import SIMULATION_MODE
+from config import PAPER_MODE, SIMULATION_MODE
 
 logger = logging.getLogger("apex7")
+
+# Serializes the .env read-modify-write in _write_env_var — an unguarded
+# read-then-write let two concurrent mode-toggle requests (e.g. an
+# unauthenticated POST /api/control/mode fired twice back-to-back) both
+# read the same pre-update file and each write their own version,
+# silently discarding whichever call finished writing first.
+_env_write_lock = threading.Lock()
 
 # Three mutually-exclusive operating modes:
 #   * LIVE  : real prices + LLM decisions + ``trades.db``
 #   * PAPER : real prices + rule-based decisions (no LLM) + ``trades_paper.db``
 #   * SIM   : random-walk prices + rule-based decisions + ``trades_sim.db``
-_sim_mode: dict = {"enabled": SIMULATION_MODE}
-_paper_mode: dict = {"enabled": False}
+#
+# Both flags are read from ``.env`` at import time (``set_paper_mode`` /
+# ``set_simulation_mode`` persist there) so a restart resumes the mode the
+# process was last switched to instead of silently falling back to LIVE.
+# If both are somehow set, PAPER wins (mirrors the ``_get_db_path`` precedent
+# of "paper wins if both flags are accidentally on").
+_sim_mode: dict = {"enabled": SIMULATION_MODE and not PAPER_MODE}
+_paper_mode: dict = {"enabled": PAPER_MODE}
 
 
 def _no_llm_mode() -> bool:
@@ -23,19 +37,20 @@ def _no_llm_mode() -> bool:
 def _write_env_var(key: str, value: str) -> None:
     """Persist mode flags to project ``.env`` (best-effort)."""
     env_path = Path(__file__).parent.parent.parent / ".env"
-    try:
-        lines = env_path.read_text().splitlines() if env_path.exists() else []
-        updated = False
-        for i, line in enumerate(lines):
-            if line.startswith(f"{key}="):
-                lines[i] = f"{key}={value}"
-                updated = True
-                break
-        if not updated:
-            lines.append(f"{key}={value}")
-        env_path.write_text("\n".join(lines) + "\n")
-    except Exception as e:
-        logger.warning("Failed to write %s to .env: %s", key, e)
+    with _env_write_lock:
+        try:
+            lines = env_path.read_text().splitlines() if env_path.exists() else []
+            updated = False
+            for i, line in enumerate(lines):
+                if line.startswith(f"{key}="):
+                    lines[i] = f"{key}={value}"
+                    updated = True
+                    break
+            if not updated:
+                lines.append(f"{key}={value}")
+            env_path.write_text("\n".join(lines) + "\n")
+        except Exception as e:
+            logger.warning("Failed to write %s to .env: %s", key, e)
 
 
 def set_simulation_mode(enabled: bool) -> None:

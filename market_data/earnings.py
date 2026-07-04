@@ -18,30 +18,35 @@ def fetch_earnings_calendar(symbols: list[str]) -> dict[str, dict[str, Any] | No
     Returns per symbol either ``{"earnings_date": str, "days_until": int | None}``
     or ``None`` when unavailable.
 
-    Cached 5 minutes per distinct normalized symbol set (thread-safe), to avoid
-    hammering yfinance on every terminal tick.
+    Cached 5 minutes *per symbol* (thread-safe). Caching used to be keyed on
+    the whole requested symbol set: a watchlist-wide call and a single-symbol
+    ``is_earnings_week`` lookup produced different cache keys and evicted
+    each other's entry every time, so the 5-minute TTL never actually held
+    and every lookup hit yfinance. Per-symbol entries are shared by both.
     """
-    cache_key = ",".join(sorted({(s or "").strip().upper() for s in symbols if (s or "").strip()}))
-    if not cache_key:
+    normalized = sorted({(s or "").strip().upper() for s in symbols if (s or "").strip()})
+    if not normalized:
         return {}
 
-    with _earnings_lock:
-        now = time.time()
-        cached = _earnings_cache.get("data")
-        if (
-            cached is not None
-            and _earnings_cache.get("key") == cache_key
-            and (now - float(_earnings_cache.get("ts") or 0)) < EARNINGS_TTL
-        ):
-            return {k: None if v is None else dict(v) for k, v in cached.items()}
-
+    now = time.time()
     result: dict[str, dict[str, Any] | None] = {}
+    to_fetch: list[str] = []
+
+    with _earnings_lock:
+        cache = _earnings_cache.get("data") or {}
+        for sym in normalized:
+            entry = cache.get(sym)
+            if entry is not None and (now - entry["ts"]) < EARNINGS_TTL:
+                result[sym] = None if entry["result"] is None else dict(entry["result"])
+            else:
+                to_fetch.append(sym)
+
+    if not to_fetch:
+        return result
+
     today = date.today()
-    for sym in symbols:
-        raw = (sym or "").strip()
-        if not raw:
-            continue
-        usym = raw.upper()
+    fetched: dict[str, dict[str, Any] | None] = {}
+    for usym in to_fetch:
         try:
             cal = yf.Ticker(usym).calendar
             if cal is not None and not (getattr(cal, "empty", False)):
@@ -49,20 +54,23 @@ def fetch_earnings_calendar(symbols: list[str]) -> dict[str, dict[str, Any] | No
                 ed = coerce_to_date(raw_ed)
                 if ed is not None:
                     days_until = (ed - today).days
-                    result[usym] = {
+                    fetched[usym] = {
                         "earnings_date": str(ed),
                         "days_until": days_until,
                     }
                     continue
         except Exception:
             logger.debug("Earnings calendar failed for %s", usym)
-        result[usym] = None
+        fetched[usym] = None
 
     with _earnings_lock:
-        _earnings_cache["data"] = result
-        _earnings_cache["key"] = cache_key
-        _earnings_cache["ts"] = time.time()
-    return {k: None if v is None else dict(v) for k, v in result.items()}
+        cache = _earnings_cache.get("data") or {}
+        for sym, val in fetched.items():
+            cache[sym] = {"result": val, "ts": time.time()}
+        _earnings_cache["data"] = cache
+
+    result.update({k: (None if v is None else dict(v)) for k, v in fetched.items()})
+    return result
 
 
 def is_earnings_week(symbol: str) -> bool:

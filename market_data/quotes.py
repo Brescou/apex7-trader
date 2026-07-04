@@ -46,6 +46,22 @@ def _finnhub_overlay(symbols: list[str], stale: dict) -> dict:
     return result
 
 
+_MISSING_QUOTE: dict = {
+    "price": None,
+    "change_pct": 0.0,
+    "change_abs": 0.0,
+    "volume": 0,
+    "high_52w": None,
+    "low_52w": None,
+    "day_high": None,
+    "day_low": None,
+    "rsi_14": 50.0,
+    "above_ma20": False,
+    "macd_hist": 0.0,
+    "bb_pos": "mid",
+}
+
+
 def fetch_watchlist_prices(symbols: list[str]) -> dict:
     """
     Fetch live prices + indicators for a list of symbols.
@@ -66,80 +82,66 @@ def fetch_watchlist_prices(symbols: list[str]) -> dict:
         if yf_circuit_open():
             return _finnhub_overlay(symbols, _watchlist_cache["data"] or {})
 
-        result: dict = {}
-        for sym in symbols:
-            try:
-                hist = yf.Ticker(sym).history(period="1y", interval="1d")
-                record_yf_success()
-                if hist.empty or len(hist) < 2:
-                    result[sym] = {
-                        "price": None,
-                        "change_pct": 0.0,
-                        "change_abs": 0.0,
-                        "volume": 0,
-                        "high_52w": None,
-                        "low_52w": None,
-                        "day_high": None,
-                        "day_low": None,
-                        "rsi_14": None,
-                        "above_ma20": False,
-                        "macd_hist": 0.0,
-                        "bb_pos": "mid",
-                    }
-                    continue
-                closes = hist["Close"].tolist()
-                highs = hist["High"].tolist()
-                lows = hist["Low"].tolist()
-                volumes = hist["Volume"].tolist()
-                price = round(closes[-1], 2)
-                prev = closes[-2]
-                change_abs = round(price - prev, 2)
-                change_pct = round(change_abs / prev * 100, 2) if prev else 0.0
-                volume = int(volumes[-1]) if volumes else 0
-                high_52w = round(max(closes), 2)
-                low_52w = round(min(closes), 2)
-                day_high = round(highs[-1], 2) if highs else None
-                day_low = round(lows[-1], 2) if lows else None
-                rsi_14 = rsi(closes, 14)
-                above_ma20 = (
-                    price > (sum(closes[-20:]) / min(20, len(closes)))
-                    if len(closes) >= 1
-                    else False
-                )
-                _, _, macd_hist = macd(closes)
-                bb_pos = bb_position(price, closes)
-                result[sym] = {
-                    "price": price,
-                    "change_pct": change_pct,
-                    "change_abs": change_abs,
-                    "volume": volume,
-                    "high_52w": high_52w,
-                    "low_52w": low_52w,
-                    "day_high": day_high,
-                    "day_low": day_low,
-                    "rsi_14": rsi_14 if rsi_14 is not None else 50.0,
-                    "above_ma20": bool(above_ma20),
-                    "macd_hist": round(macd_hist, 3),
-                    "bb_pos": bb_pos,
-                }
-            except Exception:
-                record_yf_failure()
-                result[sym] = {
-                    "price": None,
-                    "change_pct": 0.0,
-                    "change_abs": 0.0,
-                    "volume": 0,
-                    "high_52w": None,
-                    "low_52w": None,
-                    "day_high": None,
-                    "day_low": None,
-                    "rsi_14": 50.0,
-                    "above_ma20": False,
-                    "macd_hist": 0.0,
-                    "bb_pos": "mid",
-                }
+        # Previous successful batch, keyed by symbol — used as a per-symbol
+        # fallback below so one bad tick for one symbol doesn't overwrite its
+        # last known-good quote with an all-null placeholder for everyone
+        # reading the shared cache (Review Finding: "stale cache" promise).
+        stale = dict(_watchlist_cache.get("data") or {})
 
+    # The N sequential yf.Ticker(sym).history() calls below run WITHOUT
+    # holding _watchlist_lock — a full watchlist batch (15-20 symbols) can
+    # take seconds to tens of seconds under a slow/rate-limited yfinance.
+    # Holding the lock through that would freeze every other _watchlist_lock
+    # caller (check-alerts callback, screener, API routes) for the whole
+    # duration. Matches the earnings/sectors/correlation pattern of
+    # releasing the lock during network I/O.
+    result: dict = {}
+    for sym in symbols:
+        try:
+            hist = yf.Ticker(sym).history(period="1y", interval="1d")
+            record_yf_success()
+            if hist.empty or len(hist) < 2:
+                result[sym] = stale.get(sym) or dict(_MISSING_QUOTE, rsi_14=None)
+                continue
+            closes = hist["Close"].tolist()
+            highs = hist["High"].tolist()
+            lows = hist["Low"].tolist()
+            volumes = hist["Volume"].tolist()
+            price = round(closes[-1], 2)
+            prev = closes[-2]
+            change_abs = round(price - prev, 2)
+            change_pct = round(change_abs / prev * 100, 2) if prev else 0.0
+            volume = int(volumes[-1]) if volumes else 0
+            high_52w = round(max(closes), 2)
+            low_52w = round(min(closes), 2)
+            day_high = round(highs[-1], 2) if highs else None
+            day_low = round(lows[-1], 2) if lows else None
+            rsi_14 = rsi(closes, 14)
+            above_ma20 = (
+                price > (sum(closes[-20:]) / min(20, len(closes))) if len(closes) >= 1 else False
+            )
+            _, _, macd_hist = macd(closes)
+            bb_pos = bb_position(price, closes)
+            result[sym] = {
+                "price": price,
+                "change_pct": change_pct,
+                "change_abs": change_abs,
+                "volume": volume,
+                "high_52w": high_52w,
+                "low_52w": low_52w,
+                "day_high": day_high,
+                "day_low": day_low,
+                "rsi_14": rsi_14 if rsi_14 is not None else 50.0,
+                "above_ma20": bool(above_ma20),
+                "macd_hist": round(macd_hist, 3),
+                "bb_pos": bb_pos,
+            }
+        except Exception:
+            record_yf_failure()
+            result[sym] = stale.get(sym) or dict(_MISSING_QUOTE)
+
+    with _watchlist_lock:
         _watchlist_cache["data"] = result
         _watchlist_cache["key"] = cache_key
-        _watchlist_cache["ts"] = now
-        return result
+        _watchlist_cache["ts"] = time.time()
+    return result

@@ -405,28 +405,53 @@ def _seed_live_price_history() -> None:
             return
         _live_price_history.update(collected)
         _last_price_date.update(last_dates)
-        _live_price_history_seeded = True
+        if collected:
+            _live_price_history_seeded = True
+        else:
+            # Every symbol's download failed (e.g. yfinance rate-limited at
+            # startup) — leave unseeded so the next cycle's
+            # _record_live_prices_for_rsi retries instead of permanently
+            # blinding the technician's RSI to 50.0 (insufficient data).
+            logger.warning("_seed_live_price_history: all downloads failed — will retry next cycle")
 
 
 def _record_live_prices_for_rsi(prices: dict[str, float]) -> None:
     """Append at most one close per symbol per calendar day; cap at 60 bars."""
     if not _live_price_history_seeded:
         _seed_live_price_history()
-    today = date.today().isoformat()
-    for sym in prices:
-        try:
-            pf = float(prices[sym])
-        except (TypeError, ValueError):
-            continue
-        if math.isnan(pf) or pf <= 0:
-            continue
-        if _last_price_date.get(sym) == today:
-            continue
-        hist = _live_price_history.setdefault(sym, [])
-        hist.append(pf)
-        _last_price_date[sym] = today
-        if len(hist) > 60:
-            _live_price_history[sym] = hist[-60:]
+    today_date = date.today()
+    if today_date.weekday() >= 5:
+        # Markets are closed on weekends — the live quote just echoes
+        # Friday's last trade, so appending here would inject a duplicate,
+        # zero-change "close" into the RSI window every Saturday/Sunday,
+        # skewing the rolling calculation (Review Finding). Full market
+        # holidays (Christmas, Thanksgiving, ...) would need a trading
+        # calendar this codebase doesn't have yet — weekends are the
+        # deterministic part of that gap.
+        return
+    today = today_date.isoformat()
+    # _seed_live_price_history() already guards its own mutations with this
+    # lock (documented in agents/shared/llm.py's lock-ordering comment as
+    # "RSI seed flag + history") — this function's own appends/trims must
+    # use the same lock, or a concurrent technician_node read during the
+    # parallel specialist fan-out can race a setdefault() inserting a new
+    # key (dict changed size during iteration) or a stale/half-written list
+    # (Review Finding).
+    with _live_price_history_lock:
+        for sym in prices:
+            try:
+                pf = float(prices[sym])
+            except (TypeError, ValueError):
+                continue
+            if math.isnan(pf) or pf <= 0:
+                continue
+            if _last_price_date.get(sym) == today:
+                continue
+            hist = _live_price_history.setdefault(sym, [])
+            hist.append(pf)
+            _last_price_date[sym] = today
+            if len(hist) > 60:
+                _live_price_history[sym] = hist[-60:]
 
 
 def _sim_step_prices(current: dict[str, float]) -> dict[str, float]:
@@ -741,6 +766,13 @@ def risk_check_node(state: AgentState) -> dict:
             failures.append(f"max {MAX_POSITIONS} positions atteint")
         if not symbol or symbol not in prices:
             failures.append(f"symbol invalide ou absent du watchlist : {symbol!r}")
+        else:
+            # Passing this check implies execute_node will actually trade —
+            # catch an invalid quote here instead of silently no-opping
+            # downstream in portfolio.buy() with risk_check having said PASS.
+            px = prices.get(symbol)
+            if not isinstance(px, (int, float)) or math.isnan(px) or px <= 0:
+                failures.append(f"prix invalide pour {symbol} : {px!r}")
         if pv < INITIAL_BALANCE * 0.7:
             failures.append(f"danger zone (${pv:.0f} < ${INITIAL_BALANCE * 0.7:.0f}) — BUY bloqué")
 
@@ -749,6 +781,9 @@ def risk_check_node(state: AgentState) -> dict:
             failures.append(f"aucune position sur {symbol}")
         if not 0 < sell_pct <= 100:
             failures.append(f"sell_pct invalide : {sell_pct}")
+        sell_px = prices.get(symbol)
+        if not isinstance(sell_px, (int, float)) or math.isnan(sell_px) or sell_px <= 0:
+            failures.append(f"prix invalide ou absent pour {symbol} : {sell_px!r}")
 
     passed = len(failures) == 0
     reason = " | ".join(failures)
@@ -763,6 +798,203 @@ def risk_check_node(state: AgentState) -> dict:
         "decision": {**decision, "_risk_passed": passed, "_risk_reason": reason},
         "log": logs,
     }
+
+
+def _persist_auto_exit(portfolio: Portfolio, symbol: str, sell_result: dict, reason: str) -> None:
+    """Record a system-triggered exit (trailing stop / take-profit / time-stop)
+    in the ``trades`` table.
+
+    These sells bypass ``save_memory_node`` entirely — they aren't driven by
+    the current cycle's arbitrated decision, so without this the trade
+    history / A-B panel / agent-accuracy stats would silently diverge from
+    what the portfolio actually did.
+    """
+    if not sell_result.get("success"):
+        return
+    ts = _ts()
+    trace_id = _uuid_mod.uuid4().hex[:8]
+    source = get_runtime_mode()
+    if source == "sim":
+        source = "simulation"
+    trade_id = _db_write_returning_id(
+        "INSERT INTO trades "
+        "(timestamp,symbol,action,price,amount_usd,shares,"
+        "reasoning,confidence,emotion,portfolio_value_after,lesson,trace_id,source,"
+        "prompt_version,sell_pct) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            ts,
+            symbol,
+            "SELL",
+            float(sell_result.get("price", 0.0)),
+            float(sell_result.get("amount", 0.0)),
+            float(sell_result.get("shares", 0.0)),
+            reason,
+            1.0,
+            "AUTO",
+            portfolio.total_value(),
+            None,
+            trace_id,
+            source,
+            PROMPT_VERSION,
+            None,
+        ),
+    )
+    if trade_id is None:
+        logger.warning("auto-exit: trades INSERT failed for %s (%s)", symbol, reason)
+        return
+    entry_dt = datetime.fromisoformat(ts) if "T" in ts else datetime.now()
+    eval_after = (entry_dt + timedelta(days=EVAL_HORIZON_CALENDAR_DAYS)).isoformat()
+    ok = _db_write(
+        "INSERT INTO pending_evaluations "
+        "(trade_id,trace_id,symbol,action,entry_price,entry_date,eval_after_date,evaluated) "
+        "VALUES (?,?,?,?,?,?,?,0)",
+        (trade_id, trace_id, symbol, "SELL", float(sell_result.get("price", 0.0)), ts, eval_after),
+    )
+    if not ok:
+        logger.warning("auto-exit: pending_evaluations INSERT failed for %s", symbol)
+
+
+def _run_exit_guards(portfolio: Portfolio, prices: dict) -> list[dict]:
+    """Trailing stop-loss, partial take-profit, and time-stop sweep.
+
+    Scans every open position regardless of the current cycle's arbitrated
+    decision. Called from both ``execute_node`` and ``skip_node`` so a
+    risk_check rejection never leaves existing positions unprotected for a
+    whole cycle.
+    """
+    logs: list[dict] = []
+    portfolio.update_watermarks(prices)
+
+    # Trailing stop-loss on all open positions (drawdown from high watermark).
+    for sl_sym, sl_pos in list(portfolio.positions.items()):
+        sl_price = prices.get(sl_sym, 0.0)
+        sl_avg = sl_pos.get("avg_price", sl_pos.get("avg_cost", 0))
+        try:
+            savg = float(sl_avg)
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(savg) or savg <= 0:
+            continue
+        try:
+            sp = float(sl_price)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Skipping stop-loss for %s: invalid price %s",
+                sl_sym,
+                sl_price,
+            )
+            continue
+        if math.isnan(sp) or sp <= 0:
+            logger.warning(
+                "Skipping stop-loss for %s: invalid price %s",
+                sl_sym,
+                sl_price,
+            )
+            continue
+        # Sub-dollar legitimate positions: allow SL when basis and quote are both cheap.
+        penny_pair = savg <= 1.0 and sp <= 1.0
+        plausible_quote = sp > 1.0 or penny_pair
+        if not plausible_quote:
+            logs.append(
+                _entry(
+                    f"Skipping stop-loss check for {sl_sym}: invalid price "
+                    f"sl_price={sp}, sl_avg={savg}",
+                    "warning",
+                )
+            )
+            continue
+        try:
+            high = float(portfolio.high_watermarks.get(sl_sym, savg))
+        except (TypeError, ValueError):
+            high = savg
+        if math.isnan(high) or high <= 0:
+            high = savg
+        trail_dd = (high - sp) / high if high > 0 else 0.0
+        if trail_dd >= STOP_LOSS_PCT:
+            sl_slip = 1 + random.uniform(-0.001, 0.001)
+            exit_px = sp * sl_slip
+            sl_res = portfolio.sell(sl_sym, 100, exit_px)
+            if sl_res.get("success"):
+                _persist_auto_exit(
+                    portfolio,
+                    sl_sym,
+                    sl_res,
+                    f"[TRAILING STOP] drawdown {trail_dd:.1%} from high ${high:.2f}",
+                )
+            try:
+                from core.notifications import alert_trailing_stop
+
+                alert_trailing_stop(
+                    symbol=sl_sym,
+                    price=exit_px,
+                    high_watermark=high,
+                    drawdown_pct=trail_dd,
+                    mode=str(get_runtime_mode() or "live"),
+                )
+            except Exception:
+                pass
+            logs.append(
+                _entry(
+                    f"[TRAILING STOP] triggered: {sl_sym} @ ${sp:.2f} "
+                    f"(high ${high:.2f}, drawdown {trail_dd:.1%})",
+                    "warning",
+                )
+            )
+
+    # Partial take-profit and time-stop on remaining open positions.
+    for tp_sym, tp_pos in list(portfolio.positions.items()):
+        try:
+            pxf = float(prices.get(tp_sym, 0.0))
+            avg = float(tp_pos.get("avg_price", tp_pos.get("avg_cost", 0)))
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(pxf) or pxf <= 0 or math.isnan(avg) or avg <= 0:
+            continue
+        pnl_frac = pxf / avg - 1.0
+        if pnl_frac >= TAKE_PROFIT_PCT and not tp_pos.get("tp_taken"):
+            tp_slip = 1 + random.uniform(-0.001, 0.001)
+            res = portfolio.sell(tp_sym, TAKE_PROFIT_SELL_PCT, pxf * tp_slip)
+            if res.get("success"):
+                portfolio.mark_take_profit(tp_sym)
+                _persist_auto_exit(
+                    portfolio,
+                    tp_sym,
+                    res,
+                    f"[TAKE PROFIT] {pnl_frac:+.1%} vs ${avg:.2f} entry",
+                )
+                logs.append(
+                    _entry(
+                        f"[TAKE PROFIT] {TAKE_PROFIT_SELL_PCT:.0f}% {tp_sym} "
+                        f"@ ${pxf:.2f} ({pnl_frac:+.1%} vs ${avg:.2f})"
+                    )
+                )
+            continue
+        opened_at = tp_pos.get("opened_at")
+        if opened_at and abs(pnl_frac) < TIME_STOP_BAND_PCT:
+            try:
+                held_days = (datetime.now() - datetime.fromisoformat(str(opened_at))).days
+            except (ValueError, TypeError):
+                held_days = 0
+            if held_days > TIME_STOP_DAYS:
+                ts_slip = 1 + random.uniform(-0.001, 0.001)
+                res = portfolio.sell(tp_sym, 100, pxf * ts_slip)
+                if res.get("success"):
+                    _persist_auto_exit(
+                        portfolio,
+                        tp_sym,
+                        res,
+                        f"[TIME STOP] held {held_days}d, PnL {pnl_frac:+.1%}",
+                    )
+                    logs.append(
+                        _entry(
+                            f"[TIME STOP] {tp_sym} @ ${pxf:.2f} after {held_days}d "
+                            f"(PnL {pnl_frac:+.1%} within ±{TIME_STOP_BAND_PCT:.0%})",
+                            "warning",
+                        )
+                    )
+
+    return logs
 
 
 def make_execute_node(portfolio: Portfolio):
@@ -780,116 +1012,7 @@ def make_execute_node(portfolio: Portfolio):
 
         result: dict = {"success": False, "error": "no-op"}
 
-        portfolio.update_watermarks(prices)
-
-        # Trailing stop-loss on all open positions (drawdown from high watermark).
-        for sl_sym, sl_pos in list(portfolio.positions.items()):
-            sl_price = prices.get(sl_sym, 0.0)
-            sl_avg = sl_pos.get("avg_price", sl_pos.get("avg_cost", 0))
-            try:
-                savg = float(sl_avg)
-            except (TypeError, ValueError):
-                continue
-            if math.isnan(savg) or savg <= 0:
-                continue
-            try:
-                sp = float(sl_price)
-            except (TypeError, ValueError):
-                logger.warning(
-                    "Skipping stop-loss for %s: invalid price %s",
-                    sl_sym,
-                    sl_price,
-                )
-                continue
-            if math.isnan(sp) or sp <= 0:
-                logger.warning(
-                    "Skipping stop-loss for %s: invalid price %s",
-                    sl_sym,
-                    sl_price,
-                )
-                continue
-            # Sub-dollar legitimate positions: allow SL when basis and quote are both cheap.
-            penny_pair = savg <= 1.0 and sp <= 1.0
-            plausible_quote = sp > 1.0 or penny_pair
-            if not plausible_quote:
-                logs.append(
-                    _entry(
-                        f"Skipping stop-loss check for {sl_sym}: invalid price "
-                        f"sl_price={sp}, sl_avg={savg}",
-                        "warning",
-                    )
-                )
-                continue
-            try:
-                high = float(portfolio.high_watermarks.get(sl_sym, savg))
-            except (TypeError, ValueError):
-                high = savg
-            if math.isnan(high) or high <= 0:
-                high = savg
-            trail_dd = (high - sp) / high if high > 0 else 0.0
-            if trail_dd >= STOP_LOSS_PCT:
-                sl_slip = 1 + random.uniform(-0.001, 0.001)
-                exit_px = sp * sl_slip
-                portfolio.sell(sl_sym, 100, exit_px)
-                try:
-                    from core.notifications import alert_trailing_stop
-
-                    alert_trailing_stop(
-                        symbol=sl_sym,
-                        price=exit_px,
-                        high_watermark=high,
-                        drawdown_pct=trail_dd,
-                        mode=str(get_runtime_mode() or "live"),
-                    )
-                except Exception:
-                    pass
-                logs.append(
-                    _entry(
-                        f"[TRAILING STOP] triggered: {sl_sym} @ ${sp:.2f} "
-                        f"(high ${high:.2f}, drawdown {trail_dd:.1%})",
-                        "warning",
-                    )
-                )
-
-        # Partial take-profit and time-stop on remaining open positions.
-        for tp_sym, tp_pos in list(portfolio.positions.items()):
-            try:
-                pxf = float(prices.get(tp_sym, 0.0))
-                avg = float(tp_pos.get("avg_price", tp_pos.get("avg_cost", 0)))
-            except (TypeError, ValueError):
-                continue
-            if math.isnan(pxf) or pxf <= 0 or math.isnan(avg) or avg <= 0:
-                continue
-            pnl_frac = pxf / avg - 1.0
-            if pnl_frac >= TAKE_PROFIT_PCT and not tp_pos.get("tp_taken"):
-                tp_slip = 1 + random.uniform(-0.001, 0.001)
-                res = portfolio.sell(tp_sym, TAKE_PROFIT_SELL_PCT, pxf * tp_slip)
-                if res.get("success"):
-                    portfolio.mark_take_profit(tp_sym)
-                    logs.append(
-                        _entry(
-                            f"[TAKE PROFIT] {TAKE_PROFIT_SELL_PCT:.0f}% {tp_sym} "
-                            f"@ ${pxf:.2f} ({pnl_frac:+.1%} vs ${avg:.2f})"
-                        )
-                    )
-                continue
-            opened_at = tp_pos.get("opened_at")
-            if opened_at and abs(pnl_frac) < TIME_STOP_BAND_PCT:
-                try:
-                    held_days = (datetime.now() - datetime.fromisoformat(str(opened_at))).days
-                except (ValueError, TypeError):
-                    held_days = 0
-                if held_days > TIME_STOP_DAYS:
-                    ts_slip = 1 + random.uniform(-0.001, 0.001)
-                    res = portfolio.sell(tp_sym, 100, pxf * ts_slip)
-                    if res.get("success"):
-                        logs.append(
-                            _entry(
-                                f"[TIME STOP] {tp_sym} @ ${pxf:.2f} after {held_days}d "
-                                f"(PnL {pnl_frac:+.1%} within ±{TIME_STOP_BAND_PCT:.0%})",
-                                "warning",
-                            )
-                        )
+        logs.extend(_run_exit_guards(portfolio, prices))
 
         dd_from_peak = (
             (portfolio.peak_value - pv) / portfolio.peak_value if portfolio.peak_value > 0 else 0.0
@@ -950,6 +1073,7 @@ def make_execute_node(portfolio: Portfolio):
             "portfolio_history": [new_pv],
             "alive": not portfolio.is_dead,
             "log": logs,
+            "execution_result": result,
         }
 
     return execute_node
@@ -1002,16 +1126,23 @@ def make_save_memory_node(portfolio: Portfolio):
             logs.append(_entry("save_memory: HOLD — skipped"))
             return {"log": logs}
 
+        exec_result = state.get("execution_result") or {}
+        if not exec_result.get("success") or "shares" not in exec_result:
+            logs.append(
+                _entry(
+                    f"save_memory: {action} {decision.get('symbol', '')} not executed "
+                    f"({exec_result.get('error', 'no execution result')}) — skipped",
+                    "warning",
+                )
+            )
+            return {"log": logs}
+
         symbol = decision.get("symbol") or ""
         prices = state["prices"]
-        price = prices.get(symbol, 0.0)
+        price = float(exec_result.get("price", 0.0))
+        shares = float(exec_result.get("shares", 0.0))
+        amount = float(exec_result.get("amount", 0.0))
         pv_after = portfolio.total_value(prices)
-
-        last_trade = next(
-            (t for t in reversed(portfolio.trade_history) if t.get("symbol") == symbol), {}
-        )
-        shares = last_trade.get("shares", 0.0)
-        amount = last_trade.get("amount", 0.0)
 
         source = get_runtime_mode()  # 'live' | 'paper' | 'sim' → 'simulation'
         if source == "sim":
@@ -1114,12 +1245,25 @@ def make_save_memory_node(portfolio: Portfolio):
     return save_memory_node
 
 
-def skip_node(state: AgentState) -> dict:
-    decision = state.get("decision") or {}
-    action = decision.get("action", "HOLD").upper()
-    _record_hold_stagnation(action)
-    reason = decision.get("_risk_reason") or "trade rejected by risk_check"
-    return {"log": [_entry(f"skip: {reason}", "warning")]}
+def make_skip_node(portfolio: Portfolio):
+    def skip_node(state: AgentState) -> dict:
+        decision = state.get("decision") or {}
+        action = decision.get("action", "HOLD").upper()
+        _record_hold_stagnation(action)
+        reason = decision.get("_risk_reason") or "trade rejected by risk_check"
+        prices = state.get("prices") or {}
+
+        logs = [_entry(f"skip: {reason}", "warning")]
+        # A blocked BUY/SELL must not leave existing positions unprotected —
+        # run the same exit-guard sweep execute_node runs (Review Finding 4.2).
+        logs.extend(_run_exit_guards(portfolio, prices))
+
+        portfolio.record_value(prices)
+        portfolio.check_death(prices, discord_mode=get_runtime_mode())
+
+        return {"log": logs, "alive": not portfolio.is_dead}
+
+    return skip_node
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

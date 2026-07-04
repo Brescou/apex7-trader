@@ -1,0 +1,93 @@
+.layout { display: flex; height: 100%; overflow: hidden; }
+.loading { display: flex; align-items: center; justify-content: center; height: 100%; }
+
+/* Sidebar */
+.side {
+  width: 252px; flex-shrink: 0;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  overflow-y: auto;
+}
+.sblock { padding: 13px 14px; border-bottom: 1px solid var(--line2); }
+.shead  { display: flex; align-items: center; gap: 7px; margin-bottom: 11px; }
+
+/* Portfolio */
+.pval  { font-size: 33px; font-weight: 600; line-height: 1; letter-spacing: -.02em; }
+.pcur  { font-size: 15px; color: var(--dim); margin-right: 1px; }
+.pnlRow { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+.pnlNum { font-size: 12px; font-weight: 600; }
+.pnlPct { font-size: 11px; }
+
+/* Survival */
+.survRow  { display: flex; align-items: center; justify-content: space-between; margin-top: 9px; }
+.survState { font-size: 9px; font-weight: 700; letter-spacing: .1em; }
+.survTrack { position: relative; height: 7px; border-radius: 4px; background: var(--bg); border: 1px solid var(--line); overflow: hidden; margin: 8px 0 5px; }
+.survFill  { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, #185c46, #2dd4a0); }
+.survMark  { position: absolute; top: -2px; width: 2px; height: 11px; background: var(--hi); box-shadow: 0 0 6px #fff8; }
+.survCap   { display: flex; justify-content: space-between; font-size: 8.5px; letter-spacing: .06em; }
+
+/* Emotion */
+.emo    { display: flex; align-items: center; gap: 9px; }
+.emoDot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.emoState { font-size: 13px; font-weight: 700; letter-spacing: .1em; }
+.emoQ  { font-size: 10px; color: var(--dim); font-style: italic; margin-top: 6px; line-height: 1.45; }
+
+/* Agent card */
+.agent {
+  margin-bottom: 7px;
+  border: 1px solid color-mix(in srgb, var(--c) 26%, var(--line));
+  border-left: 2px solid var(--c);
+  background: color-mix(in srgb, var(--c) 6%, var(--panel));
+  border-radius: 4px; overflow: hidden;
+}
+.agHd    { display: flex; align-items: center; gap: 8px; padding: 8px 9px 7px; }
+.agName  { font-size: 10px; font-weight: 700; letter-spacing: .1em; color: var(--c); }
+.agModel { font-size: 8px; letter-spacing: .05em; margin-left: auto; }
+.agReason { font-size: 10.5px; color: var(--mid); line-height: 1.5; padding: 0 9px 7px; }
+.confBar  { height: 3px; background: var(--bg); border-radius: 2px; overflow: hidden; margin: 0 9px 7px; }
+.confFill { height: 100%; background: var(--c); }
+.agChips  { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 9px 9px; }
+.chip { font-size: 8.5px; color: var(--dim); background: #ffffff07; border: 1px solid var(--line); padding: 1px 5px; border-radius: 3px; }
+.vote { font-size: 9px; font-weight: 700; letter-spacing: .07em; padding: 2px 6px; border-radius: 3px; }
+.voteBuy  { color: var(--pos);  background: #2dd4a01c; }
+.voteSell { color: var(--neg);  background: #f2596b1c; }
+.voteHold { color: var(--dim);  background: #ffffff0a; }
+
+/* Arbitration */
+.arb { border: 1px solid #e3b34140; background: linear-gradient(135deg, #191307, #0d0b07); border-radius: 5px; padding: 11px; margin-top: 5px; }
+.arbTop  { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
+.arbTtl  { font-size: 9px; letter-spacing: .16em; font-weight: 700; }
+.arbMain { display: flex; align-items: center; gap: 10px; }
+.arbAct  { font-size: 16px; font-weight: 700; }
+.arbSym  { font-size: 13px; color: var(--hi); }
+.arbMeta { display: flex; gap: 14px; margin-top: 8px; }
+.arbMl   { font-size: 8px; letter-spacing: .08em; color: var(--faint); text-transform: uppercase; }
+.arbMv   { font-size: 12px; font-weight: 600; margin-top: 2px; }
+
+/* Metrics */
+.mgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.mcell { background: var(--bg); border: 1px solid var(--line2); border-radius: 4px; padding: 8px 9px; }
+.mlbl  { font-size: 8px; letter-spacing: .09em; color: var(--faint); text-transform: uppercase; }
+.mval  { font-size: 14px; font-weight: 600; margin-top: 4px; }
+
+/* Positions */
+.posRow   { display: flex; align-items: center; gap: 9px; padding: 9px 0; border-bottom: 1px solid var(--line2); }
+.pSym     { font-size: 11px; font-weight: 700; width: 46px; flex-shrink: 0; }
+.pAllocTrk { flex: 1; height: 4px; background: var(--bg); border-radius: 2px; overflow: hidden; }
+.pAllocFill { height: 100%; background: #2a3744; }
+.pPnl     { font-size: 10.5px; font-weight: 600; width: 54px; text-align: right; flex-shrink: 0; }
+
+/* Main */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.chartHd {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px; border-bottom: 1px solid var(--line); flex-shrink: 0;
+}
+.chartVals { display: flex; gap: 20px; }
+.cvLbl { font-size: 8px; letter-spacing: .1em; color: var(--faint); text-transform: uppercase; }
+.cvVal { font-size: 13px; font-weight: 600; margin-top: 2px; }
+.chartWrap { flex-shrink: 0; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, #090d14, #070a0e); }
+.logHd {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 16px; border-bottom: 1px solid var(--line); flex-shrink: 0;
+}

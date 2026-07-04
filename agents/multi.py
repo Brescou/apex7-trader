@@ -37,9 +37,9 @@ from agents.shared.nodes import (
     make_execute_node,
     make_fetch_data_node,
     make_save_memory_node,
+    make_skip_node,
     research_node,
     risk_check_node,
-    skip_node,
     sonnet,
     get_weekly_start_value,
 )
@@ -51,6 +51,7 @@ from agents.shared.prompts import (
     MACRO_WATCHER_SYSTEM_PROMPT,
     RISK_MANAGER_SYSTEM_PROMPT,
     TECHNICIAN_SYSTEM_PROMPT,
+    UNTRUSTED_DATA_NOTICE,
 )
 from agents.shared.schemas import (
     validate_analyst_vote,
@@ -282,14 +283,19 @@ def _compute_dynamic_weights() -> dict:
             _weights_computed_at = time.time()
             return dict(_cached_weights)
 
-        sum_accuracies = sum(v for v in accuracy.values() if v is not None) or 1.0
-
         dynamic: dict[str, float] = {}
         for agent in agents:
             static_w = WEIGHTS[agent]
             if accuracy[agent] is not None:
-                acc_norm = accuracy[agent] / sum_accuracies
-                dynamic[agent] = 0.7 * static_w + 0.3 * acc_norm
+                # accuracy[agent] is already an absolute 0..1 score — blend
+                # it directly. Normalizing it as a *fraction of the sum of
+                # all agents' accuracies* (as this used to) shrinks the
+                # denominator right along with a bad agent's own score: a
+                # lone agent correct only 10% of the time got acc_norm =
+                # 0.1/0.1 = 1.0 — identical to a lone agent that's *always*
+                # correct. The final normalization below still rescales
+                # everything to sum to 1 across agents.
+                dynamic[agent] = 0.7 * static_w + 0.3 * accuracy[agent]
             else:
                 dynamic[agent] = static_w
 
@@ -408,6 +414,17 @@ def _with_lessons(system_prompt: str, lessons: list[str]) -> str:
     return system_prompt
 
 
+def _untrusted(source: str, text: str) -> str:
+    """Delimit externally-sourced text (news, web_search) for a prompt.
+
+    Mitigates prompt injection: a news headline or web page could contain
+    text crafted to look like an instruction. Wrapping it in explicit tags
+    lets the system prompt (UNTRUSTED_DATA_NOTICE) tell the model to treat
+    anything inside as data to analyze, never as instructions to follow.
+    """
+    return f'<untrusted_external_data source="{source}">\n{text}\n</untrusted_external_data>'
+
+
 def _invoke_specialist(
     model,
     model_id: str,
@@ -471,7 +488,12 @@ def sim_technician(state: MultiAgentState) -> dict:
     overbought = {s: r for s, r in rsi_map.items() if r > 65 and s in pos}
 
     if overbought:
-        sym = min(overbought, key=overbought.get)
+        # Sell the MOST overbought holding (highest RSI = strongest reversal
+        # signal) — previously used min(), copy-pasted from the oversold/BUY
+        # branch below where the lowest RSI is the strongest signal, which
+        # picked the position barely past the threshold instead (Review
+        # Finding).
+        sym = max(overbought, key=overbought.get)
         action, conf, alloc = "SELL", 0.74, 0
         rsi_v = rsi_map[sym]
         reason = f"RSI={rsi_v:.1f} overbought — technical reversal signal"
@@ -813,11 +835,17 @@ def supervisor_node(state: MultiAgentState) -> dict:
         f"Portfolio: ${pv:.2f} | Cash: ${state['balance']:.2f} | "
         f"Positions: {len(state['positions'])}/{MAX_POSITIONS}\n"
         f"Prices: {json.dumps({s: f'${p:.2f}' for s, p in state['prices'].items()})}\n"
-        f"News snippet: {(state.get('news') or 'N/A')[:200]}\n\n"
+        f"News snippet:\n{_untrusted('news', (state.get('news') or 'N/A')[:200])}\n\n"
         "Résume en 3 points clés ce contexte de marché pour briefer ton équipe de traders. "
         "Sois factuel et concis (max 60 mots)."
     )
-    brief = _llm(haiku, HAIKU_ID, [{"role": "user", "content": prompt}], max_tokens=120)
+    brief = _llm(
+        haiku,
+        HAIKU_ID,
+        [{"role": "user", "content": prompt}],
+        system=UNTRUSTED_DATA_NOTICE,
+        max_tokens=120,
+    )
     logs.append(_entry(f"supervisor: brief ready ({len(brief)} chars)"))
     return {"supervisor_brief": brief, "log": logs}
 
@@ -924,7 +952,7 @@ def analyst_node(state: MultiAgentState) -> dict:
     system = _with_lessons(ANALYST_SYSTEM_PROMPT, recent_lessons)
     user = (
         f"FUNDAMENTAL ANALYSIS — Cycle #{state['round']}\n\n"
-        f"NEWS RÉCENTES:\n{(state.get('news') or 'Aucune news')[:600]}\n\n"
+        f"NEWS RÉCENTES:\n{_untrusted('news', (state.get('news') or 'Aucune news')[:600])}\n\n"
         f"SENTIMENT TWITTER (-1=baissier → +1=haussier):\n"
         f"{json.dumps(sentiment, indent=2)}\n\n"
         f"POSITIONS ACTUELLES: {list(pos.keys())}\n"
@@ -1128,7 +1156,13 @@ def economist_node(state: MultiAgentState) -> dict:
                 f"{cached.get('economic_regime','?')} score={cached.get('economic_score',0):+.2f}"
             )
         ]
-        return {"agent_votes": [cached], "economist_vote": cached, "log": logs}
+        # Still record this cycle's use of the cached vote in agent_memory —
+        # skipping _emit_vote() here meant a cache hit (the overwhelming
+        # majority of cycles at a 15min TTL vs. a ~30s agent interval) left
+        # no agent_memory row at all, so was_correct/accuracy tracking and
+        # dynamic-weight blending silently under-counted this agent's real
+        # participation (Review Finding).
+        return _emit_vote("economist", "economist_vote", cached, logs)
 
     pv = _portfolio_value(state)
     macro_indicators = state.get("macro_indicators") or {}
@@ -1193,14 +1227,16 @@ def geopolitician_node(state: MultiAgentState) -> dict:
                 f"score={cached.get('geo_score',0):+.2f}"
             )
         ]
-        return {"agent_votes": [cached], "geo_vote": cached, "log": logs}
+        # See the matching comment in economist_node — a cache hit must still
+        # record a fresh agent_memory row (Review Finding).
+        return _emit_vote("geopolitician", "geo_vote", cached, logs)
 
     logs = [_entry("geopolitician: geopolitical risk assessment")]
     recent_lessons = _recent_lessons("geopolitician")
     system = _with_lessons(GEOPOLITICIAN_SYSTEM_PROMPT, recent_lessons)
     user = (
         f"GEOPOLITICAL RISK ASSESSMENT — Cycle #{state['round']}\n\n"
-        f"NEWS RÉCENTES:\n{(state.get('news') or 'Aucune news')[:400]}\n\n"
+        f"NEWS RÉCENTES:\n{_untrusted('news', (state.get('news') or 'Aucune news')[:400])}\n\n"
         f"BRIEF SUPERVISEUR: {state.get('supervisor_brief', '')[:200]}\n\n"
         "Retourne ce JSON uniquement :\n"
         '{\n  "agent": "geopolitician",\n'
@@ -1348,14 +1384,26 @@ def arbitrate_node(state: MultiAgentState) -> dict:
     # correlated with an existing position (concentration risk without diversification).
     positions = state.get("positions") or {}
     if final_action == "BUY" and symbol and positions:
+        buy_target = symbol  # for the log line below, even if the action flips
         max_corr = _portfolio_correlation(symbol, list(positions.keys()))
         if max_corr > 0.7:
             action_scores["BUY"] *= 0.75
-            final_action = max(action_scores, key=action_scores.get)
+            new_action = max(action_scores, key=action_scores.get)
+            if new_action != final_action:
+                # Damping can flip the winner to a different action — the BUY
+                # target symbol is meaningless for that action. Re-derive it
+                # the same way the original selection did (Review Finding:
+                # a flip previously kept targeting the old BUY ticker).
+                symbol, best_c = "", 0.0
+                for v in [tech_v, ana_v]:
+                    if v.get("action") == new_action and float(v.get("confidence", 0)) > best_c:
+                        best_c = float(v.get("confidence", 0))
+                        symbol = v.get("symbol", "")
+            final_action = new_action
             composite_conf = action_scores[final_action]
             logs.append(
                 _entry(
-                    f"arbitrate: CORRELATION RISK — {symbol} corr={max_corr:.2f} with "
+                    f"arbitrate: CORRELATION RISK — {buy_target} corr={max_corr:.2f} with "
                     f"open positions → BUY×0.75",
                     "warning",
                 )
@@ -1366,6 +1414,13 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         indent=2,
         default=str,
     )
+    # analyst_node/geopolitician_node run with web_search=True — their
+    # free-text fields (reasoning, catalysts, risk_regions, ...) can echo
+    # content from a fetched web page, including a page crafted to look
+    # like an instruction. Wrap the vote dump the same way raw news text is
+    # wrapped elsewhere before splicing it into this second LLM call
+    # (Review Finding — the news wrapping fix's remaining gap).
+    votes_summary_untrusted = _untrusted("agent_votes", votes_summary)
 
     if _no_llm_mode():
         tag = "PAPER" if _paper_mode["enabled"] else "SIM"
@@ -1384,7 +1439,7 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         system_arb = ARBITRATE_SYSTEM_PROMPT
         user_arb = (
             f"ARBITRATION — Cycle #{state['round']}\n\n"
-            f"VOTES:\n{votes_summary}\n\n"
+            f"VOTES:\n{votes_summary_untrusted}\n\n"
             f"SCORES COMPOSITES:\n"
             f"  BUY={action_scores['BUY']:.3f} | SELL={action_scores['SELL']:.3f} | HOLD={action_scores['HOLD']:.3f}\n\n"
             f"CONTEXTE SUPPLÉMENTAIRE:\n"
@@ -1414,10 +1469,20 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         raw_arb = _parse_json_obj(text)
         arb = validate_decision(raw_arb) if raw_arb else {}
 
+        # validate_decision() runs raw through a Pydantic model whose
+        # model_dump() always includes every field, defaulting symbol="" and
+        # allocation_pct=0 for any key the LLM's JSON omitted. arb.get(key,
+        # fallback) therefore never actually falls back — the key is always
+        # present, just with that empty/zero default. Check the *raw* LLM
+        # JSON for the key's presence before overriding the pre-LLM
+        # composite, so a partial response (e.g. it forgot to repeat symbol)
+        # doesn't silently blank out an otherwise-valid BUY (Review Finding).
         final_action = arb.get("action", final_action)
-        symbol = arb.get("symbol", symbol)
+        if raw_arb and raw_arb.get("symbol"):
+            symbol = arb.get("symbol", symbol)
+        if raw_arb and raw_arb.get("allocation_pct") is not None:
+            max_alloc = float(arb.get("allocation_pct", max_alloc))
         composite_conf = float(arb.get("confidence", composite_conf))
-        max_alloc = float(arb.get("allocation_pct", max_alloc))
         reasoning = arb.get("reasoning", "")
         consensus = arb.get("consensus_level", consensus)
         emotion = arb.get("emotion", "CALM")
@@ -1425,10 +1490,15 @@ def arbitrate_node(state: MultiAgentState) -> dict:
         market_intel = arb.get("market_intel", "")
         dissenting = arb.get("dissenting_agents", dissenting)
 
-        # Deterministic risk veto applied AFTER the LLM has spoken.
-        # The pre-LLM penalty (BUY * 0.15) only nudges the composite score —
-        # the LLM can still emit ``action=BUY``. This override is the
-        # last line of defence for capital preservation. (Review v5 Finding 4.1)
+        # Deterministic vetoes applied AFTER the LLM has spoken.
+        # The pre-LLM dampers (BUY * 0.15/0.5/0.6/0.5 for risk/macro/economic/
+        # geo) only nudge the composite score fed to the LLM as context —
+        # nothing stops it from still emitting action=BUY at a healthy
+        # confidence regardless. Only risk_score > 8 was re-checked here,
+        # so the macro/economic/geo/correlation guardrails were effectively
+        # advisory in LIVE mode while SIM/PAPER (no LLM) enforce them as hard
+        # filters. These overrides are the last line of defence for capital
+        # preservation. (Review v5 Finding 4.1; geo/economic extended here)
         if final_action == "BUY" and risk_score > 8:
             logger.warning(
                 "RISK VETO (post-LLM): forcing HOLD (risk_score=%s > 8)",
@@ -1442,6 +1512,51 @@ def arbitrate_node(state: MultiAgentState) -> dict:
                     "warning",
                 )
             )
+        elif final_action == "BUY" and geo_risk > 7:
+            logger.warning(
+                "GEO RISK VETO (post-LLM): forcing HOLD (geo_risk=%s > 7)",
+                geo_risk,
+            )
+            final_action = "HOLD"
+            composite_conf = 0.3
+            logs.append(
+                _entry(
+                    "arbitrate: GEO RISK VETO (post-LLM) — forced HOLD",
+                    "warning",
+                )
+            )
+        elif final_action == "BUY" and economic_score < -0.5:
+            logger.warning(
+                "ECONOMIC HEADWIND VETO (post-LLM): forcing HOLD (economic_score=%.2f < -0.5)",
+                economic_score,
+            )
+            final_action = "HOLD"
+            composite_conf = 0.3
+            logs.append(
+                _entry(
+                    "arbitrate: ECONOMIC HEADWIND VETO (post-LLM) — forced HOLD",
+                    "warning",
+                )
+            )
+        elif final_action == "BUY" and symbol and positions:
+            # The LLM can pick a different symbol than the pre-LLM composite
+            # checked correlation against — re-check against its actual pick.
+            llm_corr = _portfolio_correlation(symbol, list(positions.keys()))
+            if llm_corr > 0.7:
+                logger.warning(
+                    "CORRELATION VETO (post-LLM): forcing HOLD (%s corr=%.2f)",
+                    symbol,
+                    llm_corr,
+                )
+                final_action = "HOLD"
+                composite_conf = 0.3
+                logs.append(
+                    _entry(
+                        f"arbitrate: CORRELATION VETO (post-LLM) — {symbol} corr={llm_corr:.2f} "
+                        "— forced HOLD",
+                        "warning",
+                    )
+                )
 
     positions = state.get("positions") or {}
     is_pyramid = final_action == "BUY" and bool(symbol) and symbol in positions
@@ -1467,7 +1582,10 @@ def arbitrate_node(state: MultiAgentState) -> dict:
 
     if final_action == "SELL":
         sizing = str(risk_v.get("sizing_recommendation", "FULL")).upper()
-        risk_sell_pct = SIZING_TO_SELL_PCT.get(sizing, 100.0)
+        # SIZING_TO_SELL_PCT["SKIP"] = 0 sizes a BUY the risk_manager wants no
+        # part of — it must never neuter an already-decided SELL down to a
+        # 0% no-op, exactly when risk is judged worst and exiting matters most.
+        risk_sell_pct = 100.0 if sizing == "SKIP" else SIZING_TO_SELL_PCT.get(sizing, 100.0)
         try:
             tech_sell_pct = float(tech_v.get("sell_pct", 100))
         except (TypeError, ValueError):
@@ -1535,7 +1653,10 @@ def arbitrate_node(state: MultiAgentState) -> dict:
 
 
 def _today_realized_pnl_pcts(portfolio: Portfolio) -> list[float]:
-    """Percent P&L for each SELL executed today (vs most recent prior BUY per symbol)."""
+    """Percent P&L for each SELL executed today (vs the reconstructed
+    share-weighted entry for the position it closed — see
+    ``_reconstruct_avg_entry``, not just the last BUY anywhere in history).
+    """
 
     today = date.today().isoformat()
     pnls: list[float] = []
@@ -1550,20 +1671,14 @@ def _today_realized_pnl_pcts(portfolio: Portfolio) -> list[float]:
             sp = float(trade.get("price"))
         except (TypeError, ValueError):
             continue
-        buy_trade = next(
-            (
-                x
-                for x in reversed(portfolio.trade_history)
-                if x.get("action") == "BUY" and x.get("symbol") == symbol
-            ),
-            None,
-        )
-        if not buy_trade:
-            continue
         try:
-            bp = float(buy_trade.get("price"))
-        except (TypeError, ValueError):
+            sell_time = datetime.fromisoformat(t)
+        except ValueError:
             continue
+        entry = _reconstruct_avg_entry(portfolio.trade_history, symbol, sell_time)
+        if entry is None:
+            continue
+        bp, _ = entry
         if bp > 0:
             pnls.append((sp - bp) / bp * 100.0)
     return pnls
@@ -1626,8 +1741,15 @@ def run_daily_digest(portfolio: Portfolio) -> None:
             }
         )
 
+    # Snapshot under the lock — this runs in the postmortem thread while the
+    # agent thread can concurrently mutate portfolio.positions (a full SELL
+    # does `del self.positions[symbol]`), so iterating the live dict
+    # directly risked "dictionary changed size during iteration".
+    with portfolio._lock:
+        positions_snapshot = dict(portfolio.positions)
+
     positions: dict[str, dict] = {}
-    for sym, pos in portfolio.positions.items():
+    for sym, pos in positions_snapshot.items():
         avg = float(pos.get("avg_price", pos.get("avg_cost", 0)))
         sh = float(pos.get("shares", 0))
         cur = float(prices.get(sym, avg))
@@ -1702,7 +1824,10 @@ def _spy_week_return_pct() -> float | None:
 
 
 def _rolling_7d_closed_sell_pnls(portfolio: Portfolio) -> list[tuple[str, float]]:
-    """Symbol and realized P&L % for each SELL in the last 7 days (vs prior BUY)."""
+    """Symbol and realized P&L % for each SELL in the last 7 days (vs the
+    reconstructed share-weighted entry for the position it closed — see
+    ``_reconstruct_avg_entry``, not just the last BUY anywhere in history).
+    """
 
     cutoff = datetime.now() - timedelta(days=7)
     out: list[tuple[str, float]] = []
@@ -1727,20 +1852,10 @@ def _rolling_7d_closed_sell_pnls(portfolio: Portfolio) -> list[tuple[str, float]
             sp = float(trade.get("price"))
         except (TypeError, ValueError):
             continue
-        buy_trade = next(
-            (
-                x
-                for x in reversed(portfolio.trade_history)
-                if x.get("action") == "BUY" and x.get("symbol") == symbol
-            ),
-            None,
-        )
-        if not buy_trade:
+        entry = _reconstruct_avg_entry(portfolio.trade_history, symbol, tt)
+        if entry is None:
             continue
-        try:
-            bp = float(buy_trade.get("price"))
-        except (TypeError, ValueError):
-            continue
+        bp, _ = entry
         if bp > 0 and symbol:
             out.append((str(symbol), (sp - bp) / bp * 100.0))
     return out
@@ -1856,6 +1971,49 @@ def run_weekly_report(portfolio: Portfolio) -> None:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+def _reconstruct_avg_entry(
+    trade_history: list[dict], symbol: str, sell_time: datetime
+) -> tuple[float, datetime] | None:
+    """Weighted-average cost basis + first-open time for a position closed
+    by the SELL at ``sell_time``.
+
+    Walks ``trade_history`` chronologically, accumulating BUY layers (so
+    pyramided positions get their true blended entry, not just the last
+    layer's price) since the position was last fully flat — an earlier
+    SELL for the same symbol resets the accumulator, so a same-day
+    re-entry doesn't get matched against a prior, already-closed cycle's
+    buys. Returns ``None`` if no open position is found before ``sell_time``.
+    """
+    open_shares = 0.0
+    open_cost = 0.0
+    first_buy_time: datetime | None = None
+    for t in trade_history:
+        if t.get("symbol") != symbol:
+            continue
+        t_time = datetime.fromisoformat(t["time"])
+        if t_time >= sell_time:
+            break
+        if t["action"] == "BUY":
+            shares = float(t.get("shares", 0.0))
+            price = float(t.get("price", 0.0))
+            if open_shares <= 1e-9:
+                first_buy_time = t_time
+            open_shares += shares
+            open_cost += shares * price
+        elif t["action"] == "SELL" and open_shares > 0:
+            sold_shares = float(t.get("shares", 0.0))
+            frac = min(sold_shares / open_shares, 1.0)
+            open_cost *= 1 - frac
+            open_shares -= sold_shares
+            if open_shares <= 1e-9:
+                open_shares = 0.0
+                open_cost = 0.0
+
+    if open_shares <= 1e-9 or first_buy_time is None:
+        return None
+    return open_cost / open_shares, first_buy_time
+
+
 def run_daily_postmortem(portfolio: Portfolio) -> None:
     """Generate postmortem entries for all SELL trades since midnight.
 
@@ -1878,28 +2036,38 @@ def run_daily_postmortem(portfolio: Portfolio) -> None:
         sell_price = trade["price"]
         sell_time = datetime.fromisoformat(trade["time"])
 
-        buy_trade = next(
-            (
-                t
-                for t in reversed(portfolio.trade_history)
-                if t["action"] == "BUY" and t["symbol"] == symbol
-            ),
-            None,
-        )
-        if not buy_trade:
+        entry = _reconstruct_avg_entry(portfolio.trade_history, symbol, sell_time)
+        if entry is None:
             continue
-
-        buy_price = buy_trade["price"]
-        buy_time = datetime.fromisoformat(buy_trade["time"])
+        buy_price, buy_time = entry
         holding_hours = (sell_time - buy_time).total_seconds() / 3600
         pnl_pct = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0.0
 
-        rows = _db_read(
-            "SELECT agent_name FROM agent_memory "
-            "WHERE symbol=? AND was_correct=1 AND vote='SELL' "
-            "ORDER BY timestamp DESC LIMIT 4",
-            (symbol,),
+        # Scope to THIS trade's own cycle, not just the symbol: without a
+        # trace_id filter, this pulled was_correct=1 SELL votes from ANY past
+        # trade on the symbol — including cycles that had nothing to do with
+        # today's decision, misattributing unrelated historical agents as
+        # if they were behind this specific sell (Review Finding). was_correct
+        # for THIS trade's own trace_id isn't resolved yet (evaluate_pending_
+        # trades runs ~EVAL_HORIZON_CALENDAR_DAYS later), so scope by trace_id
+        # + vote='SELL' — the agents who actually recommended this exact
+        # trade — instead of a stale, unrelated "was correct historically"
+        # signal.
+        trace_rows = _db_read(
+            "SELECT trace_id FROM trades WHERE symbol=? AND action='SELL' "
+            "AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1",
+            (symbol, trade["time"]),
         )
+        trace_id = trace_rows[0][0] if trace_rows and trace_rows[0][0] else None
+        if trace_id:
+            rows = _db_read(
+                "SELECT agent_name FROM agent_memory "
+                "WHERE trace_id=? AND vote='SELL' "
+                "ORDER BY timestamp DESC LIMIT 4",
+                (trace_id,),
+            )
+        else:
+            rows = []
         agents_correct = json.dumps([r[0] for r in rows])
 
         if _no_llm_mode():
@@ -1942,6 +2110,17 @@ def run_daily_postmortem(portfolio: Portfolio) -> None:
 
 
 def _route_arbitrate(state: MultiAgentState) -> str:
+    # In SIM/PAPER only technician+analyst feed the composite confidence
+    # score (weights 0.28+0.32 = 0.60 total — risk/macro/economist/geo only
+    # contribute to the HOLD baseline), so it can never reach the 0.72 gate
+    # on its own. Without this bypass every single SIM/PAPER cycle fell
+    # through to research → sim_research(), which doesn't do real research
+    # (no LLM available) — it just overwrites the real computed confidence
+    # with a flat 0.75 on every cycle instead of the gate ever meaningfully
+    # applying (Review Finding). Skip the pointless detour and keep the
+    # genuine composite score.
+    if _no_llm_mode():
+        return "risk_check"
     conf = state.get("confidence", 0.0)
     iters = state.get("research_iterations", 0)
     skip = state.get("skip_research", False)
@@ -1964,7 +2143,7 @@ def build_multi_graph(portfolio: Portfolio):
     g.add_node("execute", make_execute_node(portfolio))
     g.add_node("save_memory", make_save_memory_node(portfolio))
     g.add_node("risk_check", risk_check_node)
-    g.add_node("skip", skip_node)
+    g.add_node("skip", make_skip_node(portfolio))
     g.add_node("research", research_node)
 
     # Multi-agent specific nodes

@@ -18,7 +18,7 @@ from core.data import Portfolio
 
 
 def _build_state(action: str, symbol: str = "AAPL") -> dict:
-    return {
+    state = {
         "decision": {
             "action": action,
             "symbol": symbol,
@@ -30,6 +30,16 @@ def _build_state(action: str, symbol: str = "AAPL") -> dict:
         "prices": {symbol: 150.0},
         "known_patterns": [],
     }
+    if action in ("BUY", "SELL"):
+        state["execution_result"] = {
+            "success": True,
+            "action": action,
+            "symbol": symbol,
+            "shares": 0.5,
+            "price": 150.0,
+            "amount": 75.0,
+        }
+    return state
 
 
 def _seed_trade(p: Portfolio, action: str, symbol: str = "AAPL") -> None:

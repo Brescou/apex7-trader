@@ -248,10 +248,13 @@ def _backtest_run(n_clicks, symbol, period, strategy):
     sell_xs, sell_ys, sell_dates = [], [], []
 
     buy_idx_map: dict[str, int] = {}
-    _bar = 0
     for t in trades:
-        _bar += 1
-        ei = min(_bar, len(equity) - 1)
+        # _simulate now returns the actual bar the trade happened at
+        # (bar_index) — the old code used the trade's sequence number
+        # instead, bunching every marker at the very start of the chart
+        # regardless of when the trade actually occurred.
+        bar_idx = t.get("bar_index")
+        ei = min(bar_idx + 1 if bar_idx is not None else 0, len(equity) - 1)
         date_str = t.get("date", "")
         action = t.get("action", "")
         price = float(t.get("price", 0.0))
@@ -362,34 +365,35 @@ def _backtest_run(n_clicks, symbol, period, strategy):
     )
 
     tbl_rows = []
-    _buy_price: dict[str, float] = {}
-    _buy_shares: dict[str, float] = {}
     total_pnl = 0.0
 
     for t in trades:
         action = t.get("action", "")
         date_str = t.get("date", "—")
         price = float(t.get("price", 0.0))
-        sym_t = t.get("symbol", sym)
+
+        # _simulate now returns the real shares/pnl/cost_basis for each trade
+        # (allocated against the CURRENT, compounding cash balance) instead
+        # of the dashboard guessing shares from a fixed INITIAL_BALANCE * 95%
+        # — that guess only matched the very first trade and diverged more
+        # with every subsequent round trip.
+        shares = float(t.get("shares") or 0.0)
+        pnl = t.get("pnl")
 
         if action == "BUY":
-            shares = (INITIAL_BALANCE * 0.95) / price if price > 0 else 0.0
-            _buy_price[sym_t] = price
-            _buy_shares[sym_t] = shares
             pnl_usd = 0.0
             pnl_pct = 0.0
             row_bg = f"{BLUE}0f"
             action_col = BLUE
         elif action == "SELL":
-            bp = _buy_price.pop(sym_t, price)
-            shares = _buy_shares.pop(sym_t, 0.0)
-            pnl_pct = ((price - bp) / bp * 100) if bp > 0 else 0.0
-            pnl_usd = shares * (price - bp)
+            pnl_usd = float(pnl or 0.0)
+            cost_basis = float(t.get("cost_basis") or 0.0)
+            pnl_pct = (pnl_usd / cost_basis * 100) if cost_basis > 0 else 0.0
             total_pnl += pnl_usd
             row_bg = f"{GREEN}0f" if pnl_usd >= 0 else f"{RED}0f"
             action_col = RED
         else:
-            shares = pnl_usd = pnl_pct = 0.0
+            pnl_usd = pnl_pct = 0.0
             row_bg = "transparent"
             action_col = GRAY
 

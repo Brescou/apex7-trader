@@ -100,8 +100,17 @@ def _show_tab(tab: str):
     prevent_initial_call=True,
 )
 def _toggle_mode(value: str) -> dict:
-    """Switch between live / paper / sim. Mutually exclusive backend toggles."""
+    """Switch between live / paper / sim. Mutually exclusive backend toggles.
+
+    LIVE and PAPER both price against real yfinance quotes, so toggling
+    between only those two is safe to do on the same ``Portfolio`` (same
+    cash, same open positions). SIM instead drives a synthetic random-walk
+    price series — entering or leaving SIM must swap in a fresh ``Portfolio``
+    first, otherwise the fake price engine can mark, stop-loss, or liquidate
+    real LIVE/PAPER positions and cash.
+    """
     mode = (value or "live").lower()
+    was_sim = get_simulation_mode()
     if mode == "paper":
         set_paper_mode(True)
     elif mode == "sim":
@@ -110,6 +119,22 @@ def _toggle_mode(value: str) -> dict:
         # Live: clear both flags.
         set_paper_mode(False)
         set_simulation_mode(False)
+
+    if was_sim != (mode == "sim"):
+        with _controller_lock:
+            old = _state.get("portfolio")
+        if old is not None:
+            old.is_dead = True  # let the running _agent_loop thread exit on its own
+        fresh = Portfolio()
+        with _controller_lock:
+            _state["portfolio"] = fresh
+            _state["last_votes"] = []
+            _state["last_arb"] = {}
+            _state["last_error"] = None
+            _state["_death_refresh_done"] = False
+            _state["thread"] = _launch(fresh)
+            _ctrl["paused"] = False
+
     return {"mode": get_runtime_mode()}
 
 
@@ -160,6 +185,12 @@ def _controls(_, __, ___, store):
             raise PreventUpdate
         po.is_dead = True
         p = Portfolio()
+        # Persist the fresh state immediately — otherwise portfolio_state.json
+        # still holds the dead portfolio's cash/positions until the new
+        # Portfolio's first trade calls save_state() on its own. A process
+        # restart before that first trade would reload the pre-reset (dead)
+        # state and immediately re-kill it via check_death().
+        p.save_state()
         with _controller_lock:
             _state["portfolio"] = p
             _state["last_votes"] = []

@@ -30,6 +30,11 @@ _FNG_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
 _MACRO_INDICATORS_CACHE_SEC = 3600
 _FRED_SERIES_CACHE_SEC = 3600
 _FEAR_GREED_CACHE_SEC = 3600
+# On a failed/empty fetch, retry this soon instead of waiting the full TTL —
+# while still serving the last known-good cached value in the meantime
+# (avoids caching None for a full hour on a transient timeout or a FRED
+# holiday gap).
+_NEGATIVE_CACHE_RETRY_SEC = 60
 
 _macro_indicators_cache: dict[str, Any] = {"data": None, "ts": 0.0}
 _macro_indicators_lock = threading.Lock()
@@ -98,33 +103,49 @@ def fetch_fred_latest(
     now = time.time()
     with _fred_series_lock:
         cached = _fred_series_cache.get(series_id)
-        if cached is not None and (now - cached["ts"]) < ttl:
-            return cached["data"]
+        if cached is not None:
+            if (now - cached["ts"]) < ttl:
+                return cached["data"]
+            if (
+                cached["data"] is not None
+                and (now - cached.get("last_attempt", cached["ts"])) < _NEGATIVE_CACHE_RETRY_SEC
+            ):
+                # Stale but a fetch was already attempted very recently and
+                # failed/came back empty — keep serving the last known-good
+                # value instead of caching None for the full TTL.
+                return cached["data"]
 
-    url = f"{_FRED_BASE}?series_id={series_id}&sort_order=desc&limit=1&file_type=json"
+    # limit=5 (not 1): the most recent observation for a daily series like
+    # DGS10 is frequently "." on market holidays / delayed releases — walk
+    # back through recent observations for the first non-missing value
+    # instead of treating a single missing tick as "no data".
+    url = f"{_FRED_BASE}?series_id={series_id}&sort_order=desc&limit=5&file_type=json"
     if key:
         url += f"&api_key={key}"
 
     payload: dict[str, Any] | None = None
     try:
         data = _http_get_json(url)
-        observations = data.get("observations") or []
-        if not observations:
-            payload = None
-        else:
-            row = observations[0]
+        for row in data.get("observations") or []:
             val = _parse_fred_observation_value(row.get("value"))
-            if val is None:
-                payload = None
-            else:
+            if val is not None:
                 payload = {"value": val, "date": str(row.get("date", ""))}
+                break
     except Exception:
         logger.debug("FRED fetch failed for %s", series_id, exc_info=False)
         payload = None
 
     with _fred_series_lock:
-        _fred_series_cache[series_id] = {"data": payload, "ts": time.time()}
-    return payload
+        now = time.time()
+        if payload is not None:
+            _fred_series_cache[series_id] = {"data": payload, "ts": now, "last_attempt": now}
+            return payload
+        prev = _fred_series_cache.get(series_id)
+        if prev is not None and prev.get("data") is not None:
+            _fred_series_cache[series_id] = {**prev, "last_attempt": now}
+            return prev["data"]
+        _fred_series_cache[series_id] = {"data": None, "ts": now, "last_attempt": now}
+        return None
 
 
 def fetch_fred_release_dates(
@@ -218,6 +239,15 @@ def fetch_fear_greed(*, max_cache_sec: float | None = None) -> dict[str, Any] | 
         now = time.time()
         if _fear_greed_cache["data"] is not None and (now - _fear_greed_cache["ts"]) < ttl:
             return _fear_greed_cache["data"]
+        if (
+            _fear_greed_cache["data"] is not None
+            and (now - _fear_greed_cache.get("last_attempt", _fear_greed_cache["ts"]))
+            < _NEGATIVE_CACHE_RETRY_SEC
+        ):
+            # Stale but a fetch failed very recently — keep serving the last
+            # known-good value instead of caching None for the full TTL on a
+            # transient timeout/503.
+            return _fear_greed_cache["data"]
 
     payload: dict[str, Any] | None = None
     try:
@@ -238,6 +268,14 @@ def fetch_fear_greed(*, max_cache_sec: float | None = None) -> dict[str, Any] | 
         payload = None
 
     with _fear_greed_lock:
-        _fear_greed_cache["data"] = payload
-        _fear_greed_cache["ts"] = time.time()
+        now = time.time()
+        if payload is not None:
+            _fear_greed_cache["data"] = payload
+            _fear_greed_cache["ts"] = now
+            _fear_greed_cache["last_attempt"] = now
+        else:
+            _fear_greed_cache["last_attempt"] = now
+            if _fear_greed_cache["data"] is None:
+                _fear_greed_cache["ts"] = now
+            payload = _fear_greed_cache["data"]
     return payload

@@ -2,17 +2,21 @@
 
 import os
 import sys
+import threading
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import market_data.fundamentals as fund  # noqa: E402
+from market_data import caches  # noqa: E402
 from market_data.fundamentals import fetch_fundamentals, format_market_cap  # noqa: E402
 
 
 def _clear_cache():
     with fund._fundamentals_lock:
         fund._fundamentals_cache.clear()
+    caches._yf_circuit["failures"] = 0
+    caches._yf_circuit["paused_until"] = 0.0
 
 
 def test_format_market_cap_units():
@@ -76,3 +80,88 @@ def test_fetch_fundamentals_failsilent_serves_stale():
 def test_fetch_fundamentals_empty_symbol():
     assert fetch_fundamentals("") == {}
     assert fetch_fundamentals(None) == {}
+
+
+def test_fetch_fundamentals_failure_does_not_retry_every_call():
+    """A failed fetch must bump ``ts`` like a success would — otherwise every
+    call while yfinance is down retries immediately instead of respecting
+    the 1h TTL, hammering an already-struggling yfinance (Review Finding).
+    """
+    _clear_cache()
+    good = MagicMock()
+    good.info = {"shortName": "Good", "marketCap": 5}
+    with patch.object(fund.yf, "Ticker", return_value=good):
+        fetch_fundamentals("AAA")
+    fund._fundamentals_cache["AAA"]["ts"] = 0  # force expiry
+
+    with patch.object(fund.yf, "Ticker", side_effect=RuntimeError("network")) as mk:
+        fetch_fundamentals("AAA")
+        fetch_fundamentals("AAA")  # must be served from the (failed) cache entry
+
+    assert mk.call_count == 1, "second call after a failure must not retry the network"
+
+
+def test_fetch_fundamentals_serves_stale_when_circuit_open():
+    _clear_cache()
+    good = MagicMock()
+    good.info = {"shortName": "Good", "marketCap": 5}
+    with patch.object(fund.yf, "Ticker", return_value=good):
+        fetch_fundamentals("BBB")
+    fund._fundamentals_cache["BBB"]["ts"] = 0  # force expiry
+
+    with patch.object(fund, "yf_circuit_open", return_value=True):
+        with patch.object(fund.yf, "Ticker") as ticker:
+            data = fetch_fundamentals("BBB")
+
+    ticker.assert_not_called()
+    assert data["name"] == "Good"
+
+
+def test_fetch_fundamentals_wired_into_shared_circuit_breaker():
+    _clear_cache()
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("down")
+
+    with patch.object(fund.yf, "Ticker", side_effect=_boom):
+        for sym in ("CCC", "DDD", "EEE"):
+            fetch_fundamentals(sym)
+
+    assert caches.yf_circuit_open() is True
+
+
+def test_fetch_fundamentals_releases_lock_during_network_io():
+    entered = threading.Event()
+    release = threading.Event()
+
+    class _BlockingTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+            self.info = {"shortName": "Slow"}
+
+        def __getattribute__(self, name):
+            if name == "info":
+                entered.set()
+                release.wait(timeout=2.0)
+            return object.__getattribute__(self, name)
+
+    _clear_cache()
+
+    def _run():
+        with patch.object(fund, "yf", MagicMock(Ticker=_BlockingTicker)):
+            fetch_fundamentals("FFF")
+
+    worker = threading.Thread(target=_run)
+    worker.start()
+    try:
+        assert entered.wait(timeout=2.0), "fetch never reached the network call"
+        acquired = fund._fundamentals_lock.acquire(timeout=1.0)
+        try:
+            assert acquired, "_fundamentals_lock was held during the network I/O call"
+        finally:
+            if acquired:
+                fund._fundamentals_lock.release()
+    finally:
+        release.set()
+        worker.join(timeout=5.0)
+    assert not worker.is_alive()

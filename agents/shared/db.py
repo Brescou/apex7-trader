@@ -288,6 +288,34 @@ def mode_db_path(mode: str) -> Path:
     }.get(mode, _DB_ROOT / "trades.db")
 
 
+def _db_write_at(db_path, query: str, params: tuple, *, retries: int = 3) -> bool:
+    """Write to an explicit DB file — mirrors :func:`_db_read_at`.
+
+    Unlike :func:`_db_write`, this does **not** re-resolve ``_get_db_path()``
+    on every call. Callers that need several related reads/writes to land in
+    the *same* file regardless of a runtime mode switch happening mid-way
+    (e.g. ``evaluate_pending_trades`` iterating many rows) should resolve
+    the path once and route every operation in that batch through this
+    function instead of :func:`_db_write` / :func:`_db_read`.
+    """
+    for attempt in range(retries):
+        try:
+            with closing(sqlite3.connect(db_path, timeout=5)) as con:
+                con.execute(query, params)
+                con.commit()
+            return True
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e) and attempt < retries - 1:
+                time.sleep(0.1 * (attempt + 1))
+                continue
+            logger.error("SQLite write failed: %s (query=%s)", e, query[:80])
+            return False
+        except Exception as e:
+            logger.error("SQLite unexpected error: %s", e)
+            return False
+    return False
+
+
 def _db_read_at(db_path, query: str, params: tuple = (), *, retries: int = 3) -> list:
     """Read from an explicit DB file (returns ``[]`` if the file is missing).
 

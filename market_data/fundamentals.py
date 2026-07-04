@@ -8,6 +8,7 @@ stale (ou ``{}``) si yfinance échoue.
 import threading
 import time
 
+from market_data.caches import record_yf_failure, record_yf_success, yf_circuit_open
 from market_data.compat import yf
 
 _FUNDAMENTALS_TTL = 3600.0  # 1 hour
@@ -45,15 +46,27 @@ def fetch_fundamentals(symbol: str) -> dict:
         cached = _fundamentals_cache.get(key)
         if cached is not None and (now - cached["ts"]) < _FUNDAMENTALS_TTL:
             return cached["data"]
+        stale = cached["data"] if cached is not None else {}
+        if yf_circuit_open():
+            return stale
 
-        try:
-            info = yf.Ticker(key).info or {}
-        except Exception:
-            return cached["data"] if cached else {}
+    # Network I/O outside the lock — yf.Ticker(...).info is a heavy call and
+    # holding _fundamentals_lock across it would block every other symbol's
+    # lookup (screener, chart strip) behind one global lock (Review Finding).
+    result = stale
+    try:
+        info = yf.Ticker(key).info or {}
+        record_yf_success()
+        result = {pub: info.get(src) for pub, src in _FIELDS.items()}
+    except Exception:
+        # Bump ts along with everyone else on failure too — otherwise every
+        # call while yfinance is down retries immediately instead of
+        # respecting the TTL like a successful fetch would (Review Finding).
+        record_yf_failure()
 
-        data = {pub: info.get(src) for pub, src in _FIELDS.items()}
-        _fundamentals_cache[key] = {"data": data, "ts": now}
-        return data
+    with _fundamentals_lock:
+        _fundamentals_cache[key] = {"data": result, "ts": time.time()}
+    return result
 
 
 def format_market_cap(value) -> str:

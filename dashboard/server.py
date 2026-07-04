@@ -147,7 +147,11 @@ def _login():
     status = 200
     if request.method == "POST":
         supplied = request.form.get("password", "")
-        if hmac.compare_digest(supplied, config.DASHBOARD_PASSWORD):
+        # hmac.compare_digest on two `str` requires ASCII-only content
+        # (raises TypeError otherwise) — encode to bytes first so a
+        # non-ASCII DASHBOARD_PASSWORD (or a non-ASCII login attempt) is
+        # compared safely instead of crashing every /login POST with a 500.
+        if hmac.compare_digest(supplied.encode("utf-8"), config.DASHBOARD_PASSWORD.encode("utf-8")):
             session["apex7_auth"] = True
             return redirect("/")
         time.sleep(0.3)  # slow down brute-force attempts

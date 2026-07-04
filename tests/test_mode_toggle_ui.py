@@ -8,6 +8,7 @@
 
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -39,20 +40,30 @@ def test_toggle_mode_to_paper() -> None:
 
 
 def test_toggle_mode_to_sim() -> None:
+    """Entering SIM crosses the fake-price boundary — _toggle_mode swaps in a
+    fresh Portfolio and launches a new agent thread. _launch is mocked so
+    this unit test doesn't spawn a real background thread for the rest of
+    the pytest process.
+    """
     from dashboard.callbacks.live import _toggle_mode
 
-    out = _toggle_mode("sim")
+    with patch("dashboard.callbacks.live._launch") as mock_launch:
+        out = _toggle_mode("sim")
+    mock_launch.assert_called_once()
     assert out == {"mode": "sim"}
     assert nodes.get_simulation_mode() is True
     assert nodes.get_paper_mode() is False
 
 
 def test_toggle_mode_to_live_clears_both() -> None:
+    """Leaving SIM also crosses the boundary — same _launch mock needed."""
     from dashboard.callbacks.live import _toggle_mode
 
     nodes._sim_mode["enabled"] = True
     nodes._paper_mode["enabled"] = True  # defensive double-flag
-    out = _toggle_mode("live")
+    with patch("dashboard.callbacks.live._launch") as mock_launch:
+        out = _toggle_mode("live")
+    mock_launch.assert_called_once()
     assert out == {"mode": "live"}
     assert nodes.get_simulation_mode() is False
     assert nodes.get_paper_mode() is False

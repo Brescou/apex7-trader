@@ -136,6 +136,72 @@ def test_digest_positions_listed(tmp_db, not_sim, portfolio) -> None:
     assert pos["MSFT"]["current"] == 220.0
 
 
+class _TrackedPositionsDict(dict):
+    """Counts direct ``.items()`` calls on this exact (live, shared) dict
+    object. ``Portfolio.total_value()`` legitimately calls ``.items()``
+    once on ``self.positions`` while holding ``self._lock`` (a brief,
+    already-safe iteration) — the extra call this test guards against is
+    run_daily_digest's OWN position-summary loop iterating the live dict a
+    SECOND time, unprotected. ``dict(some_subclass_instance)`` calls
+    ``keys()`` on CPython, not ``items()``, so a caller that snapshots
+    first (``dict(positions)``) before iterating never adds to this count.
+    """
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.items_call_count = 0
+
+    def items(self):
+        self.items_call_count += 1
+        return super().items()
+
+
+def test_digest_snapshots_positions_before_iterating(tmp_db, not_sim, portfolio) -> None:
+    """run_daily_digest runs in the postmortem thread while the agent thread
+    can concurrently mutate portfolio.positions (a full SELL does
+    ``del self.positions[symbol]``) — iterating the live, shared dict a
+    second time (beyond Portfolio.total_value()'s own already-locked pass)
+    risks "dictionary changed size during iteration". Must snapshot under
+    the lock (``dict(portfolio.positions)``) before its own loop instead
+    (Review Finding).
+    """
+    portfolio.cash = 0.0
+    tracked = _TrackedPositionsDict(
+        {
+            "AAPL": {"shares": 1.0, "avg_price": 100.0},
+            "MSFT": {"shares": 2.0, "avg_price": 200.0},
+        }
+    )
+    portfolio.positions = tracked
+    prices = {"AAPL": 110.0, "MSFT": 220.0}
+
+    with (
+        _patch_multi_today(_FIXED_TODAY),
+        patch(
+            "agents.shared.nodes.get_daily_start_value",
+            return_value=(1000.0, _FIXED_DATE_STR),
+        ),
+        patch("agents.shared.nodes.get_consecutive_hold_cycles", return_value=0),
+        patch("agents.multi._db_read", _digest_db_read([])),
+        patch("agents.multi.get_watchlist", return_value=list(prices.keys())),
+        patch.object(portfolio, "fetch_prices", return_value=prices),
+        patch("core.external_data.fetch_fear_greed", return_value=None),
+        patch("core.notifications.alert_daily_digest") as ad,
+    ):
+        run_daily_digest(portfolio)
+
+    # Exactly 1: Portfolio.total_value()'s own already-locked, momentary
+    # pass. A second call would be run_daily_digest's own loop iterating
+    # the live dict directly instead of a snapshot.
+    assert tracked.items_call_count == 1, (
+        "run_daily_digest must snapshot portfolio.positions (dict(...)) "
+        "before its own loop, not call .items() on the live shared dict "
+        f"a second time (saw {tracked.items_call_count} calls)"
+    )
+    # The digest must still see both positions via the snapshot.
+    assert set(ad.call_args.kwargs["positions"].keys()) == {"AAPL", "MSFT"}
+
+
 def test_digest_fear_greed_none(tmp_db, not_sim, portfolio) -> None:
     """Score F&G indisponible → aucun champ « Fear & Greed » dans l'embed Discord."""
     portfolio.cash = 1000.0

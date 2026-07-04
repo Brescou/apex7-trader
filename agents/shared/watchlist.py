@@ -15,14 +15,27 @@ logger = logging.getLogger("apex7")
 MAX_WATCHLIST_SYMBOLS = 20
 
 
-def get_watchlist() -> list[str]:
-    """Return symbols from the DB, ordered by ``added_at``. Fallback if empty."""
+def _persisted_symbols() -> list[str]:
+    """Real watchlist DB rows only — no config-default fallback.
+
+    ``get_watchlist()``'s fallback is a display convenience for a never-seeded
+    table; using it to drive ``add_to_watchlist()``'s idempotency/capacity
+    checks would treat a config-default symbol as "already present" while the
+    table is legitimately empty, silently reporting success without ever
+    inserting a row (Review Finding).
+    """
     from agents.shared.db import _db_read
 
     rows = _db_read("SELECT symbol FROM watchlist ORDER BY added_at ASC, symbol ASC")
+    return [str(r[0]) for r in rows]
+
+
+def get_watchlist() -> list[str]:
+    """Return symbols from the DB, ordered by ``added_at``. Fallback if empty."""
+    rows = _persisted_symbols()
     if not rows:
         return list(DEFAULT_WATCHLIST)
-    return [str(r[0]) for r in rows]
+    return rows
 
 
 def add_to_watchlist(symbol: str, source: str = "manual") -> bool:
@@ -31,7 +44,7 @@ def add_to_watchlist(symbol: str, source: str = "manual") -> bool:
     if not sym:
         return False
 
-    current = get_watchlist()
+    current = _persisted_symbols()
     if sym in current:
         return True
     if len(current) >= MAX_WATCHLIST_SYMBOLS:

@@ -81,7 +81,14 @@ def _compute_metrics(
         elif t["action"] == "SELL" and t["symbol"] in buy_prices:
             bp = buy_prices.pop(t["symbol"])
             if bp > 0:
-                pnl_list.append((t["price"] - bp) / bp)
+                # Raw price move isn't what was actually realized — the
+                # equity curve already reflects slippage + commission on
+                # both legs (Batch A/_simulate), so win_rate must too, or a
+                # marginally-profitable-on-paper trade that's actually a net
+                # loss after costs gets counted as a win.
+                effective_buy = bp * (1 + SLIPPAGE_PCT) * (1 + COMMISSION_PCT)
+                effective_sell = t["price"] * (1 - SLIPPAGE_PCT) * (1 - COMMISSION_PCT)
+                pnl_list.append((effective_sell - effective_buy) / effective_buy)
     win_rate = (sum(1 for p in pnl_list if p > 0) / len(pnl_list) * 100) if pnl_list else 0.0
 
     return {
@@ -111,14 +118,16 @@ def _simulate(
     cash = initial_cash
     position_shares: float = 0.0
     position_price: float = 0.0
+    position_cost: float = 0.0  # cash actually spent to open (incl. commission)
     in_position = False
 
-    for idx, row in df.iterrows():
+    for bar_index, (idx, row) in enumerate(df.iterrows()):
         rsi_val = row.get("RSI_14", 50.0)
         price = float(row["Close"])
         if price <= 0:
             continue
 
+        stopped_out_this_bar = False
         if in_position and position_price > 0:
             loss_pct = (price - position_price) / position_price
             if loss_pct <= -stop_loss_pct:
@@ -133,11 +142,17 @@ def _simulate(
                         "symbol": symbol,
                         "price": price,
                         "reason": "stop_loss",
+                        "bar_index": bar_index,
+                        "shares": position_shares,
+                        "pnl": (proceeds - commission) - position_cost,
+                        "cost_basis": position_cost,
                     }
                 )
                 in_position = False
                 position_shares = 0.0
                 position_price = 0.0
+                position_cost = 0.0
+                stopped_out_this_bar = True
 
         buy_signal = rsi_val < 30
         sell_signal = rsi_val > 70
@@ -151,7 +166,10 @@ def _simulate(
             anlst_sell = rsi_val > 68
             sell_signal = tech_sell and anlst_sell
 
-        if buy_signal and not in_position and cash > 1:
+        # A stop-loss exit locks out re-entry until the *next* bar — otherwise
+        # the same oversold RSI that triggered the crash immediately re-buys
+        # at (near) the same price, making stop_loss_pct a no-op.
+        if buy_signal and not in_position and not stopped_out_this_bar and cash > 1:
             alloc = cash * 0.95
             effective_buy = price * (1 + SLIPPAGE_PCT)
             commission = alloc * COMMISSION_PCT
@@ -159,6 +177,7 @@ def _simulate(
             cash -= alloc + commission
             position_shares = shares
             position_price = effective_buy
+            position_cost = alloc + commission
             in_position = True
             trades.append(
                 {
@@ -167,6 +186,9 @@ def _simulate(
                     "symbol": symbol,
                     "price": price,
                     "reason": "rsi_oversold",
+                    "bar_index": bar_index,
+                    "shares": shares,
+                    "pnl": None,
                 }
             )
 
@@ -182,20 +204,43 @@ def _simulate(
                     "symbol": symbol,
                     "price": price,
                     "reason": "rsi_overbought",
+                    "bar_index": bar_index,
+                    "shares": position_shares,
+                    "pnl": (proceeds - commission) - position_cost,
+                    "cost_basis": position_cost,
                 }
             )
             in_position = False
             position_shares = 0.0
             position_price = 0.0
+            position_cost = 0.0
 
         portfolio_value = cash + (position_shares * price if in_position else 0.0)
         equity_curve.append(portfolio_value)
 
-    if in_position and len(df) > 0:
+    if in_position and len(df) > 0 and float(df["Close"].iloc[-1]) > 0:
+        last_idx = df.index[-1]
         last_price = float(df["Close"].iloc[-1])
         effective_close = last_price * (1 - SLIPPAGE_PCT)
         final_proceeds = position_shares * effective_close
-        cash += final_proceeds - final_proceeds * COMMISSION_PCT
+        final_commission = final_proceeds * COMMISSION_PCT
+        cash += final_proceeds - final_commission
+        # Must be recorded like any other exit — otherwise win_rate/n_trades
+        # silently exclude whatever the still-open position resolved to,
+        # even though the equity curve already reflects its outcome.
+        trades.append(
+            {
+                "date": str(last_idx.date()) if hasattr(last_idx, "date") else str(last_idx),
+                "action": "SELL",
+                "symbol": symbol,
+                "price": last_price,
+                "reason": "period_end",
+                "bar_index": len(df) - 1,
+                "shares": position_shares,
+                "pnl": (final_proceeds - final_commission) - position_cost,
+                "cost_basis": position_cost,
+            }
+        )
         if equity_curve:
             equity_curve[-1] = cash
 
@@ -208,13 +253,18 @@ def run_backtest(
     period: str = "6mo",
     initial_cash: float = 1000.0,
     stop_loss_pct: float = 0.05,
+    _df: pd.DataFrame | None = None,
 ) -> dict:
     """Run a deterministic backtest on real yfinance data.
 
     strategy="simple": RSI<30 -> BUY, RSI>70 -> SELL
     strategy="multi":  same rules + both TECH and ANLST must agree (majority vote sim)
+
+    ``_df`` lets ``compare_strategies`` pass in an already-fetched frame so
+    both strategies run against the exact same bars instead of two separate
+    (and ``fetch_historical`` is fail-silent — possibly divergent) fetches.
     """
-    df = fetch_historical(symbol, period=period)
+    df = _df if _df is not None else fetch_historical(symbol, period=period)
     df = compute_indicators(df)
 
     if len(df) < 15:
@@ -228,6 +278,7 @@ def run_backtest(
             "equity_curve": [initial_cash],
             "benchmark_return_pct": 0.0,
             "vs_benchmark": 0.0,
+            "error": "insufficient historical data (fetch failed or too little history)",
             **metrics,
         }
 
@@ -261,15 +312,25 @@ def run_backtest(
 
 
 def compare_strategies(symbol: str, period: str = "6mo") -> dict:
-    """Run both 'simple' and 'multi' strategies, return both results."""
-    simple_result = run_backtest(symbol, strategy="simple", period=period)
-    multi_result = run_backtest(symbol, strategy="multi", period=period)
-    return {
+    """Run both 'simple' and 'multi' strategies, return both results.
+
+    Fetches the historical data once and reuses it for both runs — two
+    independent fetch_historical() calls could silently diverge (a
+    transient failure on one returns an empty frame while the other
+    succeeds), making "simple" and "multi" not actually comparable.
+    """
+    df = fetch_historical(symbol, period=period)
+    simple_result = run_backtest(symbol, strategy="simple", period=period, _df=df)
+    multi_result = run_backtest(symbol, strategy="multi", period=period, _df=df)
+    out = {
         "symbol": symbol,
         "period": period,
         "simple": simple_result,
         "multi": multi_result,
     }
+    if simple_result.get("error"):
+        out["error"] = simple_result["error"]
+    return out
 
 
 def walk_forward_backtest(

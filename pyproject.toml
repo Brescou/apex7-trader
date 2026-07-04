@@ -9,6 +9,7 @@ dependencies = [
     "dash>=4.0.0",
     "dash-bootstrap-components>=2.0.4",
     "dash-mantine-components>=2.0.0",
+    "fastapi>=0.138.1",
     "httpx>=0.28.1",
     "langgraph>=1.0.10",
     "langgraph-cli[inmem]>=0.4.14",
@@ -17,6 +18,7 @@ dependencies = [
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.2",
     "tweepy>=4.16.0",
+    "uvicorn[standard]>=0.41.0",
     "yfinance>=1.2.0",
 ]
 
@@ -48,3 +50,12 @@ ignore = ["E501"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+
+[tool.coverage.run]
+# CI's `--cov=.` measures the whole repo — without this, near-100%-covered
+# test files themselves count toward the numerator and denominator,
+# inflating the reported percentage well above the real application
+# coverage (Review Finding: 80% reported vs. 67% actual application code
+# coverage). Excluding tests/ makes --cov-fail-under=60 check the number
+# it's meant to check.
+omit = ["tests/*"]

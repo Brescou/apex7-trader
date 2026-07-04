@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
+import agents.shared.modes as modes_mod
 import agents.shared.nodes as nodes
 from agents.shared.nodes import (
     _no_llm_mode,
@@ -45,7 +46,10 @@ def test_runtime_mode_default_live() -> None:
 
 
 def test_set_paper_disables_sim(monkeypatch) -> None:
-    monkeypatch.setattr(nodes, "_write_env_var", lambda *a, **kw: None)
+    # set_paper_mode/set_simulation_mode resolve _write_env_var in their own
+    # module's globals (agents.shared.modes), not nodes.py's re-exported
+    # binding — patching the latter would silently miss it.
+    monkeypatch.setattr(modes_mod, "_write_env_var", lambda *a, **kw: None)
     set_simulation_mode(True)
     assert get_runtime_mode() == "sim"
     set_paper_mode(True)
@@ -55,7 +59,7 @@ def test_set_paper_disables_sim(monkeypatch) -> None:
 
 
 def test_set_sim_disables_paper(monkeypatch) -> None:
-    monkeypatch.setattr(nodes, "_write_env_var", lambda *a, **kw: None)
+    monkeypatch.setattr(modes_mod, "_write_env_var", lambda *a, **kw: None)
     set_paper_mode(True)
     assert get_runtime_mode() == "paper"
     set_simulation_mode(True)
@@ -128,6 +132,7 @@ def test_paper_trade_persists_with_paper_source(tmp_db) -> None:
         "emotion": "FOCUSED",
         "prices": {"AAPL": 150.0},
         "known_patterns": [],
+        "execution_result": {"success": True, "shares": 0.5, "price": 150.0, "amount": 75.0},
     }
     make_save_memory_node(p)(state)
 

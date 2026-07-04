@@ -12,6 +12,9 @@ from market_data.caches import (
     _ohlcv_lock,
     _sparkline_cache,
     _sparkline_lock,
+    record_yf_failure,
+    record_yf_success,
+    yf_circuit_open,
 )
 from market_data.compat import yf
 
@@ -27,24 +30,32 @@ def fetch_sparkline(symbol: str) -> list[dict]:
         cached = _sparkline_cache.get(symbol)
         if cached is not None and (now - cached["ts"]) < SPARKLINE_CACHE_SEC:
             return cached["data"]
+        stale = cached["data"] if cached is not None else []
+        if yf_circuit_open():
+            return stale
 
-        try:
-            hist = yf.Ticker(symbol).history(period="1d", interval="1h")
-            if hist.empty:
-                return []
-            result = []
-            for ts_idx, row in hist.iterrows():
-                result.append(
-                    {
-                        "time": ts_idx.strftime("%H:%M"),
-                        "price": round(float(row["Close"]), 2),
-                        "open": round(float(row["Open"]), 2),
-                    }
-                )
-            _sparkline_cache[symbol] = {"data": result, "ts": now}
-            return result
-        except Exception:
-            return []
+    # Network I/O outside the lock — one lock per module would otherwise
+    # serialize every sparkline request (one per watchlist row, every tick)
+    # behind a single global lock (Review Finding).
+    result = stale
+    try:
+        hist = yf.Ticker(symbol).history(period="1d", interval="1h")
+        record_yf_success()
+        if not hist.empty:
+            result = [
+                {
+                    "time": ts_idx.strftime("%H:%M"),
+                    "price": round(float(row["Close"]), 2),
+                    "open": round(float(row["Open"]), 2),
+                }
+                for ts_idx, row in hist.iterrows()
+            ]
+    except Exception:
+        record_yf_failure()
+
+    with _sparkline_lock:
+        _sparkline_cache[symbol] = {"data": result, "ts": time.time()}
+    return result
 
 
 def fetch_comparison(symbols: list[str], period: str = "1mo") -> dict:
@@ -59,26 +70,34 @@ def fetch_comparison(symbols: list[str], period: str = "1mo") -> dict:
         cached = _comparison_cache.get(cache_key)
         if cached is not None and (now - cached["ts"]) < COMPARISON_CACHE_SEC:
             return cached["data"]
+        stale = cached["data"] if cached is not None else {}
+        if yf_circuit_open():
+            return stale
 
-        try:
-            result: dict = {}
-            for sym in symbols:
-                hist = yf.Ticker(sym).history(period=period, interval="1d")
-                if hist.empty:
-                    continue
-                closes = hist["Close"].tolist()
-                dates = hist.index.strftime("%Y-%m-%d").tolist()
-                first = closes[0]
-                if first == 0:
-                    continue
-                result[sym] = [
-                    {"date": d_str, "value": round(c / first * 100.0, 4)}
-                    for d_str, c in zip(dates, closes)
-                ]
-            _comparison_cache[cache_key] = {"data": result, "ts": now}
-            return result
-        except Exception:
-            return {}
+    result: dict = dict(stale)
+    try:
+        fetched: dict = {}
+        for sym in symbols:
+            hist = yf.Ticker(sym).history(period=period, interval="1d")
+            if hist.empty:
+                continue
+            closes = hist["Close"].tolist()
+            dates = hist.index.strftime("%Y-%m-%d").tolist()
+            first = closes[0]
+            if first == 0:
+                continue
+            fetched[sym] = [
+                {"date": d_str, "value": round(c / first * 100.0, 4)}
+                for d_str, c in zip(dates, closes)
+            ]
+        record_yf_success()
+        result = fetched
+    except Exception:
+        record_yf_failure()
+
+    with _comparison_lock:
+        _comparison_cache[cache_key] = {"data": result, "ts": time.time()}
+    return result
 
 
 def fetch_ohlcv(symbol: str, period: str = "1mo") -> list[dict]:
@@ -93,23 +112,29 @@ def fetch_ohlcv(symbol: str, period: str = "1mo") -> list[dict]:
         cached = _ohlcv_cache.get(cache_key)
         if cached is not None and (now - cached["ts"]) < OHLCV_CACHE_SEC:
             return cached["data"]
-        try:
-            hist = yf.Ticker(symbol).history(period=period, interval="1d")
-            if hist.empty:
-                return []
-            result = []
-            for ts_idx, row in hist.iterrows():
-                result.append(
-                    {
-                        "date": ts_idx.strftime("%Y-%m-%d"),
-                        "open": round(float(row["Open"]), 4),
-                        "high": round(float(row["High"]), 4),
-                        "low": round(float(row["Low"]), 4),
-                        "close": round(float(row["Close"]), 4),
-                        "volume": int(row["Volume"]),
-                    }
-                )
-            _ohlcv_cache[cache_key] = {"data": result, "ts": now}
-            return result
-        except Exception:
-            return []
+        stale = cached["data"] if cached is not None else []
+        if yf_circuit_open():
+            return stale
+
+    result = stale
+    try:
+        hist = yf.Ticker(symbol).history(period=period, interval="1d")
+        record_yf_success()
+        if not hist.empty:
+            result = [
+                {
+                    "date": ts_idx.strftime("%Y-%m-%d"),
+                    "open": round(float(row["Open"]), 4),
+                    "high": round(float(row["High"]), 4),
+                    "low": round(float(row["Low"]), 4),
+                    "close": round(float(row["Close"]), 4),
+                    "volume": int(row["Volume"]),
+                }
+                for ts_idx, row in hist.iterrows()
+            ]
+    except Exception:
+        record_yf_failure()
+
+    with _ohlcv_lock:
+        _ohlcv_cache[cache_key] = {"data": result, "ts": time.time()}
+    return result

@@ -43,7 +43,10 @@ def _post_payload(payload: dict[str, Any]) -> None:
     try:
         httpx.post(url, json=payload, timeout=5.0)
     except Exception as exc:
-        logger.debug("Discord webhook failed: %s", exc)
+        # httpx exceptions (e.g. HTTPStatusError, connect errors) can embed
+        # the request URL in their string repr — the Discord webhook URL
+        # carries a bearer token in its path, so redact it before logging.
+        logger.debug("Discord webhook failed: %s", str(exc).replace(url, "<redacted>"))
 
 
 def send_discord_alert(

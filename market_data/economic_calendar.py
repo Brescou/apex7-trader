@@ -17,7 +17,10 @@ _FRED_RELEASE_IDS: dict[int, str] = {
 
 # ⚠️ FALLBACK schedule — used when FRED is unavailable (offline / rate-limited)
 # and as the source of truth for FOMC dates (not a FRED release).
-# UPDATE QUARTERLY — last verified: 2026-Q2. If today > last date, a
+# FOMC dates are the announcement day (2nd day) of each published 2026
+# meeting: Jan 27-28, Mar 17-18, Apr 28-29, Jun 16-17, Jul 28-29, Sep 15-16,
+# Oct 27-28, Dec 8-9.
+# UPDATE QUARTERLY — last verified: 2026-Q3. If today > last date, a
 # logger.warning fires automatically.
 _SCHEDULED_MACRO_EVENTS: list[dict[str, str]] = [
     {"date": "2026-01-09", "event": "NFP", "importance": "high"},
@@ -30,9 +33,9 @@ _SCHEDULED_MACRO_EVENTS: list[dict[str, str]] = [
     {"date": "2026-03-18", "event": "FOMC", "importance": "high"},
     {"date": "2026-04-03", "event": "NFP", "importance": "high"},
     {"date": "2026-04-14", "event": "CPI", "importance": "high"},
+    {"date": "2026-04-29", "event": "FOMC", "importance": "high"},
     {"date": "2026-05-08", "event": "NFP", "importance": "high"},
     {"date": "2026-05-13", "event": "CPI", "importance": "high"},
-    {"date": "2026-05-07", "event": "FOMC", "importance": "high"},
     {"date": "2026-06-05", "event": "NFP", "importance": "high"},
     {"date": "2026-06-10", "event": "CPI", "importance": "high"},
     {"date": "2026-06-17", "event": "FOMC", "importance": "high"},
@@ -46,12 +49,12 @@ _SCHEDULED_MACRO_EVENTS: list[dict[str, str]] = [
     {"date": "2026-09-16", "event": "FOMC", "importance": "high"},
     {"date": "2026-10-02", "event": "NFP", "importance": "high"},
     {"date": "2026-10-14", "event": "CPI", "importance": "high"},
+    {"date": "2026-10-28", "event": "FOMC", "importance": "high"},
     {"date": "2026-11-06", "event": "NFP", "importance": "high"},
     {"date": "2026-11-12", "event": "CPI", "importance": "high"},
-    {"date": "2026-11-04", "event": "FOMC", "importance": "high"},
     {"date": "2026-12-04", "event": "NFP", "importance": "high"},
+    {"date": "2026-12-09", "event": "FOMC", "importance": "high"},
     {"date": "2026-12-10", "event": "CPI", "importance": "high"},
-    {"date": "2026-12-16", "event": "FOMC", "importance": "high"},
 ]
 
 

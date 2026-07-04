@@ -24,8 +24,12 @@ def _hold_state(prices: dict[str, float]) -> dict:
     }
 
 
-def test_trailing_stop_after_peak_drawdown() -> None:
-    """Liquidate when price falls far enough below the stored high watermark."""
+def test_trailing_stop_after_peak_drawdown(tmp_db) -> None:
+    """Liquidate when price falls far enough below the stored high watermark.
+
+    A real trailing-stop fire persists a ``trades`` row (Batch B) — needs
+    ``tmp_db`` so that write doesn't land in the project's real trades.db.
+    """
     portfolio = Portfolio()
     with portfolio._lock:
         portfolio.positions["AAPL"] = {"shares": 10.0, "avg_price": 100.0}
@@ -39,8 +43,13 @@ def test_trailing_stop_after_peak_drawdown() -> None:
     assert any("[TRAILING STOP]" in e.get("message", "") for e in out["log"])
 
 
-def test_trailing_stop_not_triggered_below_threshold() -> None:
-    """No exit when drawdown from high is below STOP_LOSS_PCT."""
+def test_trailing_stop_not_triggered_below_threshold(tmp_db) -> None:
+    """No exit when drawdown from high is below STOP_LOSS_PCT.
+
+    This position is also +70% vs avg_price, which clears TAKE_PROFIT_PCT —
+    the take-profit guard fires and persists a ``trades`` row (Batch B),
+    hence ``tmp_db`` even though the trailing stop itself doesn't trigger.
+    """
     portfolio = Portfolio()
     with portfolio._lock:
         portfolio.positions["AAPL"] = {"shares": 10.0, "avg_price": 100.0}

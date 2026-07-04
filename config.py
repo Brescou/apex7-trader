@@ -30,6 +30,7 @@ MAX_PYRAMID_LAYERS = int(os.getenv("MAX_PYRAMID_LAYERS", "3"))
 AGENT_INTERVAL = 90
 
 SIMULATION_MODE = os.getenv("SIMULATION_MODE", "false").lower() == "true"
+PAPER_MODE = os.getenv("PAPER_MODE", "false").lower() == "true"
 SIM_VOLATILITY = float(os.getenv("SIM_VOLATILITY", "0.02"))  # 2% par défaut
 SIM_DRIFT = float(os.getenv("SIM_DRIFT", "0.0001"))  # léger biais haussier
 

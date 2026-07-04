@@ -184,7 +184,12 @@ def _llm(
             pass
         _set_llm_degradation("circuit_breaker")
         return ""
-    except (anthropic.APIStatusError, anthropic.APITimeoutError, httpx.TimeoutException) as e:
+    except (
+        anthropic.APIStatusError,
+        anthropic.APITimeoutError,
+        anthropic.APIConnectionError,
+        httpx.TimeoutException,
+    ) as e:
         with _circuit_breaker_lock:
             _circuit_breaker["consecutive_failures"] += 1
             n = _circuit_breaker["consecutive_failures"]
@@ -211,4 +216,6 @@ def _llm(
         _set_llm_degradation("circuit_breaker")
         return ""
     _clear_llm_degradation()
-    return next((b.text for b in resp.content if hasattr(b, "text") and b.text), "")
+    # Concatenate every text block — with web_search, the final JSON answer
+    # can land in a later block, not the first (e.g. after search-summary text).
+    return "".join(b.text for b in resp.content if hasattr(b, "text") and b.text)

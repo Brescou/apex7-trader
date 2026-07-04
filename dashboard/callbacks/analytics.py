@@ -280,14 +280,20 @@ def _mode_trade_stats(mode: str) -> dict:
     """
     rows = _db_read_at(
         mode_db_path(mode),
-        "SELECT timestamp, symbol, action, price, portfolio_value_after "
+        "SELECT timestamp, symbol, action, price, shares, portfolio_value_after "
         "FROM trades ORDER BY timestamp ASC",
     )
     n_trades = len(rows)
-    buys: dict[str, float] = {}
+    # Share-weighted running cost basis per symbol — a single float per
+    # symbol (overwritten on every pyramided BUY, popped entirely on the
+    # first SELL) mispriced pyramided positions and broke on a partial
+    # sell_pct < 100 (the next SELL of the same, still-open position found
+    # no matching entry left).
+    open_shares: dict[str, float] = {}
+    open_cost: dict[str, float] = {}
     pnls: list[float] = []
     last_value = 0.0
-    for ts, symbol, action, price, pv in rows:
+    for ts, symbol, action, price, shares, pv in rows:
         if pv not in (None, "", 0):
             try:
                 last_value = float(pv)
@@ -298,12 +304,26 @@ def _mode_trade_stats(mode: str) -> dict:
             px = float(price)
         except (TypeError, ValueError):
             continue
+        try:
+            sh = float(shares or 0.0)
+        except (TypeError, ValueError):
+            sh = 0.0
         if au == "BUY":
-            buys[symbol] = px
-        elif au == "SELL" and symbol in buys:
-            bp = buys.pop(symbol)
-            if bp > 0:
-                pnls.append((px - bp) / bp)
+            open_shares[symbol] = open_shares.get(symbol, 0.0) + sh
+            open_cost[symbol] = open_cost.get(symbol, 0.0) + sh * px
+        elif au == "SELL" and open_shares.get(symbol, 0.0) > 0:
+            os_ = open_shares[symbol]
+            oc_ = open_cost[symbol]
+            avg_cost = oc_ / os_ if os_ > 0 else 0.0
+            if avg_cost > 0:
+                pnls.append((px - avg_cost) / avg_cost)
+            sold = min(sh, os_) if sh > 0 else os_
+            frac = sold / os_ if os_ > 0 else 1.0
+            open_cost[symbol] = oc_ * (1 - frac)
+            open_shares[symbol] = os_ - sold
+            if open_shares[symbol] <= 1e-9:
+                open_shares[symbol] = 0.0
+                open_cost[symbol] = 0.0
     wins = sum(1 for p in pnls if p > 0)
     win_rate = (wins / len(pnls) * 100.0) if pnls else 0.0
     avg_pnl = (statistics.mean(pnls) * 100.0) if pnls else 0.0
@@ -759,6 +779,7 @@ def _analytics_refresh(_, __, active_tab):
 
     # Win rate: for each SELL, find the most recent prior BUY of the same symbol
     pnl_vals: list[float] = []
+    ticker_pnl: dict[str, float] = defaultdict(float)
     for s in sells:
         sym = s.get("symbol")
         sell_price = s.get("price", 0.0)
@@ -767,9 +788,20 @@ def _analytics_refresh(_, __, active_tab):
             b for b in buys if b.get("symbol") == sym and b.get("timestamp", "") <= sell_ts
         ]
         if prior_buys and sell_price > 0:
-            buy_price = prior_buys[-1].get("price", sell_price)
+            # _load_trades_db() orders rows DESC (most recent first), so
+            # prior_buys[0] is the most recent BUY before this SELL —
+            # prior_buys[-1] would be the OLDEST BUY of the symbol's whole
+            # history instead, mispairing every SELL against the wrong entry.
+            buy_price = prior_buys[0].get("price", sell_price)
             if buy_price > 0:
                 pnl_vals.append((sell_price - buy_price) / buy_price)
+                # Real dollar P&L (shares sold x price delta) — reuses the
+                # same buy/sell pairing above. "P&L by Ticker" used to sum
+                # each SELL's gross amount_usd (cash received, always
+                # positive) instead of gain/loss, so a losing trade always
+                # rendered as a green bar (Review Finding).
+                shares_sold = float(s.get("shares", 0) or 0)
+                ticker_pnl[sym or "UNK"] += shares_sold * (sell_price - buy_price)
     wins = sum(1 for p in pnl_vals if p > 0)
     win_rate = (wins / len(pnl_vals) * 100) if pnl_vals else 0.0
     avg_pnl = statistics.mean(pnl_vals) * 100 if pnl_vals else 0.0
@@ -837,11 +869,8 @@ def _analytics_refresh(_, __, active_tab):
         margin=dict(l=40, r=20, t=30, b=40),
     )
 
-    # 1. P&L by ticker (bar)
-    ticker_pnl: dict[str, float] = defaultdict(float)
-    for t in sells:
-        sym = t.get("symbol") or "UNK"
-        ticker_pnl[sym] += t.get("amount_usd", 0)
+    # 1. P&L by ticker (bar) — ticker_pnl (real gain/loss) computed above,
+    # alongside pnl_vals, from the same buy/sell pairing.
     sorted_tickers = sorted(ticker_pnl.items(), key=lambda x: x[1])
     bar_colors = [GREEN if v >= 0 else RED for _, v in sorted_tickers]
     fig1 = go.Figure(

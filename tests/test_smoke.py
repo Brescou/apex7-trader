@@ -78,6 +78,12 @@ def test_multi_graph_build():
         "analyst",
         "risk_manager",
         "macro_watcher",
+        # economist/geopolitician are the 5th/6th specialists (added after
+        # the original 4) — a prior version of this list never checked for
+        # them, so removing either from build_multi_graph() would not have
+        # failed any test (Review Finding: coverage gap).
+        "economist",
+        "geopolitician",
         "arbitrate",
         "risk_check",
         "execute",
@@ -89,6 +95,16 @@ def test_multi_graph_build():
 
 
 def test_simulation_cycle():
+    """A full cycle writes trades/pending_evaluations/cycle_states — redirect
+    ``_get_db_path`` to a temp file first so it never touches the project's
+    real ``trades_sim.db``. Fixture-free (no ``tmp_db``) so the legacy
+    ``python tests/test_smoke.py`` runner keeps working — same pattern as
+    ``test_sqlite_schema`` above.
+    """
+    import tempfile
+    from pathlib import Path
+
+    import agents.shared.db as db_mod
     from agents.multi import build_multi_graph
     from agents.shared.nodes import _sim_mode
     from core.data import Portfolio
@@ -129,7 +145,17 @@ def test_simulation_cycle():
         "arbitration": None,
     }
 
-    result = g.invoke(initial)
+    orig_get_db_path = db_mod._get_db_path
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "sim_cycle.db"
+        db_mod._get_db_path = lambda: db_path
+        try:
+            db_mod._db_initialized_paths.discard(str(db_path))
+            result = g.invoke(initial)
+        finally:
+            db_mod._get_db_path = orig_get_db_path
+            db_mod._db_initialized_paths.discard(str(db_path))
+
     assert result is not None, "graph.invoke returned None"
     assert "alive" in result, "result missing 'alive' key"
     assert "log" in result, "result missing 'log' key"
@@ -216,16 +242,37 @@ def test_sqlite_schema():
         assert table in tables, f"Missing table '{table}'. Found: {tables}"
 
 
-def test_agent_memory_has_trace_id(tmp_db):
+def test_agent_memory_has_trace_id():
     """Native schema must include ``trace_id`` so tests need no ALTER workaround.
 
     Regression guard for Review v5 Finding 5.2 — the previous schema lacked
     the column, which silently broke ``evaluate_pending_trades``.
+
+    Avoids the ``tmp_db`` pytest fixture (same temp-DB redirect pattern as
+    ``test_sqlite_schema`` above) so this guard also runs under the legacy
+    fixture-free ``python tests/test_smoke.py`` runner — the prior version
+    required ``tmp_db`` and was therefore silently absent from that runner's
+    test list (Review Finding).
     """
     import sqlite3
+    import tempfile
+    from pathlib import Path
 
-    with sqlite3.connect(str(tmp_db)) as con:
-        cols = {r[1] for r in con.execute("PRAGMA table_info(agent_memory)").fetchall()}
+    import agents.shared.db as db_mod
+
+    orig_get_db_path = db_mod._get_db_path
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "trace_id_check.db"
+        db_mod._get_db_path = lambda: db_path
+        try:
+            db_mod._db_initialized_paths.discard(str(db_path))
+            db_mod._ensure_db()
+            with sqlite3.connect(db_path) as con:
+                cols = {r[1] for r in con.execute("PRAGMA table_info(agent_memory)").fetchall()}
+        finally:
+            db_mod._get_db_path = orig_get_db_path
+            db_mod._db_initialized_paths.discard(str(db_path))
+
     assert "trace_id" in cols, (
         "agent_memory schema must include trace_id natively — "
         "remove any ALTER TABLE workaround in test fixtures."
@@ -233,17 +280,34 @@ def test_agent_memory_has_trace_id(tmp_db):
 
 
 def test_app_import():
+    """``create_app()`` calls ``start_controller()`` — a real Portfolio + a
+    live agent thread + a postmortem thread that runs forever, all pointed
+    at the real project ``trades_sim.db`` (default sim mode). Mocked so this
+    smoke test verifies Dash wiring without spawning a background trading
+    loop for the rest of the process.
+    """
+    from unittest.mock import patch
+
     from dashboard import create_app
 
-    a = create_app()
+    with patch("dashboard.controller.start_controller"):
+        a = create_app()
     assert a is not None, "create_app() returned None"
 
 
 def test_main_entrypoint_module():
-    """Import ``main`` so entrypoint wiring is covered (CI coverage threshold)."""
-    import importlib
+    """Import ``main`` so entrypoint wiring is covered (CI coverage threshold).
 
-    main_mod = importlib.import_module("main")
+    Same ``start_controller`` mock as ``test_app_import`` — importing
+    ``main`` calls ``create_app()`` too, and ``create_app``'s
+    ``_app_initialized`` guard means only the *first* call of either test
+    actually reaches ``start_controller``, so both mock it defensively.
+    """
+    import importlib
+    from unittest.mock import patch
+
+    with patch("dashboard.controller.start_controller"):
+        main_mod = importlib.import_module("main")
     assert main_mod.app is not None
 
 
@@ -309,6 +373,7 @@ if __name__ == "__main__":
         ("test_backtest_run", test_backtest_run),
         ("test_rsi_unified_backtest_and_live", test_rsi_unified_backtest_and_live),
         ("test_sqlite_schema", test_sqlite_schema),
+        ("test_agent_memory_has_trace_id", test_agent_memory_has_trace_id),
         ("test_app_import", test_app_import),
         ("test_main_entrypoint_module", test_main_entrypoint_module),
     ]

@@ -115,6 +115,63 @@ def test_fear_greed_fail_silent() -> None:
     assert out is None
 
 
+def test_fred_walks_back_past_missing_value() -> None:
+    """A daily series' most recent observation is often ``.`` (market
+    holiday / delayed release) — ``fetch_fred_latest`` must walk back to the
+    first non-missing observation instead of treating the whole fetch as
+    "no data" (requests limit=5, not limit=1).
+    """
+    payload = {
+        "observations": [
+            {"date": "2026-01-16", "value": "."},
+            {"date": "2026-01-15", "value": "4.25"},
+        ],
+    }
+    ctx = _httpx_client_context_mock(json_data=payload)
+    with patch("core.external_data.httpx.Client", return_value=ctx):
+        out = external_data.fetch_fred_latest("DGS10")
+
+    assert out is not None
+    assert out["value"] == 4.25
+    assert out["date"] == "2026-01-15"
+
+
+def test_fred_serves_stale_value_on_transient_failure() -> None:
+    """A previously-cached good value must not be clobbered by ``None`` on a
+    transient failure — instead served stale while the retry cooldown is
+    active, so a single dropped request doesn't blank the macro bar for a
+    full TTL.
+    """
+    good_payload = {"observations": [{"date": "2026-01-15", "value": "4.25"}]}
+    ctx_ok = _httpx_client_context_mock(json_data=good_payload)
+    with patch("core.external_data.httpx.Client", return_value=ctx_ok):
+        first = external_data.fetch_fred_latest("DGS10", max_cache_sec=0)
+    assert first is not None and first["value"] == 4.25
+
+    ctx_fail = _httpx_client_context_mock(get_side_effect=httpx.HTTPError("boom"))
+    with patch("core.external_data.httpx.Client", return_value=ctx_fail):
+        second = external_data.fetch_fred_latest("DGS10", max_cache_sec=0)
+
+    assert second == first, "a transient failure must still serve the last known-good value"
+
+
+def test_fear_greed_serves_stale_value_on_transient_failure() -> None:
+    """Same negative-caching guard as FRED: a transient CNN timeout must not
+    blank a previously-good Fear & Greed reading for the full TTL.
+    """
+    good_payload = {"fear_and_greed": {"score": 42.7, "rating": "Fear"}}
+    ctx_ok = _httpx_client_context_mock(json_data=good_payload)
+    with patch("core.external_data.httpx.Client", return_value=ctx_ok):
+        first = external_data.fetch_fear_greed(max_cache_sec=0)
+    assert first is not None and first["score"] == 43
+
+    ctx_fail = _httpx_client_context_mock(get_side_effect=RuntimeError("offline"))
+    with patch("core.external_data.httpx.Client", return_value=ctx_fail):
+        second = external_data.fetch_fear_greed(max_cache_sec=0)
+
+    assert second == first, "a transient failure must still serve the last known-good value"
+
+
 def test_earnings_calendar() -> None:
     """``fetch_earnings_calendar`` exposes ``earnings_date`` and ``days_until``."""
     today = date.today()

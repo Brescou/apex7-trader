@@ -56,6 +56,36 @@ def test_build_rows_uses_fred_events():
     assert macro_rows[0]["event_date"] == date.fromisoformat(soon)
 
 
+def test_static_fomc_dates_match_the_real_2026_schedule():
+    """The static list is merged into the calendar even when FRED is up, so
+    its FOMC dates are the only source of truth (FRED has no FOMC release
+    feed) — they must match the Fed's actual published 2026 meeting
+    calendar (announcement day = 2nd day of each 2-day meeting):
+    Jan 27-28, Mar 17-18, Apr 28-29, Jun 16-17, Jul 28-29, Sep 15-16,
+    Oct 27-28, Dec 8-9. A stale/wrong FOMC date silently misleads the
+    macro-watcher agent and the terminal's economic calendar.
+    """
+    fomc_dates = sorted(e["date"] for e in ec._SCHEDULED_MACRO_EVENTS if e["event"] == "FOMC")
+    assert fomc_dates == [
+        "2026-01-28",
+        "2026-03-18",
+        "2026-04-29",
+        "2026-06-17",
+        "2026-07-29",
+        "2026-09-16",
+        "2026-10-28",
+        "2026-12-09",
+    ]
+
+
+def test_static_macro_events_are_chronologically_sorted():
+    """A copy-paste error (e.g. wrong month) tends to also break ordering —
+    guard against the list silently drifting out of chronological order.
+    """
+    dates = [e["date"] for e in ec._SCHEDULED_MACRO_EVENTS]
+    assert dates == sorted(dates)
+
+
 def test_fetch_fred_release_dates_parses_and_filters():
     ext._fred_release_cache.clear()
     today = date.today()

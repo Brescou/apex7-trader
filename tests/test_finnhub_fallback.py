@@ -15,8 +15,10 @@ from market_data.finnhub import _is_plain_ticker, fetch_finnhub_quote, fetch_fin
 @pytest.fixture(autouse=True)
 def clear_finnhub_cache():
     fh._fh_cache.clear()
+    fh._missing_key_warned = False
     yield
     fh._fh_cache.clear()
+    fh._missing_key_warned = False
 
 
 # ── _is_plain_ticker ──────────────────────────────────────────────────────────
@@ -67,7 +69,7 @@ def test_quote_skips_special_symbols():
 
 
 def test_quote_returns_none_on_zero_price():
-    with patch.object(fh, "_api_key", return_value=""):
+    with patch.object(fh, "_api_key", return_value="test-key"):
         with patch("market_data.finnhub.httpx.Client") as mock_client_cls:
             mock_resp = MagicMock()
             mock_resp.json.return_value = {"c": 0, "d": 0, "dp": 0}
@@ -85,7 +87,7 @@ def test_quote_returns_none_on_network_error():
 
 
 def test_quote_cached_second_call_no_http():
-    with patch.object(fh, "_api_key", return_value=""):
+    with patch.object(fh, "_api_key", return_value="test-key"):
         with patch("market_data.finnhub.httpx.Client") as mock_client_cls:
             mock_resp = MagicMock()
             mock_resp.json.return_value = _GOOD_PAYLOAD
@@ -96,6 +98,38 @@ def test_quote_cached_second_call_no_http():
             fetch_finnhub_quote("AAPL")  # second call — must hit cache
 
     assert mock_client_cls.call_count == 1
+
+
+# ── Missing API key: fallback must not silently no-op ────────────────────────
+
+
+def test_quote_skips_network_call_without_api_key():
+    """Without FINNHUB_API_KEY, Finnhub's real /quote endpoint 401s on every
+    request — attempting it is pure wasted latency. The fix short-circuits
+    before the network call instead of hitting it and swallowing a 401.
+    """
+    with patch.object(fh, "_api_key", return_value=""):
+        with patch("market_data.finnhub.httpx.Client") as mock_client_cls:
+            q = fetch_finnhub_quote("AAPL")
+    mock_client_cls.assert_not_called()
+    assert q is None
+
+
+def test_missing_api_key_warns_once_per_process():
+    """A missing key must be surfaced above debug level (Review Finding: the
+    fallback was a silent no-op with no operator-visible signal) — but only
+    once, since this path is only exercised while yfinance is already down
+    and would otherwise flood the logs exactly when they matter most.
+    """
+    fh._missing_key_warned = False
+    with patch.object(fh, "_api_key", return_value=""):
+        with patch("market_data.finnhub.httpx.Client"):
+            with patch.object(fh.logger, "warning") as mock_warn:
+                fetch_finnhub_quote("AAPL")
+                fh._fh_cache.clear()  # force past the per-symbol TTL cache
+                fetch_finnhub_quote("MSFT")
+    assert mock_warn.call_count == 1
+    fh._missing_key_warned = False
 
 
 # ── fetch_finnhub_quotes batch ───────────────────────────────────────────────
