@@ -7,7 +7,6 @@ Legacy:    uv run python tests/test_terminal.py
 import os
 import sys
 import traceback
-from datetime import date
 from unittest.mock import patch
 
 import numpy as np
@@ -18,28 +17,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-def _dash_collect_text(node) -> list[str]:
-    """Flatten Dash ``html`` component tree into text fragments."""
-    if node is None:
-        return []
-    if isinstance(node, str):
-        return [node]
-    if isinstance(node, (list, tuple)):
-        out: list[str] = []
-        for ch in node:
-            out.extend(_dash_collect_text(ch))
-        return out
-    children = getattr(node, "children", None)
-    if children is None:
-        return []
-    if isinstance(children, (list, tuple)):
-        out: list[str] = []
-        for ch in children:
-            out.extend(_dash_collect_text(ch))
-        return out
-    return _dash_collect_text(children)
 
 
 def _reset_macro_cache() -> None:
@@ -472,47 +449,6 @@ def test_correlation_matrix_multiindex(monkeypatch) -> None:
     assert len(m) == 2 and all(len(r) == 2 for r in m)
     assert m[0][0] == pytest.approx(1.0)
     assert m[1][1] == pytest.approx(1.0)
-
-
-def test_fear_greed_in_macro() -> None:
-    """Macro bar callback surfaces CNN Fear & Greed score when mocked."""
-    import dashboard.callbacks.terminal.macro as term
-
-    macro_stub = {
-        "updated_at": "",
-        "VIX": {"price": 18.0, "change_pct": 1.0, "direction": "up"},
-        "SPY": {"price": 500.0, "change_pct": 0.5, "direction": "up"},
-        "DXY": {"price": 104.0, "change_pct": -0.1, "direction": "down"},
-    }
-    fed_stub = {"value": 4.5, "date": "2026-01-01"}
-
-    with patch.object(term, "fetch_fear_greed", return_value={"score": 72, "label": "Greed"}):
-        with patch.object(term, "fetch_fred_latest", return_value=fed_stub):
-            with patch.object(term, "fetch_macro", return_value=macro_stub):
-                with patch.object(term, "fetch_sparkline", return_value=[]):
-                    children = term._update_macro_bar(0)
-    flat = " ".join(_dash_collect_text(children))
-    assert "F&G: 72" in flat
-    assert "Greed" in flat
-
-
-def test_earnings_calendar_in_terminal() -> None:
-    """Economic calendar callback shows mocked earnings line from watchlist."""
-    import dashboard.callbacks.terminal.macro as term
-
-    row = {
-        "kind": "earnings",
-        "event_date": date(2030, 6, 10),
-        "days_until": 3,
-        "event": "EARNINGS",
-        "symbol": "NVDA",
-    }
-
-    with patch.object(term, "build_economic_calendar_rows", return_value=[row]):
-        out = term._update_economic_calendar(0, ["NVDA", "AAPL"])
-    text = " ".join(_dash_collect_text(out))
-    assert "NVDA" in text
-    assert "earnings" in text.lower()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

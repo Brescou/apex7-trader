@@ -76,7 +76,7 @@ jobs:
       # flake8-bandit security scan. The three ignored rules cover intentional
       # patterns in this repo: S110 (fail-silent try/except/pass for Discord and
       # yfinance), S311 (non-crypto random for the price simulation/slippage),
-      # and S104 (binding 0.0.0.0 for the containerized dashboard). This still
+      # and S104 (binding 0.0.0.0 for the containerized FastAPI backend). This still
       # catches new issues like hardcoded secrets or SQL injection.
       - name: Security scan (ruff flake8-bandit)
         run: uv run ruff check . --select S --ignore S110,S311,S104 --exclude tests

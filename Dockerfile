@@ -17,7 +17,7 @@ COPY --from=builder --chown=apex7:apex7 /app /app
 USER apex7
 ENV ANTHROPIC_API_KEY=""
 ENV PYTHONUNBUFFERED=1
-EXPOSE 8050
+EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -sf http://localhost:8050/health || exit 1
+    CMD curl -sf http://localhost:8000/health || exit 1
 CMD ["uv", "run", "python", "main.py"]

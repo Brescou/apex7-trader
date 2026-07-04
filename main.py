@@ -1,4 +1,12 @@
+"""APEX-7 entrypoint — runs the FastAPI backend (api/main.py) via uvicorn.
+
+For local development with hot reload, prefer:
+    uvicorn api.main:app --reload --port 8000
+"""
+
 import logging
+
+import uvicorn
 
 logging.basicConfig(
     level=logging.INFO,
@@ -6,13 +14,9 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-from dashboard import create_app  # noqa: E402
-
-app = create_app()
-
 
 def main():
-    app.run(debug=False, host="0.0.0.0", port=8050)
+    uvicorn.run("api.main:app", host="0.0.0.0", port=8000)
 
 
 if __name__ == "__main__":

@@ -70,9 +70,7 @@ PORTFOLIO_SAVE_ENABLED = os.getenv("PORTFOLIO_SAVE_ENABLED", "true").lower() == 
 # Discord webhook (optional — ``core.notifications``)
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 
-# Dashboard auth (optional) — set DASHBOARD_PASSWORD to gate the UI behind a
-# login page (``/health`` stays open for monitoring). DASHBOARD_SECRET_KEY
-# keeps session cookies valid across restarts; without it a random key is
-# generated per process and every restart logs users out.
+# API auth (optional) — set DASHBOARD_PASSWORD to require a matching Bearer
+# token on REST routes and a ?token= query param on the /ws handshake
+# (``/health`` stays open for monitoring). See api/auth.py.
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "").strip()
-DASHBOARD_SECRET_KEY = os.getenv("DASHBOARD_SECRET_KEY", "").strip()

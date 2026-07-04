@@ -279,36 +279,19 @@ def test_agent_memory_has_trace_id():
     )
 
 
-def test_app_import():
-    """``create_app()`` calls ``start_controller()`` — a real Portfolio + a
-    live agent thread + a postmortem thread that runs forever, all pointed
-    at the real project ``trades_sim.db`` (default sim mode). Mocked so this
-    smoke test verifies Dash wiring without spawning a background trading
-    loop for the rest of the process.
-    """
-    from unittest.mock import patch
-
-    from dashboard import create_app
-
-    with patch("dashboard.controller.start_controller"):
-        a = create_app()
-    assert a is not None, "create_app() returned None"
-
-
 def test_main_entrypoint_module():
-    """Import ``main`` so entrypoint wiring is covered (CI coverage threshold).
-
-    Same ``start_controller`` mock as ``test_app_import`` — importing
-    ``main`` calls ``create_app()`` too, and ``create_app``'s
-    ``_app_initialized`` guard means only the *first* call of either test
-    actually reaches ``start_controller``, so both mock it defensively.
+    """Import ``main`` so entrypoint wiring is covered (CI coverage
+    threshold). Unlike the old Dash entrypoint, importing ``main``/
+    ``api.main`` has no side effects — ``start_controller()`` only runs
+    inside the FastAPI ``lifespan`` hook, not at import time — so no
+    mocking is needed (full app + lifespan coverage lives in
+    ``tests/test_api.py``).
     """
     import importlib
-    from unittest.mock import patch
 
-    with patch("dashboard.controller.start_controller"):
-        main_mod = importlib.import_module("main")
-    assert main_mod.app is not None
+    main_mod = importlib.import_module("main")
+    assert main_mod.main is not None
+    assert main_mod.main.__name__ == "main"
 
 
 def test_rsi_unified_backtest_and_live():
@@ -374,7 +357,6 @@ if __name__ == "__main__":
         ("test_rsi_unified_backtest_and_live", test_rsi_unified_backtest_and_live),
         ("test_sqlite_schema", test_sqlite_schema),
         ("test_agent_memory_has_trace_id", test_agent_memory_has_trace_id),
-        ("test_app_import", test_app_import),
         ("test_main_entrypoint_module", test_main_entrypoint_module),
     ]
 

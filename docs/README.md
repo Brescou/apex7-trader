@@ -16,7 +16,7 @@
 5. [Installation](#installation)
 6. [Configuration](#configuration)
 7. [Running the project](#running-the-project)
-8. [Dashboard guide](#dashboard-guide)
+8. [Frontend guide](#frontend-guide)
 9. [Simulation vs Live mode](#simulation-vs-live-mode)
 10. [LangGraph Studio](#langgraph-studio)
 11. [Extending the project](#extending-the-project)
@@ -45,9 +45,14 @@ The entire reasoning process is visible in real time on the terminal dashboard.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                   dashboard/ (Dash)                          │
-│  LIVE · ANALYTICS · BACKTEST · TERMINAL                      │
-│  dcc.Interval (2s) → callbacks → portfolio state display    │
+│         frontend/ (React 18 + Vite + TypeScript)              │
+│  Live · Terminal · Analytics tabs                             │
+│  REST polling + WebSocket (/ws) → portfolio state display     │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ REST + WS
+┌──────────────────────────▼──────────────────────────────────┐
+│              api/ (FastAPI: main.py, routes/, ws)             │
+│  auth.py (Bearer token), broadcaster.py (WS push, 500ms)      │
 └──────────────────────────┬──────────────────────────────────┘
                            │ reads
 ┌──────────────────────────▼──────────────────────────────────┐
@@ -57,7 +62,8 @@ The entire reasoning process is visible in real time on the terminal dashboard.
                            │ managed by
 ┌──────────────────────────▼──────────────────────────────────┐
 │            Agent loop (dashboard/controller.py)              │
-│  pause / step / reset controls via shared _ctrl dict         │
+│  pause / step / reset controls via shared _ctrl dict          │
+│  started from api/main.py's FastAPI lifespan hook              │
 └──────────────────────────┬──────────────────────────────────┘
                            │ invokes
 ┌──────────────────────────▼──────────────────────────────────┐
@@ -172,10 +178,10 @@ This makes it possible to test the full agent loop, dashboard, and trade logic i
 
 ### Portfolio as shared state (not agent state)
 
-The `Portfolio` object lives in the main process and is accessed by both the agent thread and the Dash callback thread. All mutations are protected by `threading.RLock()`. The agent's `AgentState` (the LangGraph state dict) is a snapshot passed per-cycle; the portfolio is the source of truth for the dashboard.
+The `Portfolio` object lives in the main process and is accessed by both the agent thread and the FastAPI request/WebSocket-broadcaster thread. All mutations are protected by `threading.RLock()`. The agent's `AgentState` (the LangGraph state dict) is a snapshot passed per-cycle; the portfolio is the source of truth for the API.
 
 This separation means:
-- The dashboard can read portfolio state at any time without blocking the agent
+- The API can read portfolio state at any time without blocking the agent
 - The agent can be paused, stepped, or reset without touching the graph internals
 
 ### SQLite for memory
@@ -187,15 +193,15 @@ SQLite was chosen over a vector database because:
 
 All writes go through `_db_write()` / `_db_write_multi()` (retries, context managers, logging). All reads through `_db_read()`. Both use `_get_db_path()` to route to the correct sim/live database. WAL mode and `busy_timeout=5000ms` handle concurrent access from the agent, postmortem, and dashboard threads.
 
-### Dash for the dashboard
+### FastAPI + React for the terminal UI
 
-Dash was chosen over a web framework + frontend for a single reason: **everything stays in Python**. The UI is split across the `dashboard/` package with no HTML/CSS/JS files, no bundler, no separate frontend process.
+The original all-Python Dash dashboard was replaced by a FastAPI backend (`api/`) and a React 18 + Vite + TypeScript frontend (`frontend/`), giving a real WebSocket push channel and a conventional frontend toolchain (component tests, type checking, a real build step) instead of server-rendered callbacks.
 
-Key Dash patterns used:
-- `dcc.Interval` (2s) for live polling — simpler and more reliable than WebSockets for this use case
-- `dcc.Store` for shared client-side state (pause/mode) without server round-trips
-- `suppress_callback_exceptions=True` + dynamic tab rendering via a single `tab-content` div
-- All CSS inline in `dashboard/server.py`'s `index_string` — no `assets/` directory
+Key patterns used:
+- `api/broadcaster.py` polls the shared portfolio state every 500ms and pushes JSON snapshots + agent-vote diffs over a single `/ws` WebSocket connection
+- `frontend/src/hooks/useWebSocket.ts` consumes the live stream; `frontend/src/hooks/useApex.ts` handles REST polling for slower-moving data (watchlist 10s, macro/sectors 60s, correlation 120s)
+- `api/auth.py` gates REST routes behind a Bearer token and the `/ws` handshake behind a `?token=` query param, both only when `DASHBOARD_PASSWORD` is set
+- `api/main.py`'s `lifespan` hook starts the agent loop (`dashboard/controller.start_controller()`) only on real ASGI startup — importing the module has no side effects
 
 ---
 
@@ -203,12 +209,12 @@ Key Dash patterns used:
 
 ```
 apex7-trader/
-├── main.py                         # Entrypoint: app.run()
+├── main.py                         # Entrypoint: runs api.main:app via uvicorn (port 8000)
 ├── config.py                       # All constants, loaded from .env
 ├── market_data/                    # Package market data (macro, quotes, terminal…)
 ├── langgraph.json                  # LangGraph Studio config
 ├── pyproject.toml                  # Dependencies (uv) + black/ruff/pytest config
-├── Dockerfile                      # Multi-stage image (uv, python 3.12, port 8050)
+├── Dockerfile                      # Multi-stage image (uv, python 3.12, port 8000)
 ├── .dockerignore
 ├── CLAUDE.md                       # Maintainer / agent context (detailed pitfalls)
 │
@@ -228,43 +234,50 @@ apex7-trader/
 │   ├── indicators.py               # Canonical RSI implementation
 │   └── metrics.py                  # Sharpe/Sortino/drawdown/Kelly (pure functions)
 │
-├── dashboard/                      # Dash UI
-│   ├── __init__.py                 # create_app() entry point
-│   ├── server.py                   # Dash() init, design tokens, /health endpoint
-│   ├── controller.py               # Agent loop, portfolio state, postmortem thread
-│   ├── layout/                     # UI layout components
-│   │   ├── main.py                 # app.layout builder
-│   │   ├── live_tab.py             # Live tab layout
-│   │   ├── analytics_tab.py        # Analytics tab layout
-│   │   ├── terminal_tab.py         # Terminal tab layout
-│   │   ├── helpers.py              # Shared UI helpers (agent cards, trade tables)
-│   │   ├── emotions.py             # Emotion system (icon/color/quote mapping)
-│   │   └── classify.py             # Log badge classification
-│   └── callbacks/                  # Dash callbacks (one file per tab)
-│       ├── live.py                 # Live tab + tab routing
-│       ├── analytics.py            # Analytics tab (+ trade postmortem)
-│       ├── backtest_tab.py         # Backtest tab
-│       ├── cli.py                  # In-dashboard command console
-│       └── terminal.py             # Terminal tab (16 callbacks)
+├── dashboard/                      # Agent-loop / Portfolio-state machinery
+│   ├── __init__.py                 # Package docstring only (no UI code here anymore)
+│   └── controller.py               # Agent loop, portfolio state, postmortem thread
+│
+├── api/                            # FastAPI backend
+│   ├── main.py                     # FastAPI() app, lifespan hook (start_controller), /health
+│   ├── auth.py                     # Bearer-token auth gate (DASHBOARD_PASSWORD)
+│   ├── broadcaster.py              # WebSocket broadcaster (polls portfolio state, 500ms)
+│   ├── serializers.py              # Portfolio/trade/vote → JSON dicts
+│   └── routes/
+│       ├── portfolio.py            # /api/portfolio, /api/trades, /api/analytics
+│       ├── market.py               # /api/market/* (macro, watchlist, sectors, news, …)
+│       ├── control.py              # /api/control/* (mode, pause/resume, watchlist CRUD)
+│       └── ws.py                   # /ws WebSocket endpoint
+│
+├── frontend/                       # React 18 + Vite + TypeScript terminal UI
+│   ├── package.json
+│   └── src/
+│       ├── App.tsx
+│       ├── components/{live,terminal,analytics,layout}/
+│       ├── hooks/                  # useWebSocket.ts, useApex.ts
+│       └── types/
 │
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── CHANGELOG.md
 │   └── README.md                   # Docs index / extras
 │
-├── tests/                          # ~80 pytest tests (see CI)
+├── tests/                          # pytest tests (see CI)
 │   ├── conftest.py                 # sim_mode, portfolio, tmp_db (isolated SQLite)
 │   ├── test_smoke.py               # Import/graph/backtest/smoke (legacy runner still supported)
+│   ├── test_api.py                 # FastAPI app + lifespan (TestClient), auth
 │   ├── test_integration.py         # Graph flows, schemas, DB helpers, token reset
 │   ├── test_terminal.py            # market_data (macro, watchlist, news, screener…)
-│   ├── test_layout_helpers.py      # classify, registry, layout/controller wiring
+│   ├── test_layout_helpers.py      # agents/registry.py graph builder
 │   ├── test_circuit_breaker.py     # LLM circuit breaker + rate-limit behavior
 │   ├── test_stoploss.py            # execute_node stop-loss guards
 │   ├── test_portfolio.py           # Portfolio.sell() validation
 │   ├── test_metrics.py             # core.metrics pure functions
-│   └── test_misc_coverage.py       # RSI seed mocks, misc paths
+│   ├── test_misc_coverage.py       # RSI seed mocks, misc paths
+│   └── ...                         # one file per subsystem — see tests/ for the full list
 │
-├── .github/workflows/ci.yml        # CI: job test (ruff + pytest + coverage) + job lint (black)
+├── .github/workflows/ci.yml        # CI: jobs test (ruff+pytest+coverage), lint (black),
+│                                    #     security (ruff flake8-bandit), frontend (tsc+vitest+build)
 ├── .pre-commit-config.yaml          # ruff + black + standard hooks
 ├── .env                             # API keys (not committed)
 ├── trades.db                        # Live SQLite (auto-created, not committed)
@@ -324,8 +337,11 @@ POSTMORTEM_HOUR = 22        # hour (0-23) at which daily postmortem runs
 ## Running the project
 
 ```bash
-# Start the dashboard + agent
+# Start the FastAPI backend + agent
 uv run python main.py
+
+# For local frontend development with hot reload, in a second terminal:
+cd frontend && npm install && npm run dev
 
 # Run all tests (full suite; coverage optional — matches CI job "test")
 uv run pytest tests/ -v --tb=short
@@ -341,89 +357,55 @@ uv run black --check .
 
 # Optional: container (see Dockerfile)
 # docker build -t apex7:latest .
-# docker run --rm -e ANTHROPIC_API_KEY=... -p 8050:8050 apex7:latest
+# docker run --rm -e ANTHROPIC_API_KEY=... -p 8000:8000 apex7:latest
 ```
 
-Open **http://localhost:8050** in your browser.
+Open **http://localhost:8000** in your browser (or the Vite dev server URL, typically `http://localhost:5173`, when running the frontend separately for hot reload — it proxies API/WS calls to `:8000`).
 
-The agent starts automatically in the background. The dashboard refreshes every 2 seconds.
-
-**Control buttons (top bar):**
-
-| Button | Action |
-|--------|--------|
-| `PAUSE` | Suspends the agent between cycles (yellow when active) |
-| `STEP` | Runs exactly one cycle then pauses |
-| `RESET` | Kills the current agent and starts a fresh portfolio |
+The agent starts automatically in the background. The frontend refreshes live over a WebSocket connection (`/ws`), with REST polling as a fallback for slower-moving data.
 
 **Mode toggle (top bar):**
 
 | Mode | Description |
 |------|-------------|
 | `SIM` | Simulation — synthetic prices, rule-based decisions, no API costs |
+| `PAPER` | Real yfinance prices, rule-based decisions, no LLM |
 | `LIVE` | Live — real yfinance prices, Claude Sonnet analysis, web search |
 
-The mode switch takes effect on the next cycle with no restart.
+The mode switch takes effect on the next cycle with no restart (`POST /api/control/mode`).
+
+Note: `api/routes/control.py` also exposes `POST /api/control/pause` / `/resume` (the old Dash dashboard's PAUSE button), but pause/resume and the old STEP/RESET actions are not currently wired to any frontend control — they were not ported during the FastAPI/React migration.
 
 ---
 
-## Dashboard guide
+## Frontend guide
 
-### LIVE tab
+### LIVE tab (`frontend/src/components/live/LiveTab.tsx`)
 
-Two-column layout:
+Sidebar + main layout, driven live by the `/ws` WebSocket snapshot:
 
-**Left column (280px)**
-- **Portfolio Value** — current total with P&L, health bar (gradient red→blue→green scaled to $0–$2000)
-- **Agent State** — current emotion (EUPHORIC / EXCITED / FOCUSED / CALM / NERVOUS / PANIC / DESPERATE) with quote, and a "SEARCHING..." badge when the LLM is active
-- **Metrics** — Cash / Invested / Peak / Drawdown grid
-- **Open Positions** — up to 3 cards with per-position P&L, price, and a mini bar
-- **Agent Track Records** — accuracy badges per agent (multi mode only)
+**Sidebar**
+- **Portfolio** — current value, P&L since inception, and a survival gauge (SAFE/DEAD, buffer above the death threshold)
+- **Agent State** — current emotion (derived by `api/serializers.py::_derive_emotion`) with a quote
+- **Agents · Last Cycle** — one card per specialist vote (action, confidence bar, short reasoning excerpt), plus an ARBITRATION card with the final decision
+- **Metrics** — Cash / Peak Value / Positions / Hold Streak grid
+- **Positions** — one row per open position with allocation bar and P&L%
 
-**Right column**
-- **Equity Curve** — Plotly sparkline with death floor and start reference lines
-- **Activity Log** — live feed of agent actions, newest first, color-coded by type:
+**Main column**
+- **Equity Curve** — inline SVG area chart (`EquityChart.tsx`) with high/low/current markers
+- **Activity Log** — live feed of agent actions, newest first, tagged by type (`EXEC`, `ARB`, `TECH`, `ANLST`, `RISK`, `MACRO`, `SL`, `EVAL`, `MEM`, `INFO`/`WARN`/`ERROR`/`CRIT`)
 
-| Badge | Color | Meaning |
-|-------|-------|---------|
-| `BUY` | Blue | Buy order executed |
-| `SELL WIN` | Green | Sell at profit |
-| `SELL LOSS` | Red | Sell at loss |
-| `HOLD` | Gray | No trade this cycle |
-| `AI` | Purple | LLM call / web search |
-| `INTEL` | Purple | Market analysis output |
-| `TECH` | Blue | Technician agent vote |
-| `ANLST` | Cyan | Analyst agent vote |
-| `RISK` | Red | Risk manager assessment |
-| `MACRO` | Yellow | Macro watcher regime |
-| `ARBIT` | Green | Arbitration decision |
-| `SIM` | Orange | Simulation engine event |
-| `ERR` | Orange | Error |
-| `DEATH` | Red | Portfolio killed |
+### ANALYTICS tab (`frontend/src/components/analytics/AnalyticsTab.tsx`)
 
-**Death state:** when portfolio ≤ $50, the page background shifts to near-black red, the status dot turns red, and the left column shows a termination screen.
-
-**Agent cards panel (multi mode only):**
-- TECH / ANLST / RISK / MACRO cards, each collapsible with vote details
-- ARBITRATION card always visible below
-
-### ANALYTICS tab
-
-Loads trade history via the same DB path as the agent (`trades.db` / `trades_sim.db` depending on mode). Auto-refreshes every 30s or on manual refresh.
-
-- **KPI row** — Win Rate, Avg P&L, Best/Worst Trade, Total Trades, Avg Confidence, Favourite Ticker, Sim/Live ratio
-- **Charts (2x2)** — P&L by ticker (bar), Action distribution (donut), Confidence over time (line), Trades by hour (bar)
-- **Trade table** — full history with sort, filter, pagination (20/page), conditional row coloring
+- **KPI grid** — Portfolio Value, Total P&L, Open Positions, Agent Cycle, Hold Streak, Mode, Peak Value, Death Threshold
+- **Agent Accuracy** — per-agent market-validated accuracy (`⏳ CALIBRATING` until ≥5 evaluated votes, then `✓ VALIDATED`), plus the current cycle's raw votes
+- **Postmortem** — closed-trade lessons and current open-position detail
 
 ### BACKTEST tab
 
-Enter a symbol (e.g. `AAPL`), select a period (1mo / 3mo / 6mo / 1y) and a strategy (`simple` / `multi`), click **RUN BACKTEST**.
+Placeholder ("coming soon") in the current frontend — `core/backtest.py`'s `run_backtest()` / `compare_strategies()` functions still exist and are covered by tests, but the tab isn't wired up in the React UI yet.
 
-Runs `run_backtest()` from `core/backtest.py` against real yfinance data — no LLM calls, deterministic rules only.
-
-Output: KPI row (total return, vs SPY benchmark, win rate, max drawdown, Sharpe ratio) + equity curve with SPY overlay and BUY/SELL trade markers + trade log table.
-
-### TERMINAL tab
+### TERMINAL tab (`frontend/src/components/terminal/TerminalTab.tsx`)
 
 Bloomberg-style market terminal with live data from the `market_data` package.
 
@@ -460,7 +442,7 @@ Bloomberg-style market terminal with live data from the `market_data` package.
 | Cycle interval | 3s | 30s (configurable via `AGENT_INTERVAL`) |
 | API costs | None | ~$0.01-0.05 per cycle |
 
-Toggle live from the dashboard — takes effect on the next cycle.
+Toggle from the frontend topbar — takes effect on the next cycle.
 
 ---
 
@@ -515,7 +497,7 @@ Main system prompt text for the simple graph’s analyze step lives in `agents/s
 
 ### Adjust simulation parameters at runtime
 
-In simulation mode, `_sim_mode` is a shared dict. You can expose `SIM_VOLATILITY` and `SIM_DRIFT` as Dash sliders and write to it directly — no restart needed.
+In simulation mode, `_sim_mode` is a shared dict. You can expose `SIM_VOLATILITY` and `SIM_DRIFT` through a new `api/routes/control.py` endpoint and write to it directly — no restart needed.
 
 ---
 
@@ -526,13 +508,15 @@ In simulation mode, `_sim_mode` is a shared dict. You can expose `SIM_VOLATILITY
 | `anthropic` | Claude API — Sonnet for analysis, Haiku for memory |
 | `langgraph` | Agent graph orchestration |
 | `yfinance` | Real-time price and news data |
-| `dash` + `plotly` | Terminal dashboard + charts |
-| `pydantic` | LLM output validation |
+| `fastapi` + `uvicorn` | REST + WebSocket backend |
+| `pydantic` | LLM output validation + FastAPI request/response models |
 | `httpx` | HTTP client with timeouts for Anthropic SDK |
 | `tweepy` | Twitter/X sentiment (optional) |
 | `python-dotenv` | `.env` loading |
 
 **Dev tools:** `pytest`, `pytest-cov`, `black`, `ruff`, `pre-commit`
+
+**Frontend (`frontend/package.json`):** React 18, Vite, TypeScript, Vitest
 
 ---
 

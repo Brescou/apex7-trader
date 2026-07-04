@@ -46,24 +46,24 @@ apex7-trader/
 │   ├── backtest.py        ← run_backtest, compare_strategies
 │   └── indicators.py      ← Shared RSI implementation
 ├── dashboard/
-│   ├── __init__.py        ← create_app()
-│   ├── server.py          ← Dash() init + design tokens + /health endpoint
-│   ├── controller.py      ← agent loop, portfolio state, postmortem thread
-│   ├── layout/            ← app.layout + UI helpers (split into sub-modules)
-│   │   ├── __init__.py
-│   │   ├── helpers.py
-│   │   ├── emotions.py
-│   │   ├── classify.py
-│   │   ├── live_tab.py
-│   │   ├── terminal_tab.py
-│   │   ├── analytics_tab.py
-│   │   └── main.py
-│   └── callbacks/
-│       ├── __init__.py    ← imports all callback modules
-│       ├── live.py
-│       ├── analytics.py
-│       ├── backtest_tab.py
-│       └── terminal.py
+│   ├── __init__.py
+│   └── controller.py      ← agent loop, portfolio state, postmortem thread
+├── api/                    ← FastAPI backend (HTTP/WS layer)
+│   ├── main.py             ← FastAPI app + lifespan (starts controller + WS broadcaster)
+│   ├── auth.py             ← Bearer-token REST auth + WS origin/token check
+│   ├── broadcaster.py      ← ConnectionManager + poll_and_broadcast() (500ms)
+│   ├── serializers.py      ← Portfolio + controller state → JSON snapshot
+│   └── routes/
+│       ├── ws.py           ← GET /ws (WebSocket)
+│       ├── portfolio.py    ← GET /api/portfolio, /trades, /analytics
+│       ├── market.py       ← GET /api/market/macro|watchlist|sectors|correlation|news|fundamentals|fear-greed
+│       └── control.py      ← POST /api/control/mode|pause|resume + watchlist CRUD
+├── frontend/                ← React 18 + Vite + TypeScript terminal UI
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── hooks/          ← useWebSocket.ts, useApex.ts (REST polling)
+│   │   └── components/     ← live/, terminal/, analytics/, layout/
+│   └── package.json
 ├── docs/
 │   ├── ARCHITECTURE.md  (this file)
 │   ├── CHANGELOG.md
@@ -97,16 +97,20 @@ apex7-trader/
 ## Package Dependency Graph
 
 ```
-main.py
-  └── dashboard (create_app → start_controller → layout → callbacks)
-        ├── dashboard.server (Dash app, design tokens, /health endpoint)
-        ├── dashboard.controller (agent loop thread, portfolio init)
-        ├── dashboard.layout (UI helpers, app.layout — split into sub-modules)
-        └── dashboard.callbacks.* (all @app.callback)
+main.py (uvicorn launcher)
+  └── api.main (FastAPI app + lifespan)
+        ├── api.auth (Bearer-token REST auth, WS origin/token check)
+        ├── api.broadcaster (WebSocket hub, polls _state every 500ms)
+        ├── api.serializers (Portfolio + controller state → JSON)
+        ├── api.routes.* (portfolio, market, control, ws)
+        └── dashboard.controller (start_controller — agent loop + postmortem threads)
               ├── core.data (Portfolio)
               ├── core.backtest (run_backtest)
               ├── agents.registry (get_graph)
               └── market_data (fetch_*)
+
+frontend/ (React 18 + Vite + TypeScript)
+  └── REST (/api/*) + WebSocket (/ws) → api.main
 
 agents.registry
   └── agents.multi (build_multi_graph)
@@ -115,7 +119,7 @@ agents.registry
               └── market_data, core.external_data (macro context, F&G, earnings)
 ```
 
-Import direction is one-way: `dashboard` → `core`/`agents`/`market_data`. Never import from `dashboard` inside `agents/` or `core/`.
+Import direction is one-way: `api`/`dashboard` → `core`/`agents`/`market_data`. Never import from `api` or `dashboard` inside `agents/` or `core/`.
 
 ## Primary modules (`core/` & `agents/shared/`)
 
@@ -247,8 +251,9 @@ three modes; the routing happens inside each node):
   in SIM only.
 - Toggles `set_simulation_mode()` / `set_paper_mode()` enforce mutual
   exclusion and persist `SIMULATION_MODE` / `PAPER_MODE` to `.env`.
-- The Dash topbar exposes a 3-option radio (`mode-radio`) that calls
-  `_toggle_mode` and updates `mode-store`.
+- The React frontend's topbar mode selector calls
+  `POST /api/control/mode` (`api/routes/control.py`), which invokes the
+  same setters.
 
 ## StateGraph — Nodes & Edges
 
@@ -373,74 +378,36 @@ CREATE TABLE postmortem (
 - Generates a 2-sentence summary via Haiku in LIVE; rule-based string in SIM/PAPER
 - Inserts one row into `postmortem` per trade
 
-## Dash Dashboard
+## API + React frontend
 
-### Tab architecture
+The Dash UI (server-rendered layout + `@app.callback`s) was fully removed
+in favor of a FastAPI backend (`api/`) and a React 18 + Vite + TypeScript
+frontend (`frontend/`). `api/main.py` is non-invasive: it reads
+`dashboard.controller._state` / `_ctrl` and calls `start_controller()`
+from its `lifespan` hook — zero changes to `agents/`, `core/`, or
+`market_data/`.
 
-Four tab content divs are always present in the DOM (`id` = `tab-live`, `tab-analytics`, `tab-backtest`, `tab-terminal`). Visibility is toggled via CSS `display` by the `_show_tab` callback in `dashboard/callbacks/live.py` — no HTML reconstruction on tab switch.
+### REST endpoints
 
-| Tab | Content | Refresh |
-|-----|---------|---------|
-| LIVE | Portfolio value, agent state, equity curve, activity log, agent cards (multi mode, incl. eval banner per specialist), Track Records badges | 2s interval |
-| ANALYTICS | KPI row, 4 charts, full trade table, **Trade postmortem** (`postmortem` SQLite via `_load_postmortem`) | 30s + manual; `no_update` guard when tab not active |
-| BACKTEST | Symbol input, period dropdown, strategy selector (simple/multi), RUN BACKTEST button; KPI row (return, vs benchmark, win rate, max drawdown, Sharpe); equity curve with SPY benchmark overlay and BUY/SELL trade markers; trade log table with P&L per row | on button click |
-| TERMINAL | 65/35 split: macro bar + watchlist + **sector rotation** + **correlation** + **economic calendar**; chart, news, screener | macro: 60s, watchlist: 10s, news: 120s |
+| Route | File | Purpose |
+|-------|------|---------|
+| `GET /api/portfolio`, `/api/trades`, `/api/analytics` | `api/routes/portfolio.py` | Portfolio snapshot, trade history, analytics KPIs |
+| `GET /api/market/macro\|watchlist\|sectors\|correlation\|sparkline/{symbol}\|news/{symbol}\|fundamentals/{symbol}\|fear-greed` | `api/routes/market.py` | Terminal tab data, thin wrappers over `market_data/` |
+| `POST /api/control/mode\|pause\|resume`, `GET/POST /api/control/watchlist*` | `api/routes/control.py` | Mode toggle, pause/resume, watchlist CRUD |
+| `GET /ws` | `api/routes/ws.py` | WebSocket — `api/broadcaster.py` polls `_state` every 500ms and pushes JSON snapshots + agent-vote diffs |
+| `GET /health` | `api/main.py` | 200 when alive, **503** when the portfolio is dead or missing (same contract the old Dash `/health` had) |
 
-### Terminal tab components
+All REST routes and the WebSocket require Bearer-token auth when
+`DASHBOARD_PASSWORD` is set (`api/auth.py`); unset = no auth (localhost
+default). `/health` is always open for monitoring probes.
 
-| Component / div id | Description |
-|--------------------|-------------|
-| `macro-bar-content` | VIX / SPY / DXY + **CNN Fear & Greed** + **FRED** (Fed funds, 10Y) + timestamp; mini sparklines on index blocs |
-| `watchlist-table` | 2-column symbol card grid — price, change_pct, RSI badge, MA20, volume, sparkline (symbols from DB `watchlist`) |
-| `economic-calendar-content` | Upcoming **earnings** (watchlist) + static **macro** dates (`build_economic_calendar_rows`) |
-| `sector-rotation-content` | **Sector ETF** performance heatmap (`fetch_sector_performance`) across period chips |
-| `correlation-matrix-content` | Pearson correlation grid on daily returns (`fetch_correlation_matrix`); `correlation-period-dropdown`; needs ≥ 2 symbols |
-| `chart-overlay-content` | 1mo OHLCV area chart for the selected symbol; max/min annotations |
-| `news-feed-content` | News cards for the selected symbol |
-| `screener-results` | Screener matches list |
-| `screener-results-store` | List of matched symbol strings |
-| `screener-active-store` | Bool — screener highlight mode |
+### Frontend (`frontend/src/`)
 
-### Terminal tab callbacks (`dashboard/callbacks/terminal.py`)
-
-| Callback | Trigger | Output |
-|----------|---------|--------|
-| `_update_macro_bar` | `macro-interval` | `macro-bar-content` — index blocs + F&G + FRED + sparklines |
-| `_update_watchlist` | `watchlist-interval`, `terminal-watchlist`, `terminal-active-symbol`, screener stores | `watchlist-table` |
-| `_update_economic_calendar` | interval + `terminal-watchlist` | `economic-calendar-content` |
-| `_update_sector_rotation` | interval + period checklists | `sector-rotation-content` |
-| `_update_correlation_matrix` | `correlation-period-dropdown`, interval, `terminal-watchlist` | `correlation-matrix-warning`, `correlation-matrix-content` |
-| `_update_news_content` | `terminal-active-symbol`, `news-interval` | `news-feed-content`; tab-gated |
-| `_update_chart_overlay` | `terminal-active-symbol` | `chart-overlay-content`; tab-gated |
-| `_run_screener` | `btn-screener-run` | 3-tuple: `screener-results`, `screener-results-store`, `screener-active-store` |
-| `_clear_screener` | `btn-screener-clear` | resets screener stores |
-
-### dcc.Store ids
-
-| Store id | Purpose |
-|----------|---------|
-| `terminal-watchlist` | List of symbols shown in the watchlist (initialized from config.WATCHLIST) |
-| `terminal-active-symbol` | Currently selected symbol for chart overlay and news feed |
-| `screener-results-store` | List of symbols matched by the most recent screener run |
-| `screener-active-store` | Bool — whether screener results are currently active (for watchlist card highlighting) |
-
-### dcc.Interval ids
-
-| Interval id | Period | Drives |
-|-------------|--------|--------|
-| `macro-interval` | 60s | Macro header bar refresh |
-| `watchlist-interval` | 10s | Watchlist table refresh |
-| `news-interval` | 120s | News feed refresh |
-
-Agent cards panel (LIVE tab):
-- TECH (blue), ANLST (green), RISK (orange), MACRO (purple) — each collapsible
-- Each card body starts with `_live_agent_eval_banner(_agent_eval_metrics(...))` (win rate + calibrating vs market-validated when ≥ 5 evaluated votes)
-- ARBITRATION card always visible below agent cards
-
-Agent Track Records badges (LIVE tab):
-- One badge per agent showing accuracy rate (correct votes / total votes from `agent_memory`)
-
-Controls (top bar): PAUSE / STEP / RESET buttons, SIM/LIVE radio (no graph selector — multi is the only graph).
+React tabs mirror the old Dash tabs conceptually (Live, Terminal,
+Analytics) under `components/{live,terminal,analytics}/`, driven by
+`hooks/useWebSocket.ts` (snapshot + vote diffs) and `hooks/useApex.ts`
+(REST polling: watchlist 10s, macro 60s, sectors 60s, correlation 120s).
+See `frontend/src/` for the current component tree.
 
 ## Data Classes
 
@@ -518,7 +485,7 @@ Optional `DISCORD_WEBHOOK_URL` — same **`httpx.post`**, 5s timeout, **fail-sil
 
 ## Concurrency Model
 
-- Dash callback thread: reads `_state["portfolio"]` — no mutations
+- API request thread (`api/routes/*.py`, `api/broadcaster.py`): reads `_state["portfolio"]` — no mutations
 - Agent loop thread (`apex7-agent`, daemon): mutates Portfolio via `buy()`, `sell()`, `record_value()` — launched by `start_controller()` in `dashboard/controller.py`
 - Postmortem thread (`apex7-postmortem`, daemon): runs every 60 s; calls `evaluate_pending_trades(now)` to resolve due `was_correct` rows in LIVE/PAPER (skipped in SIM), and `run_daily_postmortem()` once per day at `POSTMORTEM_HOUR`. **Same hour** also runs `run_daily_digest()` and, on **Sundays**, `run_weekly_report()` (`_run_digest_and_weekly_at_postmortem_hour`). Reads `portfolio.trade_history`, writes to SQLite — no Portfolio mutations.
 - All Portfolio mutations use `with self._lock` (RLock)
@@ -529,7 +496,7 @@ Optional `DISCORD_WEBHOOK_URL` — same **`httpx.post`**, 5s timeout, **fail-sil
 
 ## `market_data/` — Standalone Market Data Package
 
-Zero imports from `agents/` or `dashboard/`. Public API: ``from market_data import …`` (voir ``__init__.py``). Implémentation par sous-modules : ``macro``, ``quotes``, ``news``, ``earnings``, ``charts``, ``sectors``, ``correlation``, ``economic_calendar``, ``screener`` ; caches partagés dans ``caches.py`` ; ``compat.py`` expose ``yfinance`` pour les tests (``patch market_data.yf``). Utilisé surtout par ``dashboard/callbacks/terminal.py``.
+Zero imports from `agents/` or `dashboard/`. Public API: ``from market_data import …`` (voir ``__init__.py``). Implémentation par sous-modules : ``macro``, ``quotes``, ``news``, ``earnings``, ``charts``, ``sectors``, ``correlation``, ``economic_calendar``, ``screener`` ; caches partagés dans ``caches.py`` ; ``compat.py`` expose ``yfinance`` pour les tests (``patch market_data.yf``). Utilisé surtout par ``api/routes/market.py``.
 
 | Function | Cache TTL | Description |
 |----------|-----------|-------------|
@@ -546,7 +513,7 @@ Zero imports from `agents/` or `dashboard/`. Public API: ``from market_data impo
 | `is_earnings_week(symbol)` | uses earnings cache | `True` if next earnings within 5 calendar days |
 | `build_economic_calendar_rows(symbols, …)` | n/a | Merges earnings rows with static **FOMC/CPI/NFP** schedule (`_SCHEDULED_MACRO_EVENTS`); logs **warning** if that schedule is stale (last event date in the past) |
 
-Cache uses `threading.Lock()` in ``market_data/caches.py`` — thread-safe for concurrent Dash callbacks.
+Cache uses `threading.Lock()` in ``market_data/caches.py`` — thread-safe for concurrent API requests.
 
 ## CI/CD Pipeline
 
@@ -556,15 +523,25 @@ push / PR to master
         ▼
   GitHub Actions (.github/workflows/ci.yml)
         │
-        ├── job: test (ubuntu-latest)
-        │     ├── uv python install 3.12
+        ├── job: test (ubuntu-latest, matrix: py3.12/3.13)
+        │     ├── uv python install
         │     ├── uv sync
         │     ├── ruff check . --select E,F,W --ignore E501
-        │     └── pytest tests/ -v --tb=short   (SIMULATION_MODE=true)
+        │     └── pytest tests/ -v --tb=short --cov=. --cov-fail-under=60   (SIMULATION_MODE=true)
         │
-        └── job: lint (ubuntu-latest)
-              ├── uv sync
-              └── black --check --diff .
+        ├── job: lint (ubuntu-latest)
+        │     ├── uv sync
+        │     └── black --check --diff .
+        │
+        ├── job: security (ubuntu-latest)
+        │     ├── uv sync
+        │     └── ruff check . --select S --ignore S110,S311,S104 --exclude tests
+        │
+        └── job: frontend (ubuntu-latest, working-directory: frontend)
+              ├── npm ci
+              ├── tsc --noEmit
+              ├── npm test
+              └── npm run build
 ```
 
 Pre-commit hooks (`.pre-commit-config.yaml`): ruff (auto-fix) + black + trailing-whitespace + end-of-file-fixer + check-yaml + check-json + check-merge-conflict.

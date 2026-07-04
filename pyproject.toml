@@ -1,20 +1,16 @@
 [project]
 name = "apex7-trader"
 version = "0.1.0"
-description = "Multi-agent LLM trading dashboard built with LangGraph, Dash, and Claude"
+description = "Multi-agent LLM trading agent with a FastAPI + React terminal UI, built with LangGraph and Claude"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.84.0",
-    "dash>=4.0.0",
-    "dash-bootstrap-components>=2.0.4",
-    "dash-mantine-components>=2.0.0",
     "fastapi>=0.138.1",
     "httpx>=0.28.1",
     "langgraph>=1.0.10",
     "langgraph-cli[inmem]>=0.4.14",
     "pandas>=3.0.1",
-    "plotly>=6.6.0",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.2",
     "tweepy>=4.16.0",
