@@ -17,7 +17,7 @@
 6. [Configuration](#configuration)
 7. [Running the project](#running-the-project)
 8. [Frontend guide](#frontend-guide)
-9. [Simulation vs Live mode](#simulation-vs-live-mode)
+9. [Simulation vs Paper vs Live mode](#simulation-vs-paper-vs-live-mode)
 10. [LangGraph Studio](#langgraph-studio)
 11. [Extending the project](#extending-the-project)
 
@@ -211,7 +211,7 @@ Key patterns used:
 apex7-trader/
 ├── main.py                         # Entrypoint: runs api.main:app via uvicorn (port 8000)
 ├── config.py                       # All constants, loaded from .env
-├── market_data/                    # Package market data (macro, quotes, terminal…)
+├── market_data/                    # Package market data (macro, quotes, news, sectors, correlation…)
 ├── langgraph.json                  # LangGraph Studio config
 ├── pyproject.toml                  # Dependencies (uv) + black/ruff/pytest config
 ├── Dockerfile                      # Multi-stage image (uv, python 3.12, port 8000)
@@ -260,7 +260,7 @@ apex7-trader/
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── CHANGELOG.md
-│   └── README.md                   # Docs index / extras
+│   └── README.md                   # This file (root README.md is a symlink to it)
 │
 ├── tests/                          # pytest tests (see CI)
 │   ├── conftest.py                 # sim_mode, portfolio, tmp_db (isolated SQLite)
@@ -327,7 +327,7 @@ INITIAL_BALANCE = 1000      # starting cash ($)
 DEATH_THRESHOLD = 50        # portfolio floor ($) — agent dies below this
 MAX_POSITIONS   = 3         # maximum simultaneous open positions
 MAX_ALLOC_PCT   = 40        # max % of portfolio per trade
-AGENT_INTERVAL  = 30        # seconds between live cycles
+AGENT_INTERVAL  = 90        # seconds between live cycles (parallel Sonnet+web_search calls take 10-30s each)
 STOP_LOSS_PCT   = 0.05      # stop-loss threshold (5%) — enforced before agent decision
 POSTMORTEM_HOUR = 22        # hour (0-23) at which daily postmortem runs
 ```
@@ -410,37 +410,38 @@ Placeholder ("coming soon") in the current frontend — `core/backtest.py`'s `ru
 Bloomberg-style market terminal with live data from the `market_data` package.
 
 ```
-┌────────────────────────────────────────────────┐
-│ TERMINAL                                       │
-├────────────────────────────────────────────────┤
-│ VIX 18.50 ▼-2.1% │ SPY 512.3 ▲+0.8% │ DXY... │
-├────────────────┬───────────────────────────────┤
-│ WATCHLIST      │  NEWS — AAPL                  │
-│ [AAPL x][TSLA] │  + Apple beats estimates...   │
-│ SCREENER       │  - Market volatility rises    │
-│ RSI [30──70]   │  ~ Trading volume normal      │
-└────────────────┴───────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│ VIX 18.50 ▼-2.1% │ SPY 512.3 ▲+0.8% │ DXY … │ F&G │ FED │10Y│
+├────────────────┬──────────────────┬────────────────────────┤
+│ WATCHLIST      │  AAPL   182.50   │  SECTOR ROTATION        │
+│  AAPL   +0.8%  │  ▲+0.8%          │  TECH   +1.2%           │
+│  TSLA   -1.2%  │  [sparkline]     │  ENERGY -0.4%           │
+│  RSI 42        │                  │  CORRELATION · 30D       │
+└────────────────┴──────────────────┴────────────────────────┘
 ```
 
-- **Macro bar** — VIX, SPY, DXY with price + change %; refreshes every 60s
-- **Watchlist** — add/remove symbols, table with price, RSI, MA20, volume; refreshes every 10s
-- **Screener** — filter by RSI range, CHG%, MA20, volume; runs on demand
-- **News feed** — latest headlines for the selected symbol with sentiment indicator; refreshes every 120s
+- **Macro bar** — VIX, SPY, DXY, Fear & Greed, FED funds, 10Y yield with price + change %; refreshes every 60s
+- **Watchlist** — click a symbol to select it (up to 20, `X/20` counter); shows price, change %, and RSI; refreshes every 10s
+- **Symbol detail** — selected symbol's price/change plus a 1-day sparkline chart (`useSparkline`, refreshes every 60s)
+- **Sector rotation** — sector ETF % change heatmap; refreshes every 60s
+- **Correlation matrix** — 30D Pearson correlation across the watchlist; refreshes every 120s
+
+Note: `api/routes/control.py` exposes `POST /api/control/watchlist/add` / `/remove` and `market_data/screener.py` / `market_data/news.py` still exist and are covered by tests, but there's no add/remove-symbol control, screener panel, or news feed in the current frontend — they weren't ported during the FastAPI/React migration.
 
 ---
 
-## Simulation vs Live mode
+## Simulation vs Paper vs Live mode
 
-| Aspect | Simulation | Live |
-|--------|-----------|------|
-| Prices | Random-walk (`SIM_DRIFT`, `SIM_VOLATILITY`) | yfinance real-time |
-| News | Template-generated | yfinance headlines |
-| Sentiment | Random [-1, 1] | Twitter/X via tweepy (optional) |
-| Decisions | RSI rule-based | Claude Sonnet + web search |
-| Memory | Rule-generated lessons | Claude Haiku lesson extraction |
-| Database | `trades_sim.db` | `trades.db` |
-| Cycle interval | 3s | 30s (configurable via `AGENT_INTERVAL`) |
-| API costs | None | ~$0.01-0.05 per cycle |
+| Aspect | Simulation | Paper | Live |
+|--------|-----------|-------|------|
+| Prices | Random-walk (`SIM_DRIFT`, `SIM_VOLATILITY`) | yfinance real-time | yfinance real-time |
+| News | Template-generated | yfinance headlines | yfinance headlines |
+| Sentiment | Random [-1, 1] | Twitter/X via tweepy (optional) | Twitter/X via tweepy (optional) |
+| Decisions | RSI rule-based | RSI rule-based — **zero LLM** | Claude Sonnet + web search |
+| Memory | Rule-generated lessons | Rule-generated lessons | Claude Haiku lesson extraction |
+| Database | `trades_sim.db` | `trades_paper.db` | `trades.db` |
+| Cycle interval | 3s | 90s (`AGENT_INTERVAL`) | 90s (`AGENT_INTERVAL`) |
+| API costs | None | None | ~$0.01-0.05 per cycle |
 
 Toggle from the frontend topbar — takes effect on the next cycle.
 
@@ -508,6 +509,7 @@ In simulation mode, `_sim_mode` is a shared dict. You can expose `SIM_VOLATILITY
 | `anthropic` | Claude API — Sonnet for analysis, Haiku for memory |
 | `langgraph` | Agent graph orchestration |
 | `yfinance` | Real-time price and news data |
+| `pandas` | Price series / indicator computation (backtest, terminal, agent nodes) |
 | `fastapi` + `uvicorn` | REST + WebSocket backend |
 | `pydantic` | LLM output validation + FastAPI request/response models |
 | `httpx` | HTTP client with timeouts for Anthropic SDK |
