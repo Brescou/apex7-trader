@@ -77,6 +77,14 @@
 .pAllocFill { height: 100%; background: #2a3744; }
 .pPnl     { font-size: 10.5px; font-weight: 600; width: 54px; text-align: right; flex-shrink: 0; }
 
+/* Resizers */
+.vResizer { flex: 0 0 5px; cursor: col-resize; background: var(--line); position: relative; transition: background .12s; }
+.vResizer:hover { background: var(--pos); }
+.vResizer::after { content: ''; position: absolute; inset: 0 -3px; }
+.hResizer { height: 5px; cursor: row-resize; background: var(--line); position: relative; flex-shrink: 0; transition: background .12s; }
+.hResizer:hover { background: var(--pos); }
+.hResizer::after { content: ''; position: absolute; inset: -3px 0; }
+
 /* Main */
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .chartHd {

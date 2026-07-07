@@ -419,8 +419,8 @@ def test_connection_manager_send_personal_disconnects_on_failure():
 
 
 def test_get_watchlist_prices_translates_contract(monkeypatch):
-    """Backend snake_case + dict-of-dicts must come out matching the
-    frontend's camelCase WatchlistItem contract (Batch C regression guard).
+    """Backend snake_case must come out as a frontend-ready array of
+    camelCase WatchlistItem objects (symbol injected per row).
     """
     from api.routes import market
 
@@ -439,11 +439,12 @@ def test_get_watchlist_prices_translates_contract(monkeypatch):
         },
     )
     out = market.get_watchlist_prices()
-    row = out["watchlist"]["AAPL"]
+    assert isinstance(out["watchlist"], list)
+    row = next(r for r in out["watchlist"] if r["symbol"] == "AAPL")
     assert row["symbol"] == "AAPL"
     assert row["price"] == 150.5
     assert row["changePct"] == 1.2
-    assert row["change"] == 1.8
+    assert row["changeAbs"] == 1.8
     assert row["rsi"] == 55.0
     assert row["macdHist"] == 0.1
 
@@ -456,7 +457,7 @@ def test_get_watchlist_prices_error_returns_empty_shape(monkeypatch):
     from api.routes import market
 
     out = market.get_watchlist_prices()
-    assert out["watchlist"] == {}
+    assert out["watchlist"] == []
     assert out["symbols"] == []
     assert "error" in out
 

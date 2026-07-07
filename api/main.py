@@ -36,9 +36,16 @@ async def lifespan(app: FastAPI):
     # name bound at module-import time wouldn't pick up the patch.
     from dashboard.controller import start_controller
 
+    # Safety: never auto-start in LIVE (burns Anthropic credits). Force SIM at
+    # boot; the user can switch to PAPER/LIVE from the topbar once running.
+    from agents.shared.nodes import get_runtime_mode, set_simulation_mode
+
+    set_simulation_mode(True)
+    logger.info("Boot mode forced to SIM (was avoiding accidental LIVE).")
+
     # Start the agent + postmortem threads (idempotent).
     start_controller()
-    logger.info("Controller started.")
+    logger.info("Controller started in %s mode.", get_runtime_mode().upper())
 
     # Background task: poll _state every 500ms, push diffs over WebSocket.
     task = asyncio.create_task(poll_and_broadcast())

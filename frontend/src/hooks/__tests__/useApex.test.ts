@@ -16,23 +16,23 @@ describe('useApex hooks — API contract consumption', () => {
     vi.restoreAllMocks()
   })
 
-  // The backend used to lose the ticker key via Object.values() and send
-  // snake_case fields; api/routes/market.py now injects `symbol` and
-  // translates to camelCase (Batch C). This guards the frontend's half of
-  // that contract: it must pass the fields straight through untouched.
-  it('useWatchlist flattens the keyed dict and keeps injected fields', async () => {
+  // api/routes/market.py now returns the watchlist as a frontend-ready
+  // array of camelCase items (symbol injected per row); useWatchlist passes
+  // that array straight through. This guards the frontend's half of the
+  // contract: fields untouched, array preserved.
+  it('useWatchlist passes the backend array through untouched', async () => {
     mockFetchOnce({
-      watchlist: {
-        AAPL: {
+      watchlist: [
+        {
           symbol: 'AAPL',
           price: 150.5,
-          change: 1.8,
+          changeAbs: 1.8,
           changePct: 1.2,
           rsi: 55,
           macdHist: 0.1,
           volume: 1000,
         },
-      },
+      ],
       symbols: ['AAPL'],
     })
 

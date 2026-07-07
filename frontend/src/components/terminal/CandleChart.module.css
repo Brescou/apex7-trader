@@ -1,0 +1,12 @@
+.wrap { position: relative; width: 100%; }
+.svg  { width: 100%; display: block; cursor: crosshair; }
+
+.axis   { fill: var(--faint); font-size: 9px; font-family: var(--font-mono); }
+.axisHi { fill: var(--hi); font-size: 9px; font-family: var(--font-mono); font-weight: 600; }
+
+.legend { position: absolute; top: 6px; left: 8px; display: flex; gap: 12px; }
+.lgItem { font-size: 9.5px; font-family: var(--font-mono); font-weight: 600; letter-spacing: .04em; }
+
+.readout { position: absolute; top: 6px; right: 64px; display: flex; gap: 12px; align-items: center; font-size: 10px; color: var(--mid); font-family: var(--font-sans); }
+.readout b { color: var(--hi); font-weight: 600; }
+.roDate  { color: var(--dim); font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .04em; }

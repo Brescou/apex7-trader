@@ -1,0 +1,22 @@
+.bar { position: relative; display: flex; align-items: center; gap: 8px; padding: 7px 14px; background: var(--panel); border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.barFocus { background: var(--elev); box-shadow: inset 0 -1px 0 var(--amber); }
+
+.prompt { color: var(--amber); font-family: var(--font-mono); font-size: 14px; font-weight: 700; }
+.input  { flex: 1; background: transparent; border: none; outline: none; color: var(--hi); font-family: var(--font-mono); font-size: 12px; letter-spacing: .06em; }
+.input::placeholder { color: var(--faint); letter-spacing: .04em; }
+
+.flash    { font-size: 10px; font-family: var(--font-mono); padding: 3px 8px; border-radius: 3px; letter-spacing: .04em; white-space: nowrap; }
+.flashOk  { color: var(--pos); background: #2dd4a014; border: 1px solid #2dd4a030; }
+.flashErr { color: var(--neg); background: #f2596b14; border: 1px solid #f2596b30; }
+
+/* dropdown */
+.dropdown { position: absolute; top: 100%; left: 14px; right: 14px; z-index: 50; display: flex; gap: 0; background: var(--elev); border: 1px solid var(--line); border-top: none; border-radius: 0 0 6px 6px; box-shadow: 0 12px 28px rgba(0,0,0,.55); overflow: hidden; }
+.ddSection { flex: 1; border-right: 1px solid var(--line2); padding: 6px 0; }
+.ddSection:last-child { border-right: none; }
+.ddHd  { font-size: 8px; letter-spacing: .18em; color: var(--faint); font-weight: 700; padding: 4px 14px 6px; }
+.ddRow { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px; cursor: pointer; }
+.ddRow:hover, .ddRowHi { background: var(--hover); }
+.ddSym  { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--hi); }
+.ddKind { font-family: var(--font-mono); font-size: 8px; color: var(--faint); letter-spacing: .1em; }
+.ddFn   { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--amber); }
+.ddDesc { font-size: 10px; color: var(--dim); }

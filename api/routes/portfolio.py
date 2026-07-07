@@ -84,18 +84,18 @@ def get_analytics():
     postmortems = [
         {
             "sym": r[0],
-            "entryPrice": r[1],
-            "exitPrice": r[2],
-            "pnlPct": r[3],
-            "holdDays": round((r[4] or 0) / 24, 1),  # schema stores holding_hours
-            "lesson": r[5],
+            "entryPrice": round(float(r[1] or 0), 2),
+            "exitPrice": round(float(r[2] or 0), 2),
+            "pnlPct": round(float(r[3] or 0), 2),
+            "holdDays": round(float(r[4] or 0) / 24, 1),  # holding_hours → days
+            "lesson": str(r[5] or ""),
         }
         for r in (pm_rows or [])
     ]
 
     agent_accuracy = []
     for row in agent_rows or []:
-        role, total, correct = row[0], row[1], row[2]
+        role, total, correct = str(row[0] or ""), int(row[1] or 0), int(row[2] or 0)
         acc = (correct / total * 100) if total else 0
         agent_accuracy.append(
             {

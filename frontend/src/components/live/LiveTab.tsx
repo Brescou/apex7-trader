@@ -1,7 +1,11 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Snapshot } from '../../types'
 import { EquityChart } from './EquityChart'
 import { ActivityLog } from './ActivityLog'
 import styles from './LiveTab.module.css'
+
+const SIDE_MIN = 210, SIDE_MAX = 460
+const CHART_MIN = 120, CHART_MAX = 520
 
 interface Props { snapshot: Snapshot | null }
 
@@ -24,6 +28,51 @@ function voteCls(action = '') {
 }
 
 export function LiveTab({ snapshot: s }: Props) {
+  // ── Resizable zones (hooks must run before any early return) ───────────────
+  const [sideW, setSideW] = useState(252)
+  const [chartH, setChartH] = useState(220)
+  const dragRef = useRef<{ kind: 'side' | 'chart'; start: number; startVal: number } | null>(null)
+
+  const onMove = useCallback((e: MouseEvent) => {
+    const d = dragRef.current
+    if (!d) return
+    if (d.kind === 'side') {
+      const dx = e.clientX - d.start
+      setSideW(Math.max(SIDE_MIN, Math.min(SIDE_MAX, d.startVal + dx)))
+    } else {
+      const dy = e.clientY - d.start
+      setChartH(Math.max(CHART_MIN, Math.min(CHART_MAX, d.startVal + dy)))
+    }
+  }, [])
+
+  const onUp = useCallback(() => {
+    dragRef.current = null
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }, [onMove])
+
+  const startSide = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    dragRef.current = { kind: 'side', start: e.clientX, startVal: sideW }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [sideW, onMove, onUp])
+
+  const startChart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    dragRef.current = { kind: 'chart', start: e.clientY, startVal: chartH }
+    document.body.style.cursor = 'row-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [chartH, onMove, onUp])
+
+  useEffect(() => () => onUp(), [onUp])
+
   if (!s) {
     return <div className={styles.loading}><span className="seclbl t-faint">Connecting to agent…</span></div>
   }
@@ -35,7 +84,7 @@ export function LiveTab({ snapshot: s }: Props) {
   return (
     <div className={styles.layout}>
       {/* ── SIDEBAR ──────────────────────────────────────── */}
-      <aside className={styles.side}>
+      <aside className={styles.side} style={{ width: sideW, flex: `0 0 ${sideW}px` }}>
         {/* Portfolio */}
         <div className={styles.sblock}>
           <div className={`shead ${styles.shead}`}>
@@ -87,7 +136,7 @@ export function LiveTab({ snapshot: s }: Props) {
             <span className="seclbl">Agents · Last Cycle</span>
           </div>
           {s.votes.map((v, i) => {
-            const role = (v.agent || v.agent_role || v.role || '').toLowerCase().replace(/ /g, '_')
+            const role = (v.agent_name || v.agent || v.agent_role || v.role || '').toLowerCase().replace(/ /g, '_')
             const meta = AGENT_META[role] ?? { color: '#8a99ab', label: role.toUpperCase(), model: '' }
             const action = String(v.action || v.vote || 'HOLD')
             const conf = Number(v.confidence ?? 0)
@@ -169,6 +218,9 @@ export function LiveTab({ snapshot: s }: Props) {
         </div>
       </aside>
 
+      {/* vertical resizer (sidebar width) */}
+      <div className={styles.vResizer} onMouseDown={startSide} />
+
       {/* ── MAIN ─────────────────────────────────────────── */}
       <div className={styles.main}>
         {/* Equity */}
@@ -191,9 +243,12 @@ export function LiveTab({ snapshot: s }: Props) {
             ))}
           </div>
         </div>
-        <div className={styles.chartWrap}>
-          <EquityChart points={s.equity} />
+        <div className={styles.chartWrap} style={{ height: chartH }}>
+          <EquityChart points={s.equity} height={chartH} />
         </div>
+
+        {/* horizontal resizer (chart height) */}
+        <div className={styles.hResizer} onMouseDown={startChart} />
 
         {/* Log */}
         <div className={styles.logHd}>

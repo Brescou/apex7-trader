@@ -33,6 +33,7 @@ export interface LogEntry {
 }
 
 export interface AgentVote {
+  agent_name?: string
   agent?: string
   agent_role?: string
   role?: string
@@ -99,17 +100,65 @@ export interface MacroItem {
 export interface WatchlistItem {
   symbol: string
   price: number
-  change: number
+  change?: number
   changePct: number
+  changeAbs?: number
   rsi?: number
   macdHist?: number
+  bbPos?: string
+  high52w?: number
+  low52w?: number
+  dayHigh?: number
+  dayLow?: number
+  aboveMa20?: boolean
   volume?: number
+}
+
+export interface Fundamentals {
+  name?: string
+  sector?: string
+  industry?: string
+  marketCap?: number
+  peRatio?: number
+  forwardPe?: number
+  eps?: number
+  dividendYield?: number
+  beta?: number
+  high52w?: number
+  low52w?: number
+}
+
+export interface NewsItem {
+  title: string
+  publisher: string
+  link: string
+  time: string
+  sentiment?: string
 }
 
 export interface SectorItem {
   name: string
   change: number
   changePct: number
+}
+
+// Market
+export interface OhlcvBar {
+  date: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface CalendarEvent {
+  kind: 'macro' | 'earnings'
+  eventDate: string
+  daysUntil: number
+  event: string
+  symbol: string
+  importance: 'high' | 'medium' | 'low'
 }
 
 // Analytics
