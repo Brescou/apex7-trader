@@ -1,10 +1,9 @@
 """Tests for market_data/news.py caching.
 
-Covers the Review Finding at market_data/news.py:11 — unlike every other
-market_data fetcher (TTL 10s to 1h), fetch_news hit yfinance on every call
-with zero caching. Two Dash callbacks driven by the same "news-interval"
-(headline strip + news content panel) fire back-to-back for the same
-symbol each tick, doubling the network load for no reason.
+Covers the Review Finding at market_data/news.py — unlike every other
+market_data fetcher (TTL 10s to 1h), fetch_news used to hit yfinance on
+every call with zero caching. Concurrent REST callers for the same symbol
+would each fire a network request.
 """
 
 import os

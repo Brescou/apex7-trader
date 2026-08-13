@@ -45,7 +45,7 @@ The entire reasoning process is visible in real time on the terminal dashboard.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│         frontend/ (React 18 + Vite + TypeScript)              │
+│         frontend/ (React 19 + Mantine 9 + Vite)               │
 │  Live · Terminal · Analytics tabs                             │
 │  REST polling + WebSocket (/ws) → portfolio state display     │
 └──────────────────────────┬──────────────────────────────────┘
@@ -195,7 +195,7 @@ All writes go through `_db_write()` / `_db_write_multi()` (retries, context mana
 
 ### FastAPI + React for the terminal UI
 
-The original all-Python Dash dashboard was replaced by a FastAPI backend (`api/`) and a React 18 + Vite + TypeScript frontend (`frontend/`), giving a real WebSocket push channel and a conventional frontend toolchain (component tests, type checking, a real build step) instead of server-rendered callbacks.
+The UI is a FastAPI backend (`api/`) and a React 19 + Mantine 9 + Vite + TypeScript frontend (`frontend/`), with a WebSocket push channel and a conventional frontend toolchain (component tests, type checking, a real build step).
 
 Key patterns used:
 - `api/broadcaster.py` polls the shared portfolio state every 500ms and pushes JSON snapshots + agent-vote diffs over a single `/ws` WebSocket connection
@@ -249,7 +249,7 @@ apex7-trader/
 │       ├── control.py              # /api/control/* (mode, pause/resume, watchlist CRUD)
 │       └── ws.py                   # /ws WebSocket endpoint
 │
-├── frontend/                       # React 18 + Vite + TypeScript terminal UI
+├── frontend/                       # React 19 + Mantine 9 + Vite + TypeScript terminal UI
 │   ├── package.json
 │   └── src/
 │       ├── App.tsx
@@ -518,7 +518,7 @@ In simulation mode, `_sim_mode` is a shared dict. You can expose `SIM_VOLATILITY
 
 **Dev tools:** `pytest`, `pytest-cov`, `black`, `ruff`, `pre-commit`
 
-**Frontend (`frontend/package.json`):** React 18, Vite, TypeScript, Vitest
+**Frontend (`frontend/package.json`):** React 19, Mantine 9, Vite 8, TypeScript, Vitest
 
 ---
 

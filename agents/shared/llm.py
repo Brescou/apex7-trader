@@ -42,7 +42,7 @@ _degradation_lock = threading.Lock()
 def get_llm_degradation_status() -> dict[str, Any]:
     """Return a copy of the LLM degradation flag (token budget / circuit breaker).
 
-    Thread-safe; safe to call from the dashboard callback thread.
+    Thread-safe; safe to call from the API / WebSocket poller thread.
     """
     with _degradation_lock:
         return {

@@ -1,3 +1,4 @@
+import { ScrollArea } from '@mantine/core'
 import type { LogEntry } from '../../types'
 import styles from './ActivityLog.module.css'
 
@@ -28,7 +29,7 @@ interface Props { entries: LogEntry[] }
 
 export function ActivityLog({ entries }: Props) {
   return (
-    <div className={styles.wrap}>
+    <ScrollArea className={styles.wrap} offsetScrollbars>
       {entries.map((e, i) => {
         const tag = tagFromMessage(e.msg)
         return (
@@ -39,6 +40,6 @@ export function ActivityLog({ entries }: Props) {
           </div>
         )
       })}
-    </div>
+    </ScrollArea>
   )
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { TextInput } from '@mantine/core'
 import styles from './CommandBar.module.css'
 
 interface Props {
@@ -84,12 +85,13 @@ export function CommandBar({ symbols, onSelect, onAdd }: Props) {
   return (
     <div className={`${styles.bar} ${focused ? styles.barFocus : ''}`}>
       <span className={styles.prompt}>›</span>
-      <input
+      <TextInput
         ref={inputRef}
-        className={styles.input}
+        variant="unstyled"
+        classNames={{ root: styles.inputRoot, input: styles.input }}
         value={value}
         placeholder="COMMAND  ·  type a ticker + Enter   ( / to focus )"
-        onChange={e => { setValue(e.target.value); setHi(0) }}
+        onChange={(e) => { setValue(e.currentTarget.value); setHi(0) }}
         onKeyDown={onKeyDown}
         onFocus={() => setFocused(true)}
         onBlur={() => setTimeout(() => setFocused(false), 120)}

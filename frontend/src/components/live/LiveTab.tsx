@@ -1,3 +1,4 @@
+import { ScrollArea } from '@mantine/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Snapshot } from '../../types'
 import { EquityChart } from './EquityChart'
@@ -85,6 +86,7 @@ export function LiveTab({ snapshot: s }: Props) {
     <div className={styles.layout}>
       {/* ── SIDEBAR ──────────────────────────────────────── */}
       <aside className={styles.side} style={{ width: sideW, flex: `0 0 ${sideW}px` }}>
+      <ScrollArea h="100%" offsetScrollbars>
         {/* Portfolio */}
         <div className={styles.sblock}>
           <div className={`shead ${styles.shead}`}>
@@ -216,6 +218,7 @@ export function LiveTab({ snapshot: s }: Props) {
             </div>
           ))}
         </div>
+      </ScrollArea>
       </aside>
 
       {/* vertical resizer (sidebar width) */}

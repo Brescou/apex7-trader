@@ -6,7 +6,7 @@
   width: 252px; flex-shrink: 0;
   border-right: 1px solid var(--line);
   background: var(--panel);
-  overflow-y: auto;
+  min-height: 0;
 }
 .sblock { padding: 13px 14px; border-bottom: 1px solid var(--line2); }
 .shead  { display: flex; align-items: center; gap: 7px; margin-bottom: 11px; }

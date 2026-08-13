@@ -1,7 +1,6 @@
 """APEX-7 — Optional shared-secret auth for the FastAPI stack.
 
-Mirrors ``dashboard/server.py``'s gate: unset ``DASHBOARD_PASSWORD`` means no
-auth (default localhost usage, matching the legacy Dash behavior). When set,
+Unset ``DASHBOARD_PASSWORD`` means no auth (localhost default). When set,
 REST routes require a matching ``Authorization: Bearer <password>`` header.
 
 The WebSocket handshake is a separate case — native browser WebSockets can't

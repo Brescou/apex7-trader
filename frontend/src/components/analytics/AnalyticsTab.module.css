@@ -1,4 +1,4 @@
-.ana { height: 100%; overflow-y: auto; padding: 18px; }
+.ana { padding: 18px; }
 
 /* Stats */
 .statGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 11px; margin-bottom: 16px; }
@@ -18,9 +18,7 @@
 .rankBar  { flex: 1; height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; }
 .rankFill { height: 100%; border-radius: 3px; }
 .rankAcc  { font-size: 11px; font-weight: 600; width: 38px; text-align: right; flex-shrink: 0; }
-.badge  { font-size: 8px; font-weight: 600; letter-spacing: .05em; padding: 2px 6px; border-radius: 3px; flex-shrink: 0; width: 92px; text-align: center; }
-.bVal   { color: var(--pos);   background: #2dd4a012; border: 1px solid #2dd4a030; }
-.bCal   { color: var(--amber); background: #e3b34112; border: 1px solid #e3b34130; }
+.badge  { letter-spacing: .05em; width: 92px; }
 
 /* Vote row */
 .voteRow { display: flex; align-items: center; gap: 14px; padding: 8px 0; border-bottom: 1px solid var(--line2); }

@@ -14,6 +14,7 @@ import {
 import type { WatchlistItem } from '../../types'
 import { CandleChart } from './CandleChart'
 import { CommandBar } from './CommandBar'
+import { ScrollArea, SegmentedControl, Tabs, TextInput } from '@mantine/core'
 import styles from './TerminalTab.module.css'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -272,13 +273,14 @@ export function TerminalTab() {
           </div>
 
           <div className={styles.addRow}>
-            <input
-              className={styles.addInput}
+            <TextInput
+              className={styles.addInputRoot}
+              classNames={{ input: styles.addInput }}
               value={addInput}
               placeholder="ADD TICKER…"
               maxLength={6}
-              onChange={e => setAddInput(e.target.value.toUpperCase())}
-              onKeyDown={e => { if (e.key === 'Enter') handleAdd() }}
+              onChange={(e) => setAddInput(e.currentTarget.value.toUpperCase())}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleAdd() }}
             />
             <button className={styles.addBtn} onClick={() => handleAdd()} disabled={adding || !addInput.trim()}>
               {adding ? '…' : '+'}
@@ -292,6 +294,7 @@ export function TerminalTab() {
             <button className={styles.whBtn} onClick={() => toggleSort('rsi')}>RSI {sortArrow('rsi')}</button>
           </div>
 
+          <ScrollArea style={{ flex: 1 }} offsetScrollbars>
           {sortedWl.map((w: WatchlistItem) => {
             const chg = w.changePct ?? w.change ?? 0
             const rsi = w.rsi
@@ -319,6 +322,7 @@ export function TerminalTab() {
               </div>
             )
           })}
+          </ScrollArea>
         </div>
 
         <div className={styles.resizer} onMouseDown={startDrag('left')} />
@@ -346,24 +350,30 @@ export function TerminalTab() {
               <RangeBar lo={selected.dayLow} hi={selected.dayHigh} price={selected.price} />
 
               {/* tabs */}
-              <div className={styles.tabs}>
-                {(['overview', 'news', 'financials'] as Tab[]).map(t => (
-                  <button key={t} className={`${styles.tabBtn} ${tab === t ? styles.tabActive : ''}`} onClick={() => setTab(t)}>
-                    {t === 'overview' ? 'OVERVIEW' : t === 'news' ? `NEWS (${news.length})` : 'FINANCIALS'}
-                  </button>
-                ))}
-              </div>
+              <Tabs
+                value={tab}
+                onChange={(v) => v && setTab(v as Tab)}
+                classNames={{ list: styles.tabs, tab: styles.tabBtn }}
+              >
+                <Tabs.List>
+                  {(['overview', 'news', 'financials'] as Tab[]).map((t) => (
+                    <Tabs.Tab key={t} value={t}>
+                      {t === 'overview' ? 'OVERVIEW' : t === 'news' ? `NEWS (${news.length})` : 'FINANCIALS'}
+                    </Tabs.Tab>
+                  ))}
+                </Tabs.List>
+              </Tabs>
 
               {/* OVERVIEW */}
               {tab === 'overview' && (
                 <>
-                  <div className={styles.periods}>
-                    {PERIODS.map(p => (
-                      <button key={p} className={`${styles.pBtn} ${period === p ? styles.pBtnActive : ''}`} onClick={() => setPeriod(p)}>
-                        {p.toUpperCase()}
-                      </button>
-                    ))}
-                  </div>
+                  <SegmentedControl
+                    value={period}
+                    onChange={(v) => setPeriod(v as Period)}
+                    data={PERIODS.map((p) => ({ label: p.toUpperCase(), value: p }))}
+                    className={styles.periods}
+                    classNames={{ label: styles.pBtn }}
+                  />
                   <div className={styles.chartWrap}>
                     <CandleChart bars={bars} height={300} />
                   </div>
@@ -380,7 +390,7 @@ export function TerminalTab() {
 
               {/* NEWS */}
               {tab === 'news' && (
-                <div className={styles.newsList}>
+                <ScrollArea className={styles.newsList} offsetScrollbars>
                   {news.length === 0 && <span className="t-faint seclbl" style={{ padding: '8px 0', display: 'block' }}>No news</span>}
                   {news.map((nn, i) => (
                     <a key={i} href={nn.link || '#'} target="_blank" rel="noreferrer" className={styles.newsItem}>
@@ -392,7 +402,7 @@ export function TerminalTab() {
                       </div>
                     </a>
                   ))}
-                </div>
+                </ScrollArea>
               )}
 
               {/* FINANCIALS */}

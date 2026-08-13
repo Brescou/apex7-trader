@@ -1,4 +1,4 @@
-"""APEX-7 — FastAPI backend replacing Dash.
+"""APEX-7 — FastAPI backend for the React terminal UI.
 
 Run with:  uvicorn api.main:app --reload --port 8000
 
@@ -97,8 +97,6 @@ def health():
         "cycle": cycle,
         "mode": mode,
     }
-    # Matches the legacy Dash /health contract (dashboard/server.py): a dead
-    # or missing portfolio must fail the HTTP status too, not just the body
-    # field — otherwise a monitoring probe (`curl -f`) never notices the
-    # agent died since 200 always "succeeds".
+    # A dead or missing portfolio must fail the HTTP status too, not just
+    # the JSON ``status`` field — otherwise ``curl -f`` never notices.
     return JSONResponse(content=body, status_code=200 if alive else 503)

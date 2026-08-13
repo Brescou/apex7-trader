@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { MantineProvider } from '@mantine/core'
 import { AnalyticsTab } from '../AnalyticsTab'
 import type { Snapshot } from '../../../types'
+import { apexTheme } from '../../../theme'
 
 vi.mock('../../../hooks/useApex', () => ({
   useAnalytics: () => ({ accuracy: [], postmortems: [] }),
@@ -45,7 +47,11 @@ describe('AnalyticsTab agent vote labels', () => {
       { agent: 'risk_manager', action: 'HOLD', confidence: 0.5 },
     ])
 
-    render(<AnalyticsTab snapshot={snapshot} />)
+    render(
+      <MantineProvider theme={apexTheme} forceColorScheme="dark">
+        <AnalyticsTab snapshot={snapshot} />
+      </MantineProvider>
+    )
 
     expect(screen.getByText('TECHNICIAN')).toBeInTheDocument()
     expect(screen.getByText('RISK_MANAGER')).toBeInTheDocument()
@@ -59,7 +65,11 @@ describe('AnalyticsTab agent vote labels', () => {
       { role: 'macro_watcher', action: 'HOLD', confidence: 0.4 },
     ])
 
-    render(<AnalyticsTab snapshot={snapshot} />)
+    render(
+      <MantineProvider theme={apexTheme} forceColorScheme="dark">
+        <AnalyticsTab snapshot={snapshot} />
+      </MantineProvider>
+    )
 
     expect(screen.getByText('ANALYST')).toBeInTheDocument()
     expect(screen.getByText('MACRO_WATCHER')).toBeInTheDocument()

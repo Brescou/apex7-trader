@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Badge, SegmentedControl, Tabs } from '@mantine/core'
 import type { Mode, Tab } from '../../types'
 import styles from './Topbar.module.css'
 
@@ -36,48 +37,51 @@ const TABS: { key: Tab; label: string }[] = [
 export function Topbar({ tab, onTabChange, mode, onModeChange, cycle, connected, thinking }: Props) {
   return (
     <header className={styles.topbar}>
-      {/* Brand */}
       <div className={styles.brand}>
         <div className={styles.logo}>◆</div>
         <div>
           <div className={styles.brandRow}>
             <span className={`mono ${styles.brandName}`}>APEX-7</span>
             <span className={`mono ${styles.ver}`}>v3.2</span>
-            {thinking && <span className={`mono ${styles.thinking}`}>⟳ THINKING</span>}
+            {thinking && (
+              <Badge variant="outline" color="cyan" className={styles.thinking}>
+                THINKING
+              </Badge>
+            )}
           </div>
           <div className={styles.brandSub}>SURVIVAL TRADER</div>
         </div>
       </div>
 
-      {/* Tabs */}
-      <nav className={styles.tabs}>
-        {TABS.map(t => (
-          <button
-            key={t.key}
-            className={`${styles.tabBtn} ${tab === t.key ? styles.tabOn : ''}`}
-            onClick={() => onTabChange(t.key as Tab)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
+      <Tabs
+        value={tab}
+        onChange={(v) => v && onTabChange(v as Tab)}
+        variant="pills"
+        classNames={{ list: styles.tabs, tab: styles.tabBtn }}
+      >
+        <Tabs.List>
+          {TABS.map((t) => (
+            <Tabs.Tab key={t.key} value={t.key}>
+              {t.label}
+            </Tabs.Tab>
+          ))}
+        </Tabs.List>
+      </Tabs>
 
       <div className={styles.spacer} />
 
-      {/* Mode toggle */}
-      <div className={styles.mseg}>
-        {(['live', 'paper', 'sim'] as Mode[]).map(m => (
-          <button
-            key={m}
-            className={`mono ${styles.mbtn} ${styles[`mbtn_${m}`]} ${mode === m ? styles.mbtnOn : ''}`}
-            onClick={() => onModeChange(m)}
-          >
-            {m.toUpperCase()}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl
+        value={mode}
+        onChange={(v) => onModeChange(v as Mode)}
+        data={[
+          { label: 'LIVE', value: 'live' },
+          { label: 'PAPER', value: 'paper' },
+          { label: 'SIM', value: 'sim' },
+        ]}
+        className={`${styles.mseg} ${styles[`mseg_${mode}`]}`}
+        classNames={{ label: styles.mbtn, innerLabel: 'mono', indicator: styles.indicator }}
+      />
 
-      {/* Cycle */}
       <div className={styles.cycleBadge}>
         <span className="t-faint seclbl" style={{ fontSize: 9 }}>CYCLE</span>
         <span className="mono t-mid" style={{ fontSize: 11 }}>{cycle.toLocaleString()}</span>
@@ -85,11 +89,14 @@ export function Topbar({ tab, onTabChange, mode, onModeChange, cycle, connected,
 
       <Clock />
 
-      {/* Connection */}
-      <div className={`${styles.conn} ${connected ? styles.connOk : styles.connErr}`}>
-        <span className={styles.dot} />
+      <Badge
+        variant="dot"
+        color={connected ? 'teal' : 'orange'}
+        size="sm"
+        className={styles.conn}
+      >
         {connected ? 'CONNECTED' : 'RECONNECTING'}
-      </div>
+      </Badge>
     </header>
   )
 }

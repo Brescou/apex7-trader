@@ -754,8 +754,7 @@ def test_health_exempt_from_auth(monkeypatch, _clean_controller_state):
 
 def test_health_returns_503_when_portfolio_dead(_clean_controller_state):
     """The FastAPI /health must fail its HTTP status (not just the body's
-    "status" field) when the portfolio has died — matching the legacy Dash
-    /health contract (dashboard/server.py returns 503). A monitoring probe
+    "status" field) when the portfolio has died. A monitoring probe
     using `curl -f` never notices a dead agent if this always returns 200.
     """
     from api.main import health

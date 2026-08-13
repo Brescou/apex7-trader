@@ -2,8 +2,8 @@
 .barFocus { background: var(--elev); box-shadow: inset 0 -1px 0 var(--amber); }
 
 .prompt { color: var(--amber); font-family: var(--font-mono); font-size: 14px; font-weight: 700; }
-.input  { flex: 1; background: transparent; border: none; outline: none; color: var(--hi); font-family: var(--font-mono); font-size: 12px; letter-spacing: .06em; }
-.input::placeholder { color: var(--faint); letter-spacing: .04em; }
+.inputRoot { flex: 1; min-width: 0; }
+.input  { color: var(--hi); font-family: var(--font-mono); font-size: 12px; letter-spacing: .06em; }
 
 .flash    { font-size: 10px; font-family: var(--font-mono); padding: 3px 8px; border-radius: 3px; letter-spacing: .04em; white-space: nowrap; }
 .flashOk  { color: var(--pos); background: #2dd4a014; border: 1px solid #2dd4a030; }

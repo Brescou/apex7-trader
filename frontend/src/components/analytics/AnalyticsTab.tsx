@@ -1,3 +1,4 @@
+import { Badge, ScrollArea } from '@mantine/core'
 import { useAnalytics } from '../../hooks/useApex'
 import type { Snapshot } from '../../types'
 import styles from './AnalyticsTab.module.css'
@@ -34,6 +35,7 @@ export function AnalyticsTab({ snapshot: s }: Props) {
   ]
 
   return (
+    <ScrollArea h="100%" offsetScrollbars>
     <div className={styles.ana}>
       {/* KPI grid */}
       <div className={styles.statGrid}>
@@ -68,9 +70,13 @@ export function AnalyticsTab({ snapshot: s }: Props) {
                   <div className={styles.rankFill} style={{ width: a.accuracy + '%', background: color }} />
                 </div>
                 <span className={`mono ${styles.rankAcc}`}>{a.accuracy.toFixed(0)}%</span>
-                <span className={`${styles.badge} ${a.validated ? styles.bVal : styles.bCal}`}>
+                <Badge
+                  variant="outline"
+                  color={a.validated ? 'teal' : 'yellow'}
+                  className={styles.badge}
+                >
                   {a.validated ? '✓ VALIDATED' : '⏳ CALIBRATING'}
-                </span>
+                </Badge>
               </div>
             )
           })}
@@ -152,5 +158,6 @@ export function AnalyticsTab({ snapshot: s }: Props) {
         </div>
       </div>
     </div>
+    </ScrollArea>
   )
 }

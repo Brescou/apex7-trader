@@ -25,8 +25,7 @@ _SECTOR_ETFS: dict[str, str] = {
     "Staples": "XLP",
 }
 
-# Serializes the actual network fetch so concurrent cache-miss callers (e.g.
-# the Dash callback and a React API request landing at the same moment)
+# Serializes the actual network fetch so concurrent cache-miss callers
 # coalesce onto one fetch instead of each independently re-running the full
 # batch of downloads (Review Finding: thundering herd).
 _sector_fetch_lock = threading.Lock()

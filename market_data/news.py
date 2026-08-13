@@ -15,10 +15,8 @@ def fetch_news(symbol: str, max_items: int = NEWS_MAX_ITEMS) -> list[dict]:
     Fetch recent headlines for a symbol via yfinance Ticker.news.
     Returns title, source, age, url, sentiment.
 
-    Cached ``NEWS_CACHE_SEC`` seconds per (symbol, max_items) — unlike every
-    other market_data fetcher this used to hit yfinance on every call, and
-    two Dash callbacks driven by the same "news-interval" fire back-to-back
-    for the same symbol each tick (Review Finding).
+    Cached ``NEWS_CACHE_SEC`` seconds per (symbol, max_items). Without this,
+    concurrent REST callers for the same symbol would each hit yfinance.
     """
     cache_key = f"{symbol}|{max_items}"
     now = time.time()

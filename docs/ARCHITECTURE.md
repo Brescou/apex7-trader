@@ -58,7 +58,7 @@ apex7-trader/
 │       ├── portfolio.py    ← GET /api/portfolio, /trades, /analytics
 │       ├── market.py       ← GET /api/market/macro|watchlist|sectors|correlation|news|fundamentals|fear-greed
 │       └── control.py      ← POST /api/control/mode|pause|resume + watchlist CRUD
-├── frontend/                ← React 18 + Vite + TypeScript terminal UI
+├── frontend/                ← React 19 + Mantine 9 + Vite + TypeScript terminal UI
 │   ├── src/
 │   │   ├── App.tsx
 │   │   ├── hooks/          ← useWebSocket.ts, useApex.ts (REST polling)
@@ -109,7 +109,7 @@ main.py (uvicorn launcher)
               ├── agents.registry (get_graph)
               └── market_data (fetch_*)
 
-frontend/ (React 18 + Vite + TypeScript)
+frontend/ (React 19 + Mantine 9 + Vite + TypeScript)
   └── REST (/api/*) + WebSocket (/ws) → api.main
 
 agents.registry
@@ -381,7 +381,7 @@ CREATE TABLE postmortem (
 ## API + React frontend
 
 The Dash UI (server-rendered layout + `@app.callback`s) was fully removed
-in favor of a FastAPI backend (`api/`) and a React 18 + Vite + TypeScript
+in favor of a FastAPI backend (`api/`) and a React 19 + Mantine 9 + Vite + TypeScript
 frontend (`frontend/`). `api/main.py` is non-invasive: it reads
 `dashboard.controller._state` / `_ctrl` and calls `start_controller()`
 from its `lifespan` hook — zero changes to `agents/`, `core/`, or

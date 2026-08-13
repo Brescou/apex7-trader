@@ -101,7 +101,7 @@ apex7-trader/
 │       ├── market.py      ← /api/market/* (macro, watchlist, sectors, correlation, news, …)
 │       ├── control.py     ← /api/control/* (mode, pause/resume, watchlist CRUD)
 │       └── ws.py          ← /ws WebSocket endpoint
-├── frontend/              ← React 18 + Vite + TypeScript terminal UI
+├── frontend/              ← React 19 + Mantine 9 + Vite + TypeScript terminal UI
 │   ├── package.json
 │   └── src/
 │       ├── App.tsx
@@ -162,7 +162,7 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `api/broadcaster.py` | WebSocket broadcaster — polls `dashboard.controller._state` and pushes snapshots/vote diffs |
 | `api/serializers.py` | Portfolio/trade/vote → JSON dicts for REST + WS |
 | `api/routes/` | `portfolio.py`, `market.py`, `control.py`, `ws.py` — see "API + React frontend" below |
-| `frontend/` | React 18 + Vite + TypeScript terminal UI — Live/Terminal/Analytics tabs |
+| `frontend/` | React 19 + Mantine 9 + Vite + TypeScript terminal UI — Live/Terminal/Analytics tabs |
 | `agents/multi.py` | Unique LangGraph: 4 specialized agents + arbitration + `run_daily_postmortem()` |
 | `agents/shared/state.py` | `AgentState`, `MultiAgentState` TypedDicts |
 | `agents/shared/nodes.py` | LangGraph nodes: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`; simulation price engine; re-exports from `db` / `llm` / `eval` / `modes` |
