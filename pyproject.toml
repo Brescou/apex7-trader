@@ -3,6 +3,7 @@ name = "apex7-trader"
 version = "0.1.0"
 description = "Multi-agent LLM trading agent with a FastAPI + React terminal UI, built with LangGraph and Claude"
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.84.0",
