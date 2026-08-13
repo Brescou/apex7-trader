@@ -55,11 +55,11 @@ class _ActionConfidenceMixin(BaseModel):
         return max(0.0, min(1.0, v))
 
 
-# ── Decision (analyze_node / arbitrate_node) ─────────────────────────────────
+# ── Decision (arbitrate_node) ────────────────────────────────────────────────
 
 
 class DecisionOutput(_ActionConfidenceMixin):
-    """Validates the JSON output from analyze_node and arbitrate_node."""
+    """Validates the JSON output from ``arbitrate_node``."""
 
     symbol: str = Field(default="")
     allocation_pct: float = Field(default=0, ge=0, le=100)

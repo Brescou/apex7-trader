@@ -19,6 +19,8 @@ function tagFromMessage(msg: string): { label: string; cls: string } {
   if (m.includes('ANALYST'))         return { label: 'ANLST', cls: 'posTag' }
   if (m.includes('RISK'))            return { label: 'RISK',  cls: 'orangeTag' }
   if (m.includes('MACRO'))           return { label: 'MACRO', cls: 'purpleTag' }
+  if (m.includes('ECONOMIST') || m.includes('[ECON]')) return { label: 'ECON', cls: 'amberTag' }
+  if (m.includes('GEOPOLIT') || m.includes('[GEO]'))   return { label: 'GEO',  cls: 'negTag' }
   if (m.includes('STOP') || m.includes('DEATH')) return { label: 'SL', cls: 'negTag' }
   if (m.includes('EVAL') || m.includes('CORRECT')) return { label: 'EVAL', cls: 'cyanTag' }
   if (m.includes('SAVE') || m.includes('LESSON'))  return { label: 'MEM',  cls: 'cyanTag' }

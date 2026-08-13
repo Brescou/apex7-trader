@@ -15,10 +15,12 @@ function pct(n: number) { return (n >= 0 ? '+' : '') + n.toFixed(2) + '%' }
 function cls(n: number) { return n >= 0 ? 'pos' : 'neg' }
 
 const AGENT_META: Record<string, { color: string; label: string; model: string }> = {
-  technician:    { color: '#5b9dff', label: 'TECHNICIAN',    model: 'HAIKU' },
-  analyst:       { color: '#2dd4a0', label: 'ANALYST',       model: 'SONNET' },
-  risk_manager:  { color: '#f0934d', label: 'RISK MANAGER',  model: 'HAIKU' },
-  macro_watcher: { color: '#b18cf0', label: 'MACRO WATCHER', model: 'HAIKU' },
+  technician:     { color: '#5b9dff', label: 'TECHNICIAN',     model: 'HAIKU' },
+  analyst:        { color: '#2dd4a0', label: 'ANALYST',        model: 'SONNET' },
+  risk_manager:   { color: '#f0934d', label: 'RISK MANAGER',   model: 'HAIKU' },
+  macro_watcher:  { color: '#b18cf0', label: 'MACRO WATCHER',  model: 'HAIKU' },
+  economist:      { color: '#e8c547', label: 'ECONOMIST',      model: 'HAIKU' },
+  geopolitician:  { color: '#e07070', label: 'GEOPOLITICIAN',  model: 'SONNET' },
 }
 
 function voteCls(action = '') {

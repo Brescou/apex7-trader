@@ -247,8 +247,8 @@ def _reconcile_portfolio_state(port: "Portfolio") -> None:
 def start_controller() -> None:
     """Create the live portfolio and start agent + postmortem threads.
 
-    Called explicitly from ``create_app()`` so importing this module does not
-    spawn threads or construct ``Portfolio``.
+    Called from ``api.main``'s FastAPI ``lifespan`` hook so importing this
+    module does not spawn threads or construct ``Portfolio``.
     """
     global _controller_started
     with _controller_lock:

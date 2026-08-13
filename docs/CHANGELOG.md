@@ -12,7 +12,7 @@ The original Plotly Dash UI (layout / callbacks / Flask) was removed; those file
 
 ### Trading / agents
 
-- Single multi-agent graph (`agents/multi.py`): technician, analyst, risk_manager, macro_watcher + arbitration. The simple graph and `AGENT_GRAPH` toggle are gone.
+- Single multi-agent graph (`agents/multi.py`): technician, analyst, risk_manager, macro_watcher, economist, geopolitician + arbitration. The simple graph and `AGENT_GRAPH` toggle are gone.
 - Modes: **LIVE** (LLM), **PAPER** (real yfinance prices, rule-based, no LLM, `trades_paper.db`), **SIM** (random walk, `trades_sim.db`). Switch is live via `POST /api/control/mode`.
 - Deferred `was_correct`: `evaluate_pending_trades` scores votes from the real market move after `EVAL_HORIZON_CALENDAR_DAYS` (skipped in SIM). Dynamic agent weights warm up after 5 evaluated votes.
 - Partial exits (`sell_pct`), pyramiding (`MAX_PYRAMID_LAYERS`), trailing stop, take-profit, time-stop, drawdown BUY block, earnings hard block.

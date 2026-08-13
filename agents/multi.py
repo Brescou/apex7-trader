@@ -1,4 +1,4 @@
-"""APEX-7 // MULTI-AGENT GRAPH — 4 specialized agents + arbitration (extracted from agent_multi.py)."""
+"""APEX-7 // MULTI-AGENT GRAPH — 6 specialized agents + arbitration."""
 
 import json
 import logging
@@ -384,9 +384,9 @@ def _record_vote(
         )
 
 
-# ── Specialist node scaffolding (shared by the 4 LLM specialists) ────────────
+# ── Specialist node scaffolding ───────────────────────────────────────────────
 #
-# The 4 specialist nodes (technician/analyst/risk_manager/macro_watcher) share
+# The specialist nodes share this LLM + JSON + Pydantic scaffolding.
 # identical plumbing: read recent lessons, append them to the system prompt,
 # call the LLM, parse+validate the JSON, then record the vote and return the
 # accumulator dict. The *prompts* and *signal building* genuinely differ per
@@ -1158,7 +1158,7 @@ def economist_node(state: MultiAgentState) -> dict:
         ]
         # Still record this cycle's use of the cached vote in agent_memory —
         # skipping _emit_vote() here meant a cache hit (the overwhelming
-        # majority of cycles at a 15min TTL vs. a ~30s agent interval) left
+        # majority of cycles at a 15min TTL vs. a ~90s agent interval) left
         # no agent_memory row at all, so was_correct/accuracy tracking and
         # dynamic-weight blending silently under-counted this agent's real
         # participation (Review Finding).

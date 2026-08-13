@@ -13,8 +13,11 @@ def test_registry_graph_info() -> None:
     """``get_graph_info`` exposes UI metadata for the multi-agent graph."""
     info = get_graph_info()
     assert "MULTI" in info["label"]
+    assert "6" in info["label"]
     for key in ("description", "cost", "latency", "color"):
         assert key in info
+    assert "Economist" in info["description"]
+    assert "Geopolitician" in info["description"]
 
 
 def test_registry_get_graph_builds() -> None:

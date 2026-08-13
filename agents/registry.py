@@ -8,10 +8,12 @@ from agents.multi import build_multi_graph
 from core.data import Portfolio
 
 GRAPH_INFO: dict = {
-    "label": "MULTI-AGENT — 4 Specialists",
-    "description": "Technician + Analyst + Risk Manager + Macro Watcher.",
+    "label": "MULTI-AGENT — 6 Specialists",
+    "description": (
+        "Technician + Analyst + Risk Manager + Macro Watcher " "+ Economist + Geopolitician."
+    ),
     "cost": "High",
-    "latency": "~45s/cycle",
+    "latency": "~90s/cycle",
     "color": "#8b5cf6",
 }
 

@@ -25,7 +25,7 @@ apex7-trader/
 ├── README.md → docs/README.md
 ├── agents/
 │   ├── __init__.py
-│   ├── multi.py           ← unique multi-agent graph (4 specialists + arbitration)
+│   ├── multi.py           ← unique multi-agent graph (6 specialists + arbitration)
 │   ├── registry.py        ← graph builder + UI metadata (imports agents.multi)
 │   └── shared/
 │       ├── __init__.py
@@ -139,11 +139,13 @@ fetch_data    (no LLM)
     │
 supervisor    (Haiku — 3-point context brief)
     │
-   Send × 4 (parallel fan-out)
-    ├── technician    (Haiku — RSI + indicators)
-    ├── analyst       (Sonnet + web_search — fundamentals + sentiment)
-    ├── risk_manager  (Haiku — VaR, Kelly, risk score)
-    └── macro_watcher (Haiku — regime, bias, sector rotation)
+   Send × 6 (parallel fan-out)
+    ├── technician     (Haiku — RSI + indicators)
+    ├── analyst        (Sonnet + web_search — fundamentals + sentiment)
+    ├── risk_manager   (Haiku — VaR, Kelly, risk score)
+    ├── macro_watcher  (Haiku — regime, bias, F&G)
+    ├── economist      (Haiku — FRED cycle, yield curve, Fed)
+    └── geopolitician  (Sonnet + web_search — geo risk)
     │
 arbitrate     (Sonnet — weighted vote synthesis)
     │
@@ -170,8 +172,10 @@ Note: `research` edges directly to `risk_check` (no loop back to `arbitrate`). T
 | `technician` | Haiku | Technical analysis — RSI, MACD, Bollinger Bands, trend | Directional vote |
 | `analyst` | Sonnet + web_search | Fundamental + sentiment analysis, catalysts | Directional vote |
 | `risk_manager` | Haiku | VaR, Kelly sizing, risk score /10 | No directional vote — HOLD only |
-| `macro_watcher` | Haiku | Market regime, macro bias, sector rotation | No directional vote — HOLD only |
-| `arbitrate` | Sonnet | Weighted vote synthesis, final decision | Applies risk veto + macro filter |
+| `macro_watcher` | Haiku | Market regime, macro bias, Fear & Greed | No directional vote — HOLD only |
+| `economist` | Haiku | FRED cycle, yield curve, Fed path, inflation | No directional vote — HOLD only |
+| `geopolitician` | Sonnet + web_search | Geopolitical risk, exposed sectors | No directional vote — HOLD only |
+| `arbitrate` | Sonnet | Weighted vote synthesis, final decision | Risk / macro / eco / geo filters |
 
 ## Vote Weights
 
@@ -179,13 +183,18 @@ Static base weights:
 
 | Agent | Weight | Votes on direction |
 |-------|--------|--------------------|
-| technician | 0.30 | yes |
-| analyst | 0.35 | yes |
-| risk_manager | 0.20 | no (sizing only) |
-| macro_watcher | 0.15 | no (regime only) |
+| technician | 0.28 | yes |
+| analyst | 0.32 | yes |
+| risk_manager | 0.15 | no (sizing only) |
+| macro_watcher | 0.10 | no (regime only) |
+| economist | 0.10 | no (cycle only) |
+| geopolitician | 0.05 | no (geo risk only) |
 
-Risk veto: `risk_score > 8` → BUY penalized ×0.15.
-Macro filter: `regime == "risk-off"` → BUY dampened ×0.5.
+Filters applied in `arbitrate_node` on BUY:
+- Risk veto: `risk_score > 8` → BUY penalized ×0.15 (forced HOLD post-LLM)
+- Macro filter: `regime == "risk-off"` → BUY dampened ×0.5
+- Economic headwind: `economic_score < -0.5` → BUY dampened (forced HOLD post-LLM)
+- Geo risk: `geopolitical_risk > 7` → BUY dampened ×0.5 (forced HOLD post-LLM)
 
 **Dynamic weights** (`_compute_dynamic_weights` in `agents/multi.py`):
 - Blends static weights (70%) with accuracy-based weights (30%) derived from the last 50 evaluated `agent_memory` votes per agent (`was_correct IS NOT NULL`).
@@ -235,15 +244,15 @@ and on the `/health` endpoint:
 
 | Mode | Prices | Decisions | DB | Cycle | LLM cost |
 |------|--------|-----------|----|-------|----------|
-| `LIVE` | yfinance real-time | LLM (Sonnet + Haiku + web_search) | `trades.db` | `AGENT_INTERVAL` (30 s) | $$$ |
-| `PAPER` | yfinance real-time | Rule-based (`sim_*` nodes) — zero LLM | `trades_paper.db` | `AGENT_INTERVAL` (30 s) | 0 |
+| `LIVE` | yfinance real-time | LLM (Sonnet + Haiku + web_search) | `trades.db` | `AGENT_INTERVAL` (90 s) | $$$ |
+| `PAPER` | yfinance real-time | Rule-based (`sim_*` nodes) — zero LLM | `trades_paper.db` | `AGENT_INTERVAL` (90 s) | 0 |
 | `SIM` | Random walk | Rule-based (`sim_*` nodes) | `trades_sim.db` | 3 s (fast) | 0 |
 
 Wiring (no separate graph builder — the same compiled graph is used in all
 three modes; the routing happens inside each node):
 
 - `_no_llm_mode()` returns `True` for SIM **or** PAPER. Every Anthropic call
-  site (`research_node`, `load_memory_node`, `save_memory_node`, the four
+  site (`research_node`, `load_memory_node`, `save_memory_node`, the six
   specialist nodes, `supervisor_node`, `arbitrate_node`, postmortem summary)
   is gated by this helper and falls back to its `sim_*` rule-based variant.
 - `fetch_data_node` is the only node that distinguishes PAPER from SIM:
@@ -263,12 +272,14 @@ three modes; the routing happens inside each node):
 |------|----------|----------|
 | `load_memory` | START | `fetch_data` |
 | `fetch_data` | `load_memory` | `supervisor` |
-| `supervisor` | `fetch_data` | `technician`, `analyst`, `risk_manager`, `macro_watcher` (Send fan-out) |
+| `supervisor` | `fetch_data` | `technician`, `analyst`, `risk_manager`, `macro_watcher`, `economist`, `geopolitician` (Send fan-out) |
 | `technician` | `supervisor` (Send) | `arbitrate` |
 | `analyst` | `supervisor` (Send) | `arbitrate` |
 | `risk_manager` | `supervisor` (Send) | `arbitrate` |
 | `macro_watcher` | `supervisor` (Send) | `arbitrate` |
-| `arbitrate` | all 4 specialists | `risk_check` / `research` (conditional) |
+| `economist` | `supervisor` (Send) | `arbitrate` |
+| `geopolitician` | `supervisor` (Send) | `arbitrate` |
+| `arbitrate` | all 6 specialists | `risk_check` / `research` (conditional) |
 | `research` | `arbitrate` | `risk_check` |
 | `risk_check` | `arbitrate`, `research` | `execute` / `skip` (conditional) |
 | `execute` | `risk_check` | `save_memory` |

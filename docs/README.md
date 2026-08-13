@@ -31,7 +31,7 @@ Every cycle the agent:
 1. Loads its trade memory from SQLite
 2. Fetches real market data (prices, news, social sentiment)
 3. Analyzes the market with Claude Sonnet (with optional web search)
-4. Optionally performs deep research (if confidence < 70%)
+4. Optionally performs deep research (if confidence < 0.72)
 5. Validates its decision against risk rules
 6. Executes the trade and saves a lesson to memory
 
@@ -77,6 +77,8 @@ graph and the `AGENT_GRAPH` env toggle have been removed.
 
 ### Multi-agent graph
 
+Six specialists run in parallel after the supervisor brief. Technician and Analyst vote on **direction** (BUY/SELL/HOLD); Risk, Macro, Economist and Geopolitician contribute HOLD weight and protection filters.
+
 ```
   __start__
       │
@@ -84,28 +86,25 @@ graph and the `AGENT_GRAPH` env toggle have been removed.
       │
   fetch_data  ← yfinance + news + sentiment
       │
-  supervisor  ← Haiku (context brief for team)
+  supervisor  ← Haiku (context brief for the team)
       │
-      ├─────────────────────────────────────┐
-      │ Send() parallel fan-out             │
-      ▼                                     ▼
-  ┌────────────┐  ┌──────────┐  ┌───────────────┐  ┌──────────────┐
-  │ technician │  │ analyst  │  │ risk_manager  │  │ macro_watcher│
-  │ (Haiku)    │  │ (Sonnet) │  │ (Haiku)       │  │ (Haiku)      │
-  │ RSI/MACD   │  │ news+web │  │ VaR/Kelly     │  │ regime/bias  │
-  └─────┬──────┘  └────┬─────┘  └──────┬────────┘  └──────┬───────┘
-        │              │               │                   │
-        └──────────────┴───────────────┴───────────────────┘
-                               │
+      ├──────────── Send() parallel fan-out (6) ────────────┤
+      ▼                                                     ▼
+  technician (Haiku)   analyst (Sonnet)    risk_manager (Haiku)
+  RSI / MACD / BB      news + web_search   VaR / Kelly
+      │
+  macro_watcher (Haiku)  economist (Haiku)  geopolitician (Sonnet)
+  regime / F&G           FRED cycle         geo risk + web
+      │
                          arbitrate ← Sonnet (weighted vote fusion)
                                │
                          conf ≥ 0.72? ──► risk_check
                                │              │
                            research       pass ──► execute ──► save_memory
-                                          fail ──► skip
+                           (then risk_check)  fail ──► skip
 ```
 
-All specialist votes are validated through **Pydantic models** (`TechVote`, `AnalystVote`, `RiskVote`, `MacroVote`) before arbitration.
+All specialist votes are validated through **Pydantic models** (`TechVote`, `AnalystVote`, `RiskVote`, `MacroVote`, `EconomistVote`, `GeoPoliticianVote`) before arbitration.
 
 ### Persistence
 
@@ -130,7 +129,7 @@ All specialist votes are validated through **Pydantic models** (`TechVote`, `Ana
 LangGraph was chosen over a plain prompt loop for three reasons:
 
 - **Explicit graph structure** — each node is a pure function with a typed `AgentState`. The flow is readable, testable, and easy to extend (add a node, wire an edge).
-- **Conditional routing** — the `analyze → research → analyze` loop and the `risk_check → execute|skip` branch are expressed as graph edges, not buried in if/else logic.
+- **Conditional routing** — `arbitrate → research → risk_check` (research does **not** loop back) and `risk_check → execute|skip` are graph edges, not buried in if/else logic.
 - **State accumulation** — `Annotated[List, operator.add]` on `log` and `portfolio_history` fields lets nodes append without overwriting, removing the need for manual state merging.
 
 The compiled graph is also exposed to **LangGraph Studio** via `langgraph.json` for visual debugging.
@@ -139,9 +138,9 @@ The compiled graph is also exposed to **LangGraph Studio** via `langgraph.json` 
 
 | Task | Model | Why |
 |------|-------|-----|
-| Market analysis, research, arbitration | `claude-sonnet-4-5` | Complex reasoning, web search, JSON output |
+| Analysis, research, arbitration, geopolitics | `claude-sonnet-4-5` | Complex reasoning, web search, JSON output |
 | Memory extraction, supervisor brief | `claude-haiku-4-5-20251001` | Fast, cheap — runs on every cycle |
-| Technician, risk manager, macro watcher | `claude-haiku-4-5-20251001` | Structured output, latency-sensitive |
+| Technician, risk manager, macro watcher, economist | `claude-haiku-4-5-20251001` | Structured output, latency-sensitive |
 
 This keeps the expensive model where reasoning quality matters and the cheap model for boilerplate LLM work.
 
@@ -157,11 +156,13 @@ All LLM JSON outputs pass through Pydantic models in `agents/shared/schemas.py`:
 
 | Model | Used by | Key validations |
 |-------|---------|-----------------|
-| `DecisionOutput` | `analyze_node`, `arbitrate_node` | action, confidence, allocation_pct, emotion |
+| `DecisionOutput` | `arbitrate_node` | action, confidence, allocation_pct, emotion |
 | `TechVote` | `technician_node` | action, confidence, key_indicators (RSI/MACD/BB) |
 | `AnalystVote` | `analyst_node` | catalysts, sentiment_score |
 | `RiskVote` | `risk_manager_node` | risk_score [0-10], sizing_recommendation, VaR |
 | `MacroVote` | `macro_watcher_node` | market_regime, macro_bias, macro_score |
+| `EconomistVote` | `economist_node` | economic_regime, rate_trajectory, economic_score [-1, 1] |
+| `GeoPoliticianVote` | `geopolitician_node` | geopolitical_risk [0-10], geo_bias, geo_score [-1, 1] |
 
 Invalid values are clamped (confidence > 1.0 → divided by 100, allocation > 100% → capped). If the entire model fails validation, safe defaults are returned (HOLD, 0.5 confidence).
 
@@ -219,19 +220,25 @@ apex7-trader/
 ├── CLAUDE.md                       # Maintainer / agent context (detailed pitfalls)
 │
 ├── agents/                         # Agent graph and shared logic
-│   ├── multi.py                    # Multi-agent graph (4 specialists + arbitration)
-│   ├── registry.py                 # Single graph builder + UI metadata
+│   ├── multi.py                    # Multi-agent graph (6 specialists + arbitration)
+│   ├── registry.py                 # Single graph builder + UI metadata (GRAPH_INFO)
 │   └── shared/
 │       ├── state.py                # AgentState, MultiAgentState TypedDicts
-│       ├── nodes.py                # Shared nodes, DB helpers, sim engine, _llm()
+│       ├── nodes.py                # Shared nodes, sim engine (re-exports)
+│       ├── db.py                   # SQLite schema, _db_read / _db_write
+│       ├── modes.py                # live / paper / sim flags
+│       ├── llm.py                  # Anthropic clients, token budget, circuit breaker
 │       ├── eval.py                 # Deferred was_correct evaluation
+│       ├── watchlist.py            # Persisted watchlist (max 20)
 │       ├── prompts.py              # Versioned system prompts (PROMPT_VERSION)
 │       └── schemas.py              # Pydantic validation for all LLM outputs
 │
 ├── core/                           # Domain logic (no UI, no agents)
 │   ├── data.py                     # Portfolio (thread-safe), LiveFeed
+│   ├── notifications.py            # Optional Discord webhook
+│   ├── external_data.py            # FRED + CNN Fear & Greed
 │   ├── backtest.py                 # run_backtest(), compare_strategies()
-│   ├── indicators.py               # Canonical RSI implementation
+│   ├── indicators.py               # Canonical RSI / MACD / Bollinger
 │   └── metrics.py                  # Sharpe/Sortino/drawdown/Kelly (pure functions)
 │
 ├── runtime/                      # Agent-loop / Portfolio-state machinery
@@ -280,7 +287,9 @@ apex7-trader/
 │                                    #     security (ruff flake8-bandit), frontend (tsc+vitest+build)
 ├── .pre-commit-config.yaml          # ruff + black + standard hooks
 ├── .env                             # API keys (not committed)
+├── LICENSE                          # MIT
 ├── trades.db                        # Live SQLite (auto-created, not committed)
+├── trades_paper.db                  # Paper SQLite (auto-created, not committed)
 └── trades_sim.db                    # Sim SQLite (auto-created, not committed)
 ```
 
@@ -306,17 +315,29 @@ uv sync
 Create a `.env` file at the project root:
 
 ```env
-# Required
+# Required for LIVE mode
 ANTHROPIC_API_KEY=sk-ant-...
 
-# Optional — Twitter/X sentiment analysis
+# Optional — Twitter/X sentiment (neutral 0.0 per symbol if unset)
 X_BEARER_TOKEN=...
 
-# Optional — agent behavior
+# Optional — modes (mutually exclusive; paper wins if both are on)
 SIMULATION_MODE=true        # random-walk prices + rule-based decisions (no LLM)
 PAPER_MODE=false            # real prices + rule-based decisions (no LLM)
 SIM_VOLATILITY=0.02         # price volatility per step (default 2%)
 SIM_DRIFT=0.0001            # slight upward drift (default 0.01%)
+
+# Optional — REST/WS auth (Bearer on REST, ?token= on /ws). /health stays open.
+# DASHBOARD_PASSWORD=...
+
+# Optional — Discord alerts (trades, digest, weekly, evaluation, …)
+# DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+
+# Optional — FRED (many series work without a key, but are rate-limited)
+# FRED_API_KEY=...
+
+# Optional — Finnhub fallback quotes when the yfinance breaker is open
+# FINNHUB_API_KEY=...
 ```
 
 **Watchlist, balance, and thresholds** are configured directly in `config.py`:
@@ -393,7 +414,7 @@ Sidebar + main layout, driven live by the `/ws` WebSocket snapshot:
 
 **Main column**
 - **Equity Curve** — inline SVG area chart (`EquityChart.tsx`) with high/low/current markers
-- **Activity Log** — live feed of agent actions, newest first, tagged by type (`EXEC`, `ARB`, `TECH`, `ANLST`, `RISK`, `MACRO`, `SL`, `EVAL`, `MEM`, `INFO`/`WARN`/`ERROR`/`CRIT`)
+- **Activity Log** — live feed of agent actions, newest first, tagged by type (`EXEC`, `ARB`, `TECH`, `ANLST`, `RISK`, `MACRO`, `ECON`, `GEO`, `SL`, `EVAL`, `MEM`, `INFO`/`WARN`/`ERROR`/`CRIT`)
 
 ### ANALYTICS tab (`frontend/src/components/analytics/AnalyticsTab.tsx`)
 
@@ -415,18 +436,21 @@ Bloomberg-style market terminal with live data from the `market_data` package.
 ├────────────────┬──────────────────┬────────────────────────┤
 │ WATCHLIST      │  AAPL   182.50   │  SECTOR ROTATION        │
 │  AAPL   +0.8%  │  ▲+0.8%          │  TECH   +1.2%           │
-│  TSLA   -1.2%  │  [sparkline]     │  ENERGY -0.4%           │
+│  TSLA   -1.2%  │  [candles]       │  ENERGY -0.4%           │
 │  RSI 42        │                  │  CORRELATION · 30D       │
 └────────────────┴──────────────────┴────────────────────────┘
 ```
 
+- **Command bar** — Bloomberg-style ticker line (`/` to focus). `AAPL` jumps to a known symbol; `NVDA ADD` (or Enter on an unknown ticker) adds it to the watchlist (max 20)
 - **Macro bar** — VIX, SPY, DXY, Fear & Greed, FED funds, 10Y yield with price + change %; refreshes every 60s
-- **Watchlist** — click a symbol to select it (up to 20, `X/20` counter); shows price, change %, and RSI; refreshes every 10s
-- **Symbol detail** — selected symbol's price/change plus a 1-day sparkline chart (`useSparkline`, refreshes every 60s)
+- **Watchlist** — click a symbol to select it (up to 20, `X/20` counter); shows price, change %, RSI, and a 52-week range bar; inline `ADD TICKER` field; refreshes every 10s
+- **Symbol detail** — selected-symbol OHLCV candle chart (`CandleChart.tsx`) plus OVERVIEW / NEWS / FINANCIALS tabs
+- **News** — selected-symbol headlines (`useNews` → `GET /api/market/news/{symbol}`)
+- **Financials** — selected-symbol fundamentals (`useFundamentals`)
 - **Sector rotation** — sector ETF % change heatmap; refreshes every 60s
 - **Correlation matrix** — 30D Pearson correlation across the watchlist; refreshes every 120s
 
-Note: `api/routes/control.py` exposes `POST /api/control/watchlist/add` / `/remove` and `market_data/screener.py` / `market_data/news.py` still exist and are covered by tests, but there's no add/remove-symbol control, screener panel, or news feed in the current frontend — they weren't ported during the FastAPI/React migration.
+The market screener (`market_data/screener.py`) still exists and is covered by tests, but it is not wired in the React UI yet.
 
 ---
 
@@ -481,7 +505,8 @@ g.add_edge("my_node", "risk_check")
 2. Add the node function in `agents/multi.py`
 3. Add it to the `Send()` fan-out in `_route_to_agents()`
 4. Add an edge to `arbitrate`
-5. Update `WEIGHTS` dict and `agents/registry.py` description
+5. Update `WEIGHTS` in `agents/multi.py` and `GRAPH_INFO` in `agents/registry.py`
+6. Add a color/label in `frontend/src/components/live/LiveTab.tsx` (`AGENT_META`)
 
 ### Add a new ticker
 
@@ -494,7 +519,7 @@ Simulation mode will auto-seed prices for it. Live mode will fetch via yfinance.
 
 ### Change the agent personality
 
-Main system prompt text for the simple graph’s analyze step lives in `agents/shared/prompts.py` (`ANALYZE_SYSTEM_PROMPT`, versioned with `PROMPT_VERSION`). Multi-agent prompts remain in `agents/multi.py` as today.
+System prompts live in `agents/shared/prompts.py` (`TECHNICIAN_SYSTEM_PROMPT`, `ANALYST_SYSTEM_PROMPT`, …, `ARBITRATE_SYSTEM_PROMPT`), versioned with `PROMPT_VERSION`. Trades persist that version so historical rows map back to the prompt pack used.
 
 ### Adjust simulation parameters at runtime
 

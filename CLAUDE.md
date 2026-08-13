@@ -163,7 +163,7 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `api/serializers.py` | Portfolio/trade/vote → JSON dicts for REST + WS |
 | `api/routes/` | `portfolio.py`, `market.py`, `control.py`, `ws.py` — see "API + React frontend" below |
 | `frontend/` | React 19 + Mantine 9 + Vite + TypeScript terminal UI — Live/Terminal/Analytics tabs |
-| `agents/multi.py` | Unique LangGraph: 4 specialized agents + arbitration + `run_daily_postmortem()` |
+| `agents/multi.py` | Unique LangGraph: 6 specialized agents + arbitration + `run_daily_postmortem()` |
 | `agents/shared/state.py` | `AgentState`, `MultiAgentState` TypedDicts |
 | `agents/shared/nodes.py` | LangGraph nodes: `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`; simulation price engine; re-exports from `db` / `llm` / `eval` / `modes` |
 | `agents/shared/db.py` | SQLite schema, `_get_db_path`, `_ensure_db`, `_db_write` / `_db_read` |
@@ -194,15 +194,15 @@ A third daemon thread (`apex7-postmortem`) runs in `runtime/controller.py` and c
 ### Pipeline (single graph)
 
 ```
-load_memory → fetch_data → supervisor → [technician | analyst | risk_manager | macro_watcher] (parallel, via Send) → arbitrate → [research if conf < 0.72, then risk_check] → risk_check → execute|skip → save_memory
+load_memory → fetch_data → supervisor → [technician | analyst | risk_manager | macro_watcher | economist | geopolitician] (parallel, via Send) → arbitrate → [research if conf < 0.72, then risk_check] → risk_check → execute|skip → save_memory
 ```
 
 Shared nodes (defined in `agents/shared/nodes.py`, used by `agents/multi.py`): `load_memory`, `fetch_data`, `risk_check`, `execute`, `save_memory`, `skip`, `research`.
 
 ### Model usage
 
-- `claude-sonnet-4-5` — `analyst_node`, `arbitrate_node` (complex reasoning + web search)
-- `claude-haiku-4-5-20251001` — `load_memory_node` (pattern extraction), `save_memory_node` (lesson generation), `technician_node`, `risk_manager_node`, `macro_watcher_node`, `supervisor_node`
+- `claude-sonnet-4-5` — `analyst_node`, `geopolitician_node`, `arbitrate_node` (complex reasoning + web search)
+- `claude-haiku-4-5-20251001` — `load_memory_node` (pattern extraction), `save_memory_node` (lesson generation), `technician_node`, `risk_manager_node`, `macro_watcher_node`, `economist_node`, `supervisor_node`
 
 The `_llm()` helper in `agents/shared/llm.py` handles the agentic web-search tool loop (up to 8 iterations) using Claude's `web_search_20250305` tool directly via the Anthropic SDK. It includes a daily token budget cap and circuit breaker (3 consecutive failures → 5-minute pause). On `anthropic.RateLimitError`, the breaker opens immediately so later `_llm()` calls respect `Retry-After` / pause.
 
@@ -216,12 +216,12 @@ in `agents/shared/modes.py` (re-exported from `agents/shared/nodes.py`) enforce 
 
 | Mode | Prices | Decisions | DB | Cycle | LLM cost |
 |------|--------|-----------|----|-------|----------|
-| `LIVE` | yfinance real-time | LLM (Sonnet + Haiku + web_search) | `trades.db` | `AGENT_INTERVAL` (30 s) | $$$ |
-| `PAPER` | yfinance real-time | Rule-based (`sim_*` nodes) — **zero LLM** | `trades_paper.db` | `AGENT_INTERVAL` (30 s) | 0 |
+| `LIVE` | yfinance real-time | LLM (Sonnet + Haiku + web_search) | `trades.db` | `AGENT_INTERVAL` (90 s) | $$$ |
+| `PAPER` | yfinance real-time | Rule-based (`sim_*` nodes) — **zero LLM** | `trades_paper.db` | `AGENT_INTERVAL` (90 s) | 0 |
 | `SIM` | Random walk (`SIM_DRIFT`/`SIM_VOLATILITY`) | Rule-based (`sim_*` nodes) | `trades_sim.db` | 3 s (fast loop) | 0 |
 
 Implementation details:
-- `_no_llm_mode()` returns `True` for sim **or** paper. Every Anthropic-bound branch (`analyst_node`, `arbitrate_node`, `supervisor_node`, `technician_node`, `risk_manager_node`, `macro_watcher_node`, `research_node`, `load_memory_node`, `save_memory_node`, `run_daily_postmortem`) is gated by this helper.
+- `_no_llm_mode()` returns `True` for sim **or** paper. Every Anthropic-bound branch (`analyst_node`, `arbitrate_node`, `supervisor_node`, `technician_node`, `risk_manager_node`, `macro_watcher_node`, `economist_node`, `geopolitician_node`, `research_node`, `load_memory_node`, `save_memory_node`, `run_daily_postmortem`) is gated by this helper.
 - `_get_db_path()` priority: `paper > sim > live` (defensive: paper wins if both flags are accidentally on).
 - `source` column values: `'live'`, `'paper'`, `'simulation'`.
 - Mode switch takes effect on the next cycle — no thread restart needed.
@@ -242,6 +242,8 @@ All LLM JSON outputs are validated through Pydantic models in `agents/shared/sch
 | `AnalystVote` | `analyst_node` | action, confidence, catalysts, sentiment_score |
 | `RiskVote` | `risk_manager_node` | risk_score [0-10], sizing_recommendation, var_1d |
 | `MacroVote` | `macro_watcher_node` | market_regime, macro_bias, macro_score [-1,1] |
+| `EconomistVote` | `economist_node` | economic_regime, rate_trajectory, economic_score [-1,1] |
+| `GeoPoliticianVote` | `geopolitician_node` | geopolitical_risk [0-10], geo_bias, geo_score [-1,1] |
 
 Shared validators via `_ActionConfidenceMixin`:
 - `action` must be `BUY`, `SELL`, or `HOLD` (defaults to `HOLD`)
@@ -379,7 +381,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`trades.db` soft migration** — on startup, `agents/shared/db.py` tries `ALTER TABLE trades ADD COLUMN source …` and `ADD COLUMN trace_id …`, and silently catches `OperationalError` if columns exist. Do not remove these blocks.
 - **`research` goes directly to `risk_check`** — `research_node` does not loop back to `arbitrate`. This is intentional.
 - **`LiveFeed` not wired into graph nodes** — `LiveFeed` is wired into `Portfolio.fetch_prices()` only; it is not a LangGraph node.
-- **`agents/registry.py` description** — update `GRAPH_INFO["description"]` if a 5th specialist is added to `agents/multi.py`. The registry lives in `agents/` (moved from `core/`) because it imports `agents.multi` and `core/` must never depend on `agents/`.
+- **`agents/registry.py` description** — keep `GRAPH_INFO` in sync with the specialist set in `agents/multi.py` (`WEIGHTS` keys). The registry lives in `agents/` (moved from `core/`) because it imports `agents.multi` and `core/` must never depend on `agents/`.
 - **Postmortem thread started from `runtime/controller.py`** — `run_daily_postmortem()` is never called from `main.py` directly; `start_controller()` (which spawns the postmortem thread) runs from `api/main.py`'s `lifespan` hook on real ASGI startup, so it only fires when the FastAPI app actually serves (e.g. via `uvicorn`/`main.py`), not on a bare `import api.main`.
 - **`market_data` caches** — macro 60s, watchlist 10s (`market_data.caches`) pour limiter yfinance. Cache mémoire uniquement ; reset au redémarrage. Un **circuit breaker yfinance** (`yf_circuit_open` / `record_yf_failure` / `record_yf_success` dans `caches.py`) s'ouvre après 3 échecs consécutifs et sert le cache stale pendant 60 s — câblé dans `quotes.py` et `macro.py`.
 - **Sentiment Twitter neutre sans token** — `_fetch_sentiment_sync` retourne `0.0` par symbole quand `X_BEARER_TOKEN` est absent (plus de bruit aléatoire ±0.3 traité comme signal).
@@ -399,7 +401,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **Backtest vs live RSI** — `core/backtest.py` `compute_indicators()` uses `core.indicators.rsi()` for `RSI_14` (same function as agents). Do not reintroduce pandas EWM for RSI.
 - **`test_sqlite_schema` runs against a temp DB** — `tests/test_smoke.py` redirects `_get_db_path` to a temp file (mirroring the `tmp_db` fixture, but fixture-free so the legacy runner works), calls `_ensure_db()` there, and never writes the project `trades.db`.
 - **Token budget resets daily** — `_maybe_reset_token_counter()` in `agents/shared/llm.py` is called at the start of each `_llm()` invocation and resets `_token_counter` at midnight. **`_maybe_reset_token_counter()` acquiert `_token_counter_lock` lui-même** — ne jamais l’appeler depuis une section déjà verrouillée par `_token_counter_lock`, sinon deadlock.
-- **All LLM specialist votes validated by Pydantic** — `technician_node`, `analyst_node`, `risk_manager_node`, `macro_watcher_node` and `arbitrate_node` all pass raw LLM JSON through their respective `validate_*_vote()` / `validate_decision()` functions from `agents/shared/schemas.py`.
+- **All LLM specialist votes validated by Pydantic** — `technician_node`, `analyst_node`, `risk_manager_node`, `macro_watcher_node`, `economist_node`, `geopolitician_node` and `arbitrate_node` all pass raw LLM JSON through their respective `validate_*_vote()` / `validate_decision()` functions from `agents/shared/schemas.py`.
 - **`was_correct` is deferred** — `agent_memory.was_correct` reflects the actual market move 5 trading days after the trade (resolved by `evaluate_pending_trades`), not the arbitration consensus. Right after a trade, `was_correct IS NULL`; the frontend shows `⏳ Calibrating` per agent until ≥ 5 evaluated votes accumulate.
 - **Paper mode reuses sim decision nodes** — `_no_llm_mode()` is `True` in both sim and paper, so any change to `sim_technician`, `sim_analyst`, `sim_risk_manager`, `sim_macro_watcher`, the `_no_llm_mode()` branch in `arbitrate_node`, or the `[SIM]/[PAPER]` lesson tag in `save_memory_node` directly affects paper trading. Only `fetch_data_node` diverges (paper uses the live yfinance branch).
 - **Mode switch is mutually exclusive** — `set_paper_mode(True)` clears `_sim_mode`, and `set_simulation_mode(True)` clears `_paper_mode`. Never set both flags directly via `_paper_mode["enabled"] = True`; always go through the setters so `.env` stays in sync.

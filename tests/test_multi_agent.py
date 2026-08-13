@@ -362,7 +362,7 @@ class TestSimPaperResearchGateBypass:
 
 class TestSlowAgentCacheHitStillRecordsVote:
     """economist/geopolitician cache a vote for _SLOW_AGENT_TTL_SEC (15 min
-    default) to avoid a redundant LLM call every ~30s agent cycle — but a
+    default) to avoid a redundant LLM call every ~90s agent cycle — but a
     cache HIT still bypassed _emit_vote() entirely, so almost every cycle
     (all but the rare cache-miss ones) left no agent_memory row at all for
     these two agents. was_correct/accuracy tracking and dynamic-weight

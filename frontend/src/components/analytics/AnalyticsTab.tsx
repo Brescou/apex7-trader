@@ -13,6 +13,8 @@ const AGENT_META: Record<string, { color: string }> = {
   analyst:       { color: '#2dd4a0' },
   risk_manager:  { color: '#f0934d' },
   macro_watcher: { color: '#b18cf0' },
+  economist:     { color: '#e8c547' },
+  geopolitician: { color: '#e07070' },
 }
 
 export function AnalyticsTab({ snapshot: s }: Props) {
