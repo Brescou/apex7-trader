@@ -38,7 +38,7 @@ def set_mode(req: ModeRequest):
 
 @router.post("/pause")
 def pause():
-    from dashboard.controller import _controller_lock, _ctrl
+    from runtime.controller import _controller_lock, _ctrl
 
     with _controller_lock:
         _ctrl["paused"] = True
@@ -47,7 +47,7 @@ def pause():
 
 @router.post("/resume")
 def resume():
-    from dashboard.controller import _controller_lock, _ctrl
+    from runtime.controller import _controller_lock, _ctrl
 
     with _controller_lock:
         _ctrl["paused"] = False

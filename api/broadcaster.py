@@ -1,6 +1,6 @@
 """APEX-7 — WebSocket connection manager + state broadcaster.
 
-Polls dashboard.controller._state every 500 ms and pushes JSON events
+Polls runtime.controller._state every 500 ms and pushes JSON events
 to all connected WebSocket clients. Non-invasive — zero changes to agents.
 """
 
@@ -67,7 +67,7 @@ broadcaster = ConnectionManager()
 async def poll_and_broadcast():
     """Background task: serialize current state and broadcast to all WS clients."""
     from agents.shared.nodes import get_runtime_mode
-    from dashboard.controller import _controller_lock, _ctrl, _state
+    from runtime.controller import _controller_lock, _ctrl, _state
 
     prev_cycle = -1
 

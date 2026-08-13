@@ -46,7 +46,7 @@ npm run build
 apex7-trader/
 ├── main.py
 ├── config.py
-├── market_data/           ← package terminal / yfinance (pas d’import agents/dashboard)
+├── market_data/           ← package terminal / yfinance (pas d’import agents/ ni runtime/)
 │   ├── __init__.py        ← API publique (réexporte fetch_*, yf, caches test)
 │   ├── caches.py
 │   ├── compat.py          ← yfinance unique (tests : patch ``market_data.yf``)
@@ -86,14 +86,14 @@ apex7-trader/
 │   ├── external_data.py   ← FRED series + CNN Fear & Greed (HTTP, TTL caches)
 │   ├── backtest.py        ← run_backtest, compare_strategies (yfinance history)
 │   └── indicators.py      ← Shared RSI implementation
-├── dashboard/
-│   ├── __init__.py        ← package docstring only (Dash UI removed, see api/ + frontend/)
+├── runtime/
+│   ├── __init__.py
 │   └── controller.py      ← agent loop, portfolio state, postmortem thread
-├── api/                   ← FastAPI backend (replaces the old Dash UI)
+├── api/                   ← FastAPI backend (REST + WebSocket)
 │   ├── __init__.py
 │   ├── main.py            ← FastAPI() app, lifespan hook (start_controller), /health
 │   ├── auth.py            ← Bearer-token gate, active only when DASHBOARD_PASSWORD is set
-│   ├── broadcaster.py     ← WebSocket broadcaster, polls dashboard.controller._state
+│   ├── broadcaster.py     ← WebSocket broadcaster, polls runtime.controller._state
 │   ├── serializers.py     ← Portfolio/trade/vote → JSON dicts
 │   └── routes/
 │       ├── __init__.py
@@ -143,7 +143,7 @@ together here for clarity. ``trades_paper.db`` was added in sprint v1.)
 **File ownership:**
 - `agents/` — apex7-senior-back
 - `core/` — apex7-senior-back
-- `dashboard/`, `api/` — apex7-senior-back
+- `runtime/`, `api/` — apex7-senior-back
 - `frontend/` — apex7-senior-front
 - `config.py`, `market_data/` — apex7-senior-back
 
@@ -156,10 +156,10 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | File | Role |
 |------|------|
 | `main.py` | Entrypoint — runs `api.main:app` via uvicorn on port 8000 |
-| `dashboard/controller.py` | Agent loop thread, portfolio init, postmortem thread |
+| `runtime/controller.py` | Agent loop thread, portfolio init, postmortem thread |
 | `api/main.py` | FastAPI app; `lifespan` hook calls `start_controller()`; `/health` |
 | `api/auth.py` | Bearer-token auth gate (active only when `DASHBOARD_PASSWORD` is set) |
-| `api/broadcaster.py` | WebSocket broadcaster — polls `dashboard.controller._state` and pushes snapshots/vote diffs |
+| `api/broadcaster.py` | WebSocket broadcaster — polls `runtime.controller._state` and pushes snapshots/vote diffs |
 | `api/serializers.py` | Portfolio/trade/vote → JSON dicts for REST + WS |
 | `api/routes/` | `portfolio.py`, `market.py`, `control.py`, `ws.py` — see "API + React frontend" below |
 | `frontend/` | React 19 + Mantine 9 + Vite + TypeScript terminal UI — Live/Terminal/Analytics tabs |
@@ -179,7 +179,7 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 | `core/indicators.py` | Canonical `rsi()`, `ema()`, `macd()`, `bollinger_bands()`, `bb_position()` — used across agents, backtest, market_data |
 | `agents/registry.py` | Single `get_graph(p)` + `get_graph_info()` UI metadata (in `agents/` because it imports `agents.multi`) |
 | `config.py` | All constants, loaded from `.env` |
-| `market_data/` | Package terminal — `macro`, `quotes`, `news`, `earnings`, `charts`, `sectors`, `correlation`, `economic_calendar`, `screener` ; **zéro** import `agents`/`dashboard` |
+| `market_data/` | Package terminal — `macro`, `quotes`, `news`, `earnings`, `charts`, `sectors`, `correlation`, `economic_calendar`, `screener` ; **zéro** import `agents/` ni `runtime/` |
 | `langgraph.json` | LangGraph Studio config — exposes both compiled graphs |
 | `tests/test_smoke.py` | 11 regression smoke tests — no pytest, assert+print, exit 0/1 |
 | `tests/test_terminal.py` | Market data + terminal mocks (macro strip, sector %, correlation matrix, economic calendar) |
@@ -189,7 +189,7 @@ APEX-7 is a survival trading agent that starts with $1,000 and dies if the portf
 
 The FastAPI request/WebSocket-broadcaster thread and the agent loop thread share a single `Portfolio` object. All mutations on `Portfolio` are protected by `threading.RLock()`. The agent's `AgentState` is a per-cycle snapshot; `Portfolio` is the source of truth for the API.
 
-A third daemon thread (`apex7-postmortem`) runs in `dashboard/controller.py` and calls `run_daily_postmortem()` once per day at `POSTMORTEM_HOUR`. It only reads `portfolio.trade_history` and writes to SQLite — no Portfolio mutations.
+A third daemon thread (`apex7-postmortem`) runs in `runtime/controller.py` and calls `run_daily_postmortem()` once per day at `POSTMORTEM_HOUR`. It only reads `portfolio.trade_history` and writes to SQLite — no Portfolio mutations.
 
 ### Pipeline (single graph)
 
@@ -308,7 +308,7 @@ Beyond the macro bar, watchlist cards, chart, news, and screener, the TERMINAL t
 
 **Enriched macro bar** (`useMacro()` → `GET /api/market/macro`): VIX / SPY / DXY blocs; adds **CNN Fear & Greed** (`fetch_fear_greed` via `core/external_data.py`), **FED funds** and **10Y** from FRED (`fetch_fred_latest`), each with the same refresh cadence as the rest of the bar.
 
-Note: the old Dash terminal tab also had an economic-calendar block (`build_economic_calendar_rows()`); it was not ported to the React frontend during the FastAPI/React migration — `market_data/economic_calendar.py` still exists and is exercised by tests, but no `api/routes/` endpoint or frontend component surfaces it today.
+Note: `market_data/economic_calendar.py` (`build_economic_calendar_rows()`) is exercised by tests but is not yet surfaced by an `api/routes/` endpoint or frontend component.
 
 ### Discord alerts beyond trades
 
@@ -316,7 +316,7 @@ When `DISCORD_WEBHOOK_URL` is set, `core/notifications.py` also supports:
 
 | Function | When |
 |----------|------|
-| `alert_daily_digest` | End-of-day portfolio summary — scheduled from `run_daily_digest()` (`dashboard/controller.py` postmortem thread) |
+| `alert_daily_digest` | End-of-day portfolio summary — scheduled from `run_daily_digest()` (`runtime/controller.py` postmortem thread) |
 | `alert_weekly_report` | Weekly agent ranking / stats — `run_weekly_report()` |
 | `alert_evaluation` | After `evaluate_pending_trades` resolves `was_correct` for a trade (`agents/shared/eval.py`) |
 
@@ -366,7 +366,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`core/metrics.py`** — canonical Sharpe/Sortino/max-drawdown/Kelly/volatility implementations (pure functions, no I/O). `core/backtest.py` and `_compute_risk_metrics` in `agents/shared/nodes.py` (state key `risk_metrics`, consumed by `risk_manager_node`) both use it — do not re-implement these metrics elsewhere. `risk_manager_node` computes Kelly from **real** `postmortem.pnl_pct` rows once ≥ 5 closed trades exist (conservative priors before that).
 - **`pending_evaluations.retry_count`** — incremented when `_fast_last_price` returns `None`; the row is abandoned (`evaluated=1` + warning) after 10 consecutive failures (`_MAX_EVAL_RETRIES` in `agents/shared/eval.py`). Soft-migrated like the other columns.
 - **Watchlist DB** — at most **20** symbols (`agents.shared.watchlist.MAX_WATCHLIST_SYMBOLS`). **`remove_from_watchlist`** refuses to drop a ticker that still has an **open position** (`open_symbols`).
-- **`core/` dependency rule** — **`core/` must NEVER import from `agents/` or `dashboard/`**. Pass runtime data (e.g. watchlist symbols, `get_runtime_mode()`) as **parameters** from callers in `agents/` or `dashboard/`.
+- **`core/` dependency rule** — **`core/` must NEVER import from `agents/` or `runtime/`**. Pass runtime data (e.g. watchlist symbols, `get_runtime_mode()`) as **parameters** from callers in `agents/` or `runtime/`.
 - **Discord webhook alerts** — `core.notifications` uses fire-and-forget `httpx.post` (5s timeout). Fail-silent on errors; never blocks the agent loop. Wire points use lazy imports (`core.data` ↔ `agents.shared.nodes`). Leave `DISCORD_WEBHOOK_URL` unset to disable.
 - **CI jobs** — `.github/workflows/ci.yml`: job `lint` runs `uv run black --check .` only; job `test` runs ruff + pytest + coverage; job `security` runs `ruff check . --select S` (flake8-bandit); job `frontend` runs `tsc --noEmit` + `npm test` + `npm run build` in `frontend/`. Failing `lint` on push: reproduce with `uv run black --check --diff .`.
 - **`README.md`** — root `README.md` is a symlink to `docs/README.md`; commit `docs/README.md` when updating user-facing README.
@@ -380,15 +380,15 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **`research` goes directly to `risk_check`** — `research_node` does not loop back to `arbitrate`. This is intentional.
 - **`LiveFeed` not wired into graph nodes** — `LiveFeed` is wired into `Portfolio.fetch_prices()` only; it is not a LangGraph node.
 - **`agents/registry.py` description** — update `GRAPH_INFO["description"]` if a 5th specialist is added to `agents/multi.py`. The registry lives in `agents/` (moved from `core/`) because it imports `agents.multi` and `core/` must never depend on `agents/`.
-- **Postmortem thread started from `dashboard/controller.py`** — `run_daily_postmortem()` is never called from `main.py` directly; `start_controller()` (which spawns the postmortem thread) runs from `api/main.py`'s `lifespan` hook on real ASGI startup, so it only fires when the FastAPI app actually serves (e.g. via `uvicorn`/`main.py`), not on a bare `import api.main`.
+- **Postmortem thread started from `runtime/controller.py`** — `run_daily_postmortem()` is never called from `main.py` directly; `start_controller()` (which spawns the postmortem thread) runs from `api/main.py`'s `lifespan` hook on real ASGI startup, so it only fires when the FastAPI app actually serves (e.g. via `uvicorn`/`main.py`), not on a bare `import api.main`.
 - **`market_data` caches** — macro 60s, watchlist 10s (`market_data.caches`) pour limiter yfinance. Cache mémoire uniquement ; reset au redémarrage. Un **circuit breaker yfinance** (`yf_circuit_open` / `record_yf_failure` / `record_yf_success` dans `caches.py`) s'ouvre après 3 échecs consécutifs et sert le cache stale pendant 60 s — câblé dans `quotes.py` et `macro.py`.
 - **Sentiment Twitter neutre sans token** — `_fetch_sentiment_sync` retourne `0.0` par symbole quand `X_BEARER_TOKEN` est absent (plus de bruit aléatoire ±0.3 traité comme signal).
-- **`market_data` découpé** — package sans import `agents/` ou `dashboard/` (règle inchangée).
+- **`market_data` découpé** — package sans import `agents/` ou `runtime/` (règle inchangée).
 - **`USE_LIVEFEED=False` in tests** — set via env or config override to avoid yfinance rate limiting during test runs.
 - **`portfolio_state.json` created on first run** — added to `.gitignore`, do not commit.
 - **`PORTFOLIO_SAVE_ENABLED=True` by default** — set to `False` in unit tests to avoid disk writes.
-- **`agents/` → `dashboard/`/`api/` import direction is forbidden** — `agents/shared/nodes.py` imports from `core.data`. Never import from `dashboard` or `api` in any `agents/` file. This violates the one-way dependency rule (`api`/`dashboard` depend on `agents`/`core`, not the reverse).
-- **Lazy DB init** — `_init_db()` is no longer called at import time. It runs lazily on first `_db_write`/`_db_read`/`_db_write_multi` call via `_ensure_db()`. Importing `agents/shared/nodes.py` no longer creates SQLite tables. Importing `dashboard/controller.py` does not create a `Portfolio` until `start_controller()` is called explicitly. Importing `agents/multi.py` compiles the LangGraph graph at module level (for LangGraph Studio compatibility). Initialization state is tracked **per resolved DB path** (`_db_initialized_paths` set) so initializing one path never marks another (e.g. a test tmp DB) as done.
+- **`agents/` → `runtime/`/`api/` import direction is forbidden** — `agents/shared/nodes.py` imports from `core.data`. Never import from `runtime` or `api` in any `agents/` file. This violates the one-way dependency rule (`api`/`runtime` depend on `agents`/`core`, not the reverse).
+- **Lazy DB init** — `_init_db()` is no longer called at import time. It runs lazily on first `_db_write`/`_db_read`/`_db_write_multi` call via `_ensure_db()`. Importing `agents/shared/nodes.py` no longer creates SQLite tables. Importing `runtime/controller.py` does not create a `Portfolio` until `start_controller()` is called explicitly. Importing `agents/multi.py` compiles the LangGraph graph at module level (for LangGraph Studio compatibility). Initialization state is tracked **per resolved DB path** (`_db_initialized_paths` set) so initializing one path never marks another (e.g. a test tmp DB) as done.
 - **RSI/MACD/Bollinger in `core/indicators.py`** — canonical `rsi()`, `ema()`, `macd()`, `bollinger_bands()`, `bb_position()`. Do not re-implement them elsewhere. The scalar `macd()`/`bollinger_bands()` use the same `ewm(adjust=False)` + sample-std (ddof=1) conventions as `core/backtest.py compute_indicators`, so the latest values match across the technician, terminal watchlist (`macd_hist`/`bb_pos` in `fetch_watchlist_prices`), and backtest — verified by `tests/test_indicators.py`.
 - **`_db_write()` / `_db_read()` centralize all SQLite access** — never open raw `sqlite3.connect()` anywhere — not in agent nodes, not in `api/routes/`. Always use `_db_write()` or `_db_read()` from `agents.shared.nodes` (implementations in `agents.shared.db`; `api/routes/portfolio.py` uses `_db_read()` directly so REST/WS analytics match the active sim/paper/live mode).
 - **\_live\_price\_history warm-up** — en live mode, le RSI retourne 50.0 (`insufficient data`) pendant les 14 premiers cycles (~7 min) si la série n’est pas encore prête. Le technician est aveugle pendant cette période (mitigation : seed daily + append par jour, sprint v3).
@@ -408,7 +408,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 - **Postmortem thread also runs `evaluate_pending_trades`** — every 60 s tick, regardless of `POSTMORTEM_HOUR`. Skipped under SIM mode (random-walk prices would corrupt `was_correct`); runs under LIVE and PAPER.
 - **Raw `sqlite3.connect` forbidden outside `agents/shared/db.py`** — `api/routes/portfolio.py` uses `_db_read()` so REST responses follow the active DB path (sim/paper/live). Do not reintroduce `sqlite3.connect(DB_PATH)` elsewhere.
 - **`agent_memory.trace_id` invariant** — must exist in `_SCHEMA` AND be written by `_record_vote`. If either is missing, `evaluate_pending_trades` silently fails (UPDATE matches zero rows) and `was_correct` stays NULL forever. The regression guard is `tests/test_smoke.py::test_agent_memory_has_trace_id`.
-- **API auth gate** — `api/auth.py`'s `require_auth` (a FastAPI `Depends`) gates REST routes with a Bearer-token check (`Authorization: Bearer <DASHBOARD_PASSWORD>`); `ws_auth_ok` validates the `/ws` handshake via a `?token=` query param instead, since browser WebSockets can't set custom headers. Both are no-ops when `DASHBOARD_PASSWORD` is unset (`_auth_enabled()` reads `config.DASHBOARD_PASSWORD` at **request time**; tests monkeypatch it). `/health` is always exempt. The `/ws` Origin allow-list (`ALLOWED_ORIGINS`, the Vite dev server) is enforced **unconditionally**, even with no password set, to prevent Cross-Site WebSocket Hijacking. There is no session/cookie state, unlike the old Dash Flask-session gate.
+- **API auth gate** — `api/auth.py`'s `require_auth` (a FastAPI `Depends`) gates REST routes with a Bearer-token check (`Authorization: Bearer <DASHBOARD_PASSWORD>`); `ws_auth_ok` validates the `/ws` handshake via a `?token=` query param instead, since browser WebSockets can't set custom headers. Both are no-ops when `DASHBOARD_PASSWORD` is unset (`_auth_enabled()` reads `config.DASHBOARD_PASSWORD` at **request time**; tests monkeypatch it). `/health` is always exempt. The `/ws` Origin allow-list (`ALLOWED_ORIGINS`, the Vite dev server) is enforced **unconditionally**, even with no password set, to prevent Cross-Site WebSocket Hijacking. There is no session/cookie state.
 
 ## Code conventions
 

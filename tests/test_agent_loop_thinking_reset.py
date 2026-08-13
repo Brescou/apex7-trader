@@ -1,4 +1,4 @@
-"""Test for dashboard/controller.py::_agent_loop's "thinking" flag reset.
+"""Test for runtime/controller.py::_agent_loop's "thinking" flag reset.
 
 Covers the Review Finding: _state["thinking"] is set True right before
 graph.invoke() but was only cleared on the success path. An exception
@@ -18,7 +18,7 @@ from core.data import Portfolio  # noqa: E402
 
 
 def test_thinking_cleared_after_graph_invoke_raises():
-    import dashboard.controller as ctrl_mod
+    import runtime.controller as ctrl_mod
 
     p = Portfolio()
 

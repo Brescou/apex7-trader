@@ -1280,7 +1280,7 @@ def _route_risk(state) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# AGENT STATUS  (read by Dash)
+# AGENT STATUS  (read by the API / frontend)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _agent_status: dict = {

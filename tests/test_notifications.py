@@ -216,7 +216,7 @@ def test_weekly_report_fields(monkeypatch) -> None:
 def test_weekly_report_only_on_sunday(monkeypatch) -> None:
     """Non-Sunday scheduled run must not invoke ``run_weekly_report``."""
 
-    import dashboard.controller as ctrl
+    import runtime.controller as ctrl
     from config import POSTMORTEM_HOUR
 
     port = MagicMock()

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Brescou/apex7-trader/actions/workflows/ci.yml/badge.svg)](https://github.com/Brescou/apex7-trader/actions/workflows/ci.yml)
 
-> An autonomous AI trading agent built on LangGraph + Claude, with a real-time Bloomberg-style terminal dashboard.
+> An autonomous AI trading agent built on LangGraph + Claude, with a real-time Bloomberg-style terminal UI.
 > The agent starts with $1,000 and must survive — it dies if its portfolio falls below $50.
 
 ---
@@ -35,7 +35,7 @@ Every cycle the agent:
 5. Validates its decision against risk rules
 6. Executes the trade and saves a lesson to memory
 
-The entire reasoning process is visible in real time on the terminal dashboard.
+The entire reasoning process is visible in real time on the terminal UI.
 
 ---
 
@@ -61,7 +61,7 @@ The entire reasoning process is visible in real time on the terminal dashboard.
 └──────────────────────────┬──────────────────────────────────┘
                            │ managed by
 ┌──────────────────────────▼──────────────────────────────────┐
-│            Agent loop (dashboard/controller.py)              │
+│            Agent loop (runtime/controller.py)              │
 │  pause / step / reset controls via shared _ctrl dict          │
 │  started from api/main.py's FastAPI lifespan hook              │
 └──────────────────────────┬──────────────────────────────────┘
@@ -174,7 +174,7 @@ A full simulation engine runs with zero network calls:
 - No LLM is called in simulation mode
 - Trades are stored in a separate `trades_sim.db` to avoid contaminating live data
 
-This makes it possible to test the full agent loop, dashboard, and trade logic instantly and for free. Switching between modes is live — no restart required.
+This makes it possible to test the full agent loop, UI, and trade logic instantly and for free. Switching between modes is live — no restart required.
 
 ### Portfolio as shared state (not agent state)
 
@@ -191,7 +191,7 @@ SQLite was chosen over a vector database because:
 - SQL filters and sorts (last 20 trades, patterns by timestamp) are exactly what's needed
 - Zero infrastructure — the file lives next to the code, auto-created on first access
 
-All writes go through `_db_write()` / `_db_write_multi()` (retries, context managers, logging). All reads through `_db_read()`. Both use `_get_db_path()` to route to the correct sim/live database. WAL mode and `busy_timeout=5000ms` handle concurrent access from the agent, postmortem, and dashboard threads.
+All writes go through `_db_write()` / `_db_write_multi()` (retries, context managers, logging). All reads through `_db_read()`. Both use `_get_db_path()` to route to the correct sim/live database. WAL mode and `busy_timeout=5000ms` handle concurrent access from the agent, postmortem, and API threads.
 
 ### FastAPI + React for the terminal UI
 
@@ -201,7 +201,7 @@ Key patterns used:
 - `api/broadcaster.py` polls the shared portfolio state every 500ms and pushes JSON snapshots + agent-vote diffs over a single `/ws` WebSocket connection
 - `frontend/src/hooks/useWebSocket.ts` consumes the live stream; `frontend/src/hooks/useApex.ts` handles REST polling for slower-moving data (watchlist 10s, macro/sectors 60s, correlation 120s)
 - `api/auth.py` gates REST routes behind a Bearer token and the `/ws` handshake behind a `?token=` query param, both only when `DASHBOARD_PASSWORD` is set
-- `api/main.py`'s `lifespan` hook starts the agent loop (`dashboard/controller.start_controller()`) only on real ASGI startup — importing the module has no side effects
+- `api/main.py`'s `lifespan` hook starts the agent loop (`runtime/controller.start_controller()`) only on real ASGI startup — importing the module has no side effects
 
 ---
 
@@ -234,8 +234,8 @@ apex7-trader/
 │   ├── indicators.py               # Canonical RSI implementation
 │   └── metrics.py                  # Sharpe/Sortino/drawdown/Kelly (pure functions)
 │
-├── dashboard/                      # Agent-loop / Portfolio-state machinery
-│   ├── __init__.py                 # Package docstring only (no UI code here anymore)
+├── runtime/                      # Agent-loop / Portfolio-state machinery
+│   ├── __init__.py
 │   └── controller.py               # Agent loop, portfolio state, postmortem thread
 │
 ├── api/                            # FastAPI backend
@@ -374,7 +374,7 @@ The agent starts automatically in the background. The frontend refreshes live ov
 
 The mode switch takes effect on the next cycle with no restart (`POST /api/control/mode`).
 
-Note: `api/routes/control.py` also exposes `POST /api/control/pause` / `/resume` (the old Dash dashboard's PAUSE button), but pause/resume and the old STEP/RESET actions are not currently wired to any frontend control — they were not ported during the FastAPI/React migration.
+Note: `api/routes/control.py` also exposes `POST /api/control/pause` / `/resume`, but pause/resume (and STEP/RESET) are not currently wired to any frontend control.
 
 ---
 

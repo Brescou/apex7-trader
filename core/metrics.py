@@ -1,7 +1,7 @@
-"""core.metrics — portfolio performance metrics shared by agents, backtest, and dashboard.
+"""core.metrics — portfolio performance metrics shared by agents, backtest, and the API.
 
 Pure functions over numeric sequences — no I/O, no imports from ``agents/`` or
-``dashboard/`` (core dependency rule). Callers pass value histories or closed-trade
+``runtime/`` (core dependency rule). Callers pass value histories or closed-trade
 PnL lists as parameters.
 """
 

@@ -281,11 +281,10 @@ def test_agent_memory_has_trace_id():
 
 def test_main_entrypoint_module():
     """Import ``main`` so entrypoint wiring is covered (CI coverage
-    threshold). Unlike the old Dash entrypoint, importing ``main``/
-    ``api.main`` has no side effects — ``start_controller()`` only runs
-    inside the FastAPI ``lifespan`` hook, not at import time — so no
-    mocking is needed (full app + lifespan coverage lives in
-    ``tests/test_api.py``).
+    threshold). Importing ``main`` / ``api.main`` has no side effects —
+    ``start_controller()`` only runs inside the FastAPI ``lifespan``
+    hook, not at import time — so no mocking is needed (full app +
+    lifespan coverage lives in ``tests/test_api.py``).
     """
     import importlib
 

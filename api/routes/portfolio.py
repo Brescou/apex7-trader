@@ -16,7 +16,7 @@ router = APIRouter()
 @router.get("/portfolio")
 def get_portfolio():
     from agents.shared.nodes import get_runtime_mode
-    from dashboard.controller import _controller_lock, _ctrl, _state
+    from runtime.controller import _controller_lock, _ctrl, _state
 
     with _controller_lock:
         portfolio = _state.get("portfolio")
@@ -44,7 +44,7 @@ def get_portfolio():
 
 @router.get("/trades")
 def get_trades():
-    from dashboard.controller import _controller_lock, _state
+    from runtime.controller import _controller_lock, _state
 
     with _controller_lock:
         portfolio = _state.get("portfolio")

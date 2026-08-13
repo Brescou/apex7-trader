@@ -1,4 +1,4 @@
-"""Tests for dashboard/controller.py::_reconcile_portfolio_state.
+"""Tests for runtime/controller.py::_reconcile_portfolio_state.
 
 Covers the Review Finding: implied_cash was replayed from trades.db
 without accounting for commission (Portfolio.buy()/sell() debit/credit
@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.data import Portfolio  # noqa: E402
-from dashboard.controller import _reconcile_portfolio_state  # noqa: E402
+from runtime.controller import _reconcile_portfolio_state  # noqa: E402
 
 
 def _insert_trade(db_path, *, timestamp: str, action: str, amount_usd: float) -> None:

@@ -1,4 +1,4 @@
-"""Données marché pour le terminal — aucun import depuis ``agents`` ou ``dashboard``.
+"""Données marché pour le terminal — aucun import depuis ``agents`` ou ``runtime``.
 
 API publique réexportée ici ; implémentation découpée sous-modules.
 """

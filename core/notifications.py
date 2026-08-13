@@ -137,7 +137,7 @@ def alert_circuit_breaker(reason: str, wait_seconds: int, *, mode: str = "live")
 
 
 def alert_startup(*, mode: str = "live", watchlist_summary: str = "") -> None:
-    """Dashboard / controller started."""
+    """Controller started."""
     wl = (watchlist_summary or "(indisponible)")[:1024]
     send_discord_alert(
         "APEX-7 startup",

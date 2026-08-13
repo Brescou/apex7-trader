@@ -33,7 +33,7 @@ _state: dict = {
     "last_error": None,
     "_death_refresh_done": False,
 }
-# Single RLock for controller dicts — re-entrant so nested ``with`` in callbacks is safe.
+# Single RLock for controller dicts — re-entrant so nested ``with`` blocks are safe.
 _controller_lock = threading.RLock()
 _controller_started = False
 

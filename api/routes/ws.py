@@ -18,7 +18,7 @@ async def websocket_endpoint(ws: WebSocket):
     try:
         # Send full snapshot immediately on connect.
         from agents.shared.nodes import get_runtime_mode
-        from dashboard.controller import _controller_lock, _ctrl, _state
+        from runtime.controller import _controller_lock, _ctrl, _state
 
         with _controller_lock:
             portfolio = _state.get("portfolio")

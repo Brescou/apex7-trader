@@ -7,7 +7,7 @@ The React frontend (Vite, port 5173) connects to:
   - WS    → ws://localhost:8000/ws
 
 This module is intentionally non-invasive: it reads _state/_ctrl from
-dashboard.controller and broadcasts diffs via WebSocket. Zero changes to
+runtime.controller and broadcasts diffs via WebSocket. Zero changes to
 agents/, core/, or market_data/.
 """
 
@@ -32,9 +32,9 @@ logger = logging.getLogger("apex7.api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Imported here (not at module level) so tests can patch
-    # dashboard.controller.start_controller — an unqualified call to a
+    # runtime.controller.start_controller — an unqualified call to a
     # name bound at module-import time wouldn't pick up the patch.
-    from dashboard.controller import start_controller
+    from runtime.controller import start_controller
 
     # Safety: never auto-start in LIVE (burns Anthropic credits). Force SIM at
     # boot; the user can switch to PAPER/LIVE from the topbar once running.
@@ -84,7 +84,7 @@ app.include_router(ws_router)  # WebSocket auth is handled inside the route (see
 @app.get("/health")
 def health():
     from agents.shared.nodes import get_runtime_mode
-    from dashboard.controller import _controller_lock, _ctrl, _state
+    from runtime.controller import _controller_lock, _ctrl, _state
 
     with _controller_lock:
         portfolio = _state.get("portfolio")

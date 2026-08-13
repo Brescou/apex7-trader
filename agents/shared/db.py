@@ -278,7 +278,7 @@ def mode_db_path(mode: str) -> Path:
     """Resolve the SQLite file for a given runtime mode label.
 
     ``mode`` is one of ``"live"`` / ``"paper"`` / ``"sim"``. Lets the
-    dashboard read a specific mode's DB regardless of the active mode (e.g.
+    analytics panel read a specific mode's DB regardless of the active mode (e.g.
     the LIVE-vs-PAPER comparison panel). Unknown labels fall back to live.
     """
     return {

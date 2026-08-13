@@ -3,7 +3,7 @@
 Covers serializers, auth (REST + WebSocket), broadcaster connection
 management, and route wiring. Route handlers are plain ``def`` (Batch C),
 so most are exercised as direct Python calls rather than through a live
-HTTP/WS cycle — this avoids spinning up ``dashboard.controller``'s real
+HTTP/WS cycle — this avoids spinning up ``runtime.controller``'s real
 background threads (see Batch F) and keeps these tests fast and hermetic.
 Where the full app is exercised via ``TestClient``, ``start_controller`` is
 always mocked for the same reason.
@@ -540,8 +540,8 @@ def test_get_sparkline_error_returns_empty_list(monkeypatch):
 
 @pytest.fixture
 def _clean_controller_state():
-    """Save/restore dashboard.controller._state around a test that pokes it."""
-    from dashboard.controller import _state
+    """Save/restore runtime.controller._state around a test that pokes it."""
+    from runtime.controller import _state
 
     saved = dict(_state)
     yield _state
@@ -581,7 +581,7 @@ def test_get_portfolio_reads_live_mode_not_stale_ctrl(_clean_controller_state):
     """
     from agents.shared import modes as modes_mod
     from api.routes.portfolio import get_portfolio
-    from dashboard.controller import _ctrl
+    from runtime.controller import _ctrl
 
     p = Portfolio()
     _clean_controller_state["portfolio"] = p
@@ -658,7 +658,7 @@ def test_get_analytics_column_mapping(tmp_db):
 
 @pytest.fixture
 def _reset_ctrl_paused():
-    from dashboard.controller import _ctrl
+    from runtime.controller import _ctrl
 
     saved = _ctrl.get("paused", False)
     yield
@@ -691,7 +691,7 @@ def test_set_mode_unknown_returns_error():
 
 def test_pause_resume_toggle_ctrl_state(_reset_ctrl_paused):
     from api.routes.control import pause, resume
-    from dashboard.controller import _ctrl
+    from runtime.controller import _ctrl
 
     out = pause()
     assert out == {"ok": True, "paused": True}
@@ -745,7 +745,7 @@ def test_health_exempt_from_auth(monkeypatch, _clean_controller_state):
 
     _clean_controller_state["portfolio"] = Portfolio()
 
-    with patch("dashboard.controller.start_controller"):
+    with patch("runtime.controller.start_controller"):
         with TestClient(api.main.app) as client:
             resp = client.get("/health")
     assert resp.status_code == 200
@@ -790,7 +790,7 @@ def test_rest_routes_require_auth_when_enabled(monkeypatch):
 
     import api.main
 
-    with patch("dashboard.controller.start_controller"):
+    with patch("runtime.controller.start_controller"):
         with TestClient(api.main.app) as client:
             no_auth = client.get("/api/control/watchlist")
             wrong_auth = client.get(
@@ -812,7 +812,7 @@ def test_rest_routes_open_when_auth_disabled(monkeypatch):
 
     import api.main
 
-    with patch("dashboard.controller.start_controller"):
+    with patch("runtime.controller.start_controller"):
         with TestClient(api.main.app) as client:
             resp = client.get("/api/control/watchlist")
     assert resp.status_code == 200

@@ -99,7 +99,7 @@ def test_final_open_position_is_recorded_as_a_trade():
 
 def test_simulate_enriches_trades_with_bar_index_shares_and_pnl():
     """Review Finding: _simulate's trade dicts carried no bar_index/shares/
-    pnl, forcing the dashboard to reconstruct them with wrong assumptions
+    pnl, forcing the UI to reconstruct them with wrong assumptions
     (INITIAL_BALANCE * 0.95 for shares, trade sequence number for the chart
     marker x-position). _simulate must expose these directly instead.
     """
@@ -138,7 +138,7 @@ def test_simulate_enriches_trades_with_bar_index_shares_and_pnl():
     assert sell["shares"] == buy["shares"]
 
     # pnl on the closing SELL must be the net dollar P&L vs the BUY's real
-    # cost basis (which the dashboard used to reconstruct incorrectly).
+    # cost basis (which the UI used to reconstruct incorrectly).
     # cost_basis = alloc * (1 + COMMISSION_PCT), and shares = alloc /
     # (price * (1 + SLIPPAGE_PCT)), so cost_basis derives from shares/price.
     expected_cost_basis = buy["shares"] * buy["price"] * (1 + SLIPPAGE_PCT) * (1 + COMMISSION_PCT)

@@ -45,7 +45,7 @@ apex7-trader/
 │   ├── external_data.py  ← FRED + CNN Fear & Greed
 │   ├── backtest.py        ← run_backtest, compare_strategies
 │   └── indicators.py      ← Shared RSI implementation
-├── dashboard/
+├── runtime/
 │   ├── __init__.py
 │   └── controller.py      ← agent loop, portfolio state, postmortem thread
 ├── api/                    ← FastAPI backend (HTTP/WS layer)
@@ -103,7 +103,7 @@ main.py (uvicorn launcher)
         ├── api.broadcaster (WebSocket hub, polls _state every 500ms)
         ├── api.serializers (Portfolio + controller state → JSON)
         ├── api.routes.* (portfolio, market, control, ws)
-        └── dashboard.controller (start_controller — agent loop + postmortem threads)
+        └── runtime.controller (start_controller — agent loop + postmortem threads)
               ├── core.data (Portfolio)
               ├── core.backtest (run_backtest)
               ├── agents.registry (get_graph)
@@ -119,13 +119,13 @@ agents.registry
               └── market_data, core.external_data (macro context, F&G, earnings)
 ```
 
-Import direction is one-way: `api`/`dashboard` → `core`/`agents`/`market_data`. Never import from `api` or `dashboard` inside `agents/` or `core/`.
+Import direction is one-way: `api`/`runtime` → `core`/`agents`/`market_data`. Never import from `api` or `runtime` inside `agents/` or `core/`.
 
 ## Primary modules (`core/` & `agents/shared/`)
 
 | Module | Role |
 |--------|------|
-| `core/external_data.py` | **FRED** (`fetch_fred_latest`, `fetch_macro_indicators`) and **CNN Fear & Greed** (`fetch_fear_greed`). Optional `FRED_API_KEY`. Standalone — must not import `agents/` or `dashboard/`. |
+| `core/external_data.py` | **FRED** (`fetch_fred_latest`, `fetch_macro_indicators`) and **CNN Fear & Greed** (`fetch_fear_greed`). Optional `FRED_API_KEY`. Standalone — must not import `agents/` or `runtime/`. |
 | `agents/shared/watchlist.py` | Dynamic **watchlist** backed by SQLite table `watchlist` (max **20** symbols, yfinance validation on add): `get_watchlist`, `add_to_watchlist`, `remove_from_watchlist`. |
 
 ## Agent Graph
@@ -370,7 +370,7 @@ CREATE TABLE postmortem (
 ## Daily Postmortem
 
 `run_daily_postmortem(portfolio, db_path)` in `agents/multi.py`:
-- Triggered by a dedicated background thread (`apex7-postmortem`, daemon) started in `dashboard/controller.py`
+- Triggered by a dedicated background thread (`apex7-postmortem`, daemon) started in `runtime/controller.py`
 - Runs at `POSTMORTEM_HOUR` (default 22:00) once per calendar day
 - Scans `portfolio.trade_history` for SELL trades since midnight
 - For each SELL, finds the matching BUY, computes P&L % and holding duration in hours
@@ -380,10 +380,9 @@ CREATE TABLE postmortem (
 
 ## API + React frontend
 
-The Dash UI (server-rendered layout + `@app.callback`s) was fully removed
-in favor of a FastAPI backend (`api/`) and a React 19 + Mantine 9 + Vite + TypeScript
-frontend (`frontend/`). `api/main.py` is non-invasive: it reads
-`dashboard.controller._state` / `_ctrl` and calls `start_controller()`
+The UI is a FastAPI backend (`api/`) plus a React 19 + Mantine 9 + Vite +
+TypeScript frontend (`frontend/`). `api/main.py` is non-invasive: it reads
+`runtime.controller._state` / `_ctrl` and calls `start_controller()`
 from its `lifespan` hook — zero changes to `agents/`, `core/`, or
 `market_data/`.
 
@@ -395,7 +394,7 @@ from its `lifespan` hook — zero changes to `agents/`, `core/`, or
 | `GET /api/market/macro\|watchlist\|sectors\|correlation\|sparkline/{symbol}\|news/{symbol}\|fundamentals/{symbol}\|fear-greed` | `api/routes/market.py` | Terminal tab data, thin wrappers over `market_data/` |
 | `POST /api/control/mode\|pause\|resume`, `GET/POST /api/control/watchlist*` | `api/routes/control.py` | Mode toggle, pause/resume, watchlist CRUD |
 | `GET /ws` | `api/routes/ws.py` | WebSocket — `api/broadcaster.py` polls `_state` every 500ms and pushes JSON snapshots + agent-vote diffs |
-| `GET /health` | `api/main.py` | 200 when alive, **503** when the portfolio is dead or missing (same contract the old Dash `/health` had) |
+| `GET /health` | `api/main.py` | 200 when alive, **503** when the portfolio is dead or missing |
 
 All REST routes and the WebSocket require Bearer-token auth when
 `DASHBOARD_PASSWORD` is set (`api/auth.py`); unset = no auth (localhost
@@ -403,8 +402,8 @@ default). `/health` is always open for monitoring probes.
 
 ### Frontend (`frontend/src/`)
 
-React tabs mirror the old Dash tabs conceptually (Live, Terminal,
-Analytics) under `components/{live,terminal,analytics}/`, driven by
+React tabs (Live, Terminal, Analytics) live under
+`components/{live,terminal,analytics}/`, driven by
 `hooks/useWebSocket.ts` (snapshot + vote diffs) and `hooks/useApex.ts`
 (REST polling: watchlist 10s, macro 60s, sectors 60s, correlation 120s).
 See `frontend/src/` for the current component tree.
@@ -478,25 +477,25 @@ Optional `DISCORD_WEBHOOK_URL` — same **`httpx.post`**, 5s timeout, **fail-sil
 
 | Alert | Entry point | Trigger |
 |-------|-------------|---------|
-| Trade / death / stagnation / rate-limit / startup | Various wire sites in `agents`, `dashboard`, `llm` | Existing sprint v2 behavior |
+| Trade / death / stagnation / rate-limit / startup | Various wire sites in `agents`, `runtime`, `llm` | Existing sprint v2 behavior |
 | **Daily digest** | `alert_daily_digest` ← `run_daily_digest` | Same **postmortem hour** gate as `run_daily_postmortem` (`POSTMORTEM_HOUR`), once per calendar day |
-| **Weekly report** | `alert_weekly_report` ← `run_weekly_report` | **Sunday** at that hour, after digest/scheduling (`dashboard/controller.py` `_run_digest_and_weekly_at_postmortem_hour`) |
+| **Weekly report** | `alert_weekly_report` ← `run_weekly_report` | **Sunday** at that hour, after digest/scheduling (`runtime/controller.py` `_run_digest_and_weekly_at_postmortem_hour`) |
 | **Evaluation** | `alert_evaluation` | Emitted from `evaluate_pending_trades` when a pending trade is scored (`was_correct` resolved) |
 
 ## Concurrency Model
 
 - API request thread (`api/routes/*.py`, `api/broadcaster.py`): reads `_state["portfolio"]` — no mutations
-- Agent loop thread (`apex7-agent`, daemon): mutates Portfolio via `buy()`, `sell()`, `record_value()` — launched by `start_controller()` in `dashboard/controller.py`
+- Agent loop thread (`apex7-agent`, daemon): mutates Portfolio via `buy()`, `sell()`, `record_value()` — launched by `start_controller()` in `runtime/controller.py`
 - Postmortem thread (`apex7-postmortem`, daemon): runs every 60 s; calls `evaluate_pending_trades(now)` to resolve due `was_correct` rows in LIVE/PAPER (skipped in SIM), and `run_daily_postmortem()` once per day at `POSTMORTEM_HOUR`. **Same hour** also runs `run_daily_digest()` and, on **Sundays**, `run_weekly_report()` (`_run_digest_and_weekly_at_postmortem_hour`). Reads `portfolio.trade_history`, writes to SQLite — no Portfolio mutations.
 - All Portfolio mutations use `with self._lock` (RLock)
 - SQLite writes go through `_db_write()` in `agents/shared/db.py` (re-exported from `agents.shared.nodes`) — handles WAL mode, retries (3 attempts with backoff), and structured logging
 - Sim and live use separate databases (`trades_sim.db` / `trades.db`) via `_get_db_path()`
-- `_ctrl` and `_state` in `dashboard/controller.py` share one **`threading.RLock()`** (`_controller_lock`) — all mutations and reads use `with _controller_lock`.
+- `_ctrl` and `_state` in `runtime/controller.py` share one **`threading.RLock()`** (`_controller_lock`) — all mutations and reads use `with _controller_lock`.
 - Reset: agent thread is stopped (`portfolio.is_dead = True`), new Portfolio + thread created
 
 ## `market_data/` — Standalone Market Data Package
 
-Zero imports from `agents/` or `dashboard/`. Public API: ``from market_data import …`` (voir ``__init__.py``). Implémentation par sous-modules : ``macro``, ``quotes``, ``news``, ``earnings``, ``charts``, ``sectors``, ``correlation``, ``economic_calendar``, ``screener`` ; caches partagés dans ``caches.py`` ; ``compat.py`` expose ``yfinance`` pour les tests (``patch market_data.yf``). Utilisé surtout par ``api/routes/market.py``.
+Zero imports from `agents/` or `runtime/`. Public API: ``from market_data import …`` (voir ``__init__.py``). Implémentation par sous-modules : ``macro``, ``quotes``, ``news``, ``earnings``, ``charts``, ``sectors``, ``correlation``, ``economic_calendar``, ``screener`` ; caches partagés dans ``caches.py`` ; ``compat.py`` expose ``yfinance`` pour les tests (``patch market_data.yf``). Utilisé surtout par ``api/routes/market.py``.
 
 | Function | Cache TTL | Description |
 |----------|-----------|-------------|
