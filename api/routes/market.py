@@ -7,7 +7,11 @@ event loop (and the WebSocket broadcaster) responsive instead of freezing
 the whole API for the duration of each fetch.
 """
 
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, Query
+
+from config import NEWS_MAX_ITEMS, NEWS_MAX_TOTAL
 
 router = APIRouter()
 
@@ -137,11 +141,16 @@ def get_sparkline(symbol: str):
 
 
 @router.get("/news/{symbol}")
-def get_news(symbol: str):
+def get_news(
+    symbol: str,
+    limit: Annotated[int, Query(ge=1, le=NEWS_MAX_TOTAL)] = NEWS_MAX_ITEMS,
+):
     try:
         from market_data.news import fetch_news
 
-        raw = fetch_news(symbol.upper())
+        cap = max(1, min(int(limit), NEWS_MAX_TOTAL))
+        pool = fetch_news(symbol.upper(), max_items=NEWS_MAX_TOTAL)
+        sliced = (pool or [])[:cap]
         items = [
             {
                 "title": n.get("title", ""),
@@ -150,11 +159,11 @@ def get_news(symbol: str):
                 "time": n.get("age", ""),
                 "sentiment": n.get("sentiment", ""),
             }
-            for n in (raw or [])
+            for n in sliced
         ]
-        return {"news": items}
+        return {"news": items, "has_more": len(pool or []) > cap}
     except Exception as e:
-        return {"news": [], "error": str(e)}
+        return {"news": [], "has_more": False, "error": str(e)}
 
 
 @router.get("/fundamentals/{symbol}")

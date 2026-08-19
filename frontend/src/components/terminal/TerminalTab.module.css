@@ -99,6 +99,18 @@
 .fundLbl   { font-size: 8px; letter-spacing: .12em; color: var(--faint); font-weight: 600; }
 .fundVal   { font-size: 11px; font-weight: 600; color: var(--mid); }
 
+/* Headlines under the overview chart */
+.headlines { display: flex; flex-direction: column; gap: 0; margin-top: 8px; border: 1px solid var(--line2); border-radius: 4px; overflow: hidden; flex-shrink: 0; }
+.headline { display: flex; align-items: baseline; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--line2); text-decoration: none; }
+.headline:last-of-type { border-bottom: none; }
+.headline:hover { background: var(--hover); }
+.headlineAge { font-size: 9px; color: var(--faint); flex: 0 0 52px; }
+.headlineTitle { font-size: 11px; color: var(--hi); line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.headlineMore { background: transparent; border: none; border-top: 1px solid var(--line2); padding: 5px 10px; text-align: left; font-size: 9px; letter-spacing: .1em; font-family: var(--font-mono); color: var(--blue); cursor: pointer; }
+.headlineMore:hover { color: var(--amber); }
+.headlineEmpty { margin-top: 8px; background: transparent; border: 1px dashed var(--line2); border-radius: 4px; padding: 7px 10px; text-align: left; font-size: 10px; color: var(--faint); font-family: var(--font-mono); cursor: pointer; }
+.headlineEmpty:hover { color: var(--mid); border-color: var(--line); }
+
 /* News */
 .newsList { display: flex; flex-direction: column; gap: 1px; overflow-y: auto; flex: 1; min-height: 0; }
 .newsItem { display: flex; flex-direction: column; gap: 4px; padding: 9px 8px; border-bottom: 1px solid var(--line2); text-decoration: none; border-radius: 4px; transition: background .1s; }
@@ -106,6 +118,9 @@
 .newsTitle { font-size: 12px; color: var(--hi); line-height: 1.4; }
 .newsMeta  { display: flex; justify-content: space-between; gap: 8px; font-size: 9px; align-items: center; }
 .sent      { font-size: 8px; letter-spacing: .06em; }
+.showMore  { background: transparent; border: 1px dashed var(--line2); border-radius: 4px; margin: 8px 0 4px; padding: 8px 10px; width: 100%; font-size: 9.5px; letter-spacing: .12em; font-family: var(--font-mono); font-weight: 700; color: var(--blue); cursor: pointer; }
+.showMore:hover:not(:disabled) { color: var(--amber); border-color: var(--line); background: var(--hover); }
+.showMore:disabled { opacity: .5; cursor: wait; }
 
 /* Financials stat grid */
 .statGrid { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--line2); border-radius: 5px; overflow: hidden; }

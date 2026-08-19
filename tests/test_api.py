@@ -533,6 +533,37 @@ def test_get_sparkline_error_returns_empty_list(monkeypatch):
     assert "error" in out
 
 
+def test_get_news_paginates_with_has_more(monkeypatch):
+    items = [
+        {
+            "title": f"t{i}",
+            "source": "Wire",
+            "url": f"https://example.com/{i}",
+            "age": "1h ago",
+            "sentiment": "neutral",
+        }
+        for i in range(20)
+    ]
+    monkeypatch.setattr(
+        "market_data.news.fetch_news",
+        lambda sym, max_items=8: items[:max_items],
+    )
+    from api.routes import market
+
+    page = market.get_news("AAPL", limit=8)
+    assert len(page["news"]) == 8
+    assert page["has_more"] is True
+    assert page["news"][0]["publisher"] == "Wire"
+
+    page2 = market.get_news("AAPL", limit=16)
+    assert len(page2["news"]) == 16
+    assert page2["has_more"] is True
+
+    full = market.get_news("AAPL", limit=40)
+    assert len(full["news"]) == 20
+    assert full["has_more"] is False
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # routes/portfolio.py
 # ═══════════════════════════════════════════════════════════════════════════

@@ -226,7 +226,8 @@ def test_fetch_news():
     from market_data import fetch_news
 
     with patch.object(md.yf, "Ticker", _FakeTicker):
-        result = fetch_news("AAPL")
+        with patch("market_data.finnhub.fetch_finnhub_news", return_value=[]):
+            result = fetch_news("AAPL")
     assert isinstance(result, list), f"fetch_news must return list, got {type(result)}"
     assert len(result) == 2, f"Expected 2 fake news items, got {len(result)}"
     for item in result:

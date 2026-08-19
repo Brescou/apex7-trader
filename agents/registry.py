@@ -13,7 +13,7 @@ GRAPH_INFO: dict = {
         "Technician + Analyst + Risk Manager + Macro Watcher " "+ Economist + Geopolitician."
     ),
     "cost": "High",
-    "latency": "~90s/cycle",
+    "latency": "~15min/cycle",
     "color": "#8b5cf6",
 }
 

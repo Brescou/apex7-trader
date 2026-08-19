@@ -173,8 +173,8 @@ Note: `research` edges directly to `risk_check` (no loop back to `arbitrate`). T
 | `analyst` | Sonnet + web_search | Fundamental + sentiment analysis, catalysts | Directional vote |
 | `risk_manager` | Haiku | VaR, Kelly sizing, risk score /10 | No directional vote — HOLD only |
 | `macro_watcher` | Haiku | Market regime, macro bias, Fear & Greed | No directional vote — HOLD only |
-| `economist` | Haiku | FRED cycle, yield curve, Fed path, inflation | No directional vote — HOLD only |
-| `geopolitician` | Sonnet + web_search | Geopolitical risk, exposed sectors | No directional vote — HOLD only |
+| `economist` | Haiku | FRED cycle, yield curve, Fed path, inflation | No directional vote — HOLD only; vote cached 1 h |
+| `geopolitician` | Sonnet + web_search | Geopolitical risk, exposed sectors | No directional vote — HOLD only; vote cached 1 h |
 | `arbitrate` | Sonnet | Weighted vote synthesis, final decision | Risk / macro / eco / geo filters |
 
 ## Vote Weights
@@ -244,8 +244,8 @@ and on the `/health` endpoint:
 
 | Mode | Prices | Decisions | DB | Cycle | LLM cost |
 |------|--------|-----------|----|-------|----------|
-| `LIVE` | yfinance real-time | LLM (Sonnet + Haiku + web_search) | `trades.db` | `AGENT_INTERVAL` (90 s) | $$$ |
-| `PAPER` | yfinance real-time | Rule-based (`sim_*` nodes) — zero LLM | `trades_paper.db` | `AGENT_INTERVAL` (90 s) | 0 |
+| `LIVE` | yfinance real-time | LLM (Sonnet + Haiku + web_search) | `trades.db` | `AGENT_INTERVAL` (15 min, NYSE/TSX cash hours) | $$$ |
+| `PAPER` | yfinance real-time | Rule-based (`sim_*` nodes) — zero LLM | `trades_paper.db` | `AGENT_INTERVAL` (15 min, NYSE/TSX cash hours) | 0 |
 | `SIM` | Random walk | Rule-based (`sim_*` nodes) | `trades_sim.db` | 3 s (fast) | 0 |
 
 Wiring (no separate graph builder — the same compiled graph is used in all
@@ -512,7 +512,7 @@ Zero imports from `agents/` or `runtime/`. Public API: ``from market_data import
 |----------|-----------|-------------|
 | `fetch_macro()` | 60s | Fetches VIX (`^VIX`), SPY, DXY (`DX-Y.NYB`) via yfinance; returns price, change_pct, direction; fallback to last known value on error |
 | `fetch_watchlist_prices(symbols)` | 10s | Per-symbol: price, change_pct, change_abs, volume, high_52w, low_52w, rsi_14 (14-day daily close), above_ma20 (bool) |
-| `fetch_news(symbol, max_items)` | none | Uses `yf.Ticker.news`; returns title, source, age ("Xm/Xh/Xd ago"), url, sentiment (positive/negative/neutral via keyword rule) |
+| `fetch_news(symbol, max_items)` | 120s / symbol | yfinance `Ticker.news`, **supplemented** by Finnhub `/company-news` when the Yahoo list is short or empty (`FINNHUB_API_KEY`); caches a pool up to `NEWS_MAX_TOTAL` (40), `max_items` slices it. `GET /api/market/news/{symbol}?limit=` returns `{news, has_more}` |
 | `run_screener(symbols, filters)` | n/a | Reuses `fetch_watchlist_prices()`; filters: rsi_min/max, change_pct_min, above_ma20, volume_min; returns list of passing symbols |
 | `fetch_sparkline(symbol)` | 5 min | 1-day hourly OHLC via yfinance; returns `[{"time": "14:00", "price": 182.5, "open": 181.0}, ...]`; empty list on failure |
 | `fetch_comparison(symbols, period)` | 5 min | Daily closes normalized to 100.0 at first point; returns `{"AAPL": [{"date": "...", "value": 100.0}, ...], ...}`; empty dict on failure |
@@ -571,7 +571,9 @@ Pre-commit hooks (`.pre-commit-config.yaml`): ruff (auto-fix) + black + trailing
 | `MACRO_SYMBOLS` | hardcoded | `{"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}` | Symbols fetched for TERMINAL macro bar |
 | `MARKET_DATA_CACHE_SEC` | hardcoded | `60` | Macro cache TTL (`market_data.caches` / `macro.py`) |
 | `WATCHLIST_CACHE_SEC` | hardcoded | `10` | Watchlist prices cache TTL (`market_data.caches` / `quotes.py`) |
-| `NEWS_MAX_ITEMS` | hardcoded | `8` | Max news items from `fetch_news()` |
+| `NEWS_MAX_ITEMS` | hardcoded | `8` | NEWS page size (`?limit=` / "+ SHOW MORE") |
+| `NEWS_MAX_TOTAL` | hardcoded | `40` | Hard cap of headlines cached per symbol |
+| `SLOW_AGENT_TTL_SEC` | env | `3600` | Reuse economist / geopolitician votes (LIVE still cycles every 15 min) |
 | `STOP_LOSS_PCT` | hardcoded | `0.05` | Stop-loss threshold (5%) — enforced as a pre-check loop in `execute_node` before the agent decision |
 | `POSTMORTEM_HOUR` | hardcoded | `22` | Hour (0–23) at which daily postmortem runs |
 | `WATCHLIST` | hardcoded | 5 tickers | AAPL, MSFT, GOOG, AMZN, TSLA |
@@ -582,4 +584,4 @@ Pre-commit hooks (`.pre-commit-config.yaml`): ruff (auto-fix) + black + trailing
 | `DISCORD_WEBHOOK_URL` | env | — | Optional — trades, stagnation, death, rate-limit, startup, **daily digest**, **weekly report**, **evaluation** |
 | `FRED_API_KEY` | env | — | Optional FRED key; keyless JSON often works but is rate-limited (`core/external_data`) |
 | `MAX_PYRAMID_LAYERS` | env | `3` | Max pyramid BUY layers per symbol |
-| `AGENT_INTERVAL` | hardcoded | `30` | Seconds between live cycles (3s in sim) |
+| `AGENT_INTERVAL` | hardcoded | `900` | Seconds between LIVE/PAPER cycles (15 min). SIM is 3s. LIVE/PAPER skip LLM outside NYSE/TSX 09:30–16:00 ET. |

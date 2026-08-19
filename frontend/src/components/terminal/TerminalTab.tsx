@@ -110,7 +110,7 @@ export function TerminalTab() {
 
   const activeSym = selectedSym ?? wl[0]?.symbol ?? null
   const { bars }     = useChart(activeSym, period)
-  const news         = useNews(activeSym)
+  const { news, hasMore, loadMore, loadingMore } = useNews(activeSym)
   const fundamentals = useFundamentals(activeSym)
   const selected     = wl.find(w => w.symbol === activeSym)
   const symbols      = useMemo(() => wl.map(w => w.symbol), [wl])
@@ -241,7 +241,11 @@ export function TerminalTab() {
   return (
     <div className={styles.term}>
       {/* ── COMMAND BAR ───────────────────────────────────────────────────── */}
-      <CommandBar symbols={symbols} onSelect={(s) => { setSelectedSym(s); setTab('overview') }} onAdd={(s) => handleAdd(s)} />
+      <CommandBar
+        symbols={symbols}
+        onSelect={(s, view) => { setSelectedSym(s); setTab(view ?? 'overview') }}
+        onAdd={(s) => handleAdd(s)}
+      />
 
       {/* ── MACRO BAR ─────────────────────────────────────────────────────── */}
       <div className={styles.macro}>
@@ -377,6 +381,31 @@ export function TerminalTab() {
                   <div className={styles.chartWrap}>
                     <CandleChart bars={bars} height={300} />
                   </div>
+                  {news.length > 0 ? (
+                    <div className={styles.headlines}>
+                      {news.slice(0, 3).map((nn, i) => (
+                        <a
+                          key={i}
+                          href={nn.link || '#'}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={styles.headline}
+                        >
+                          <span className={`mono ${styles.headlineAge}`}>{nn.time}</span>
+                          <span className={styles.headlineTitle}>{nn.title}</span>
+                        </a>
+                      ))}
+                      {news.length > 3 && (
+                        <button type="button" className={styles.headlineMore} onClick={() => setTab('news')}>
+                          ALL NEWS →
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <button type="button" className={styles.headlineEmpty} onClick={() => setTab('news')}>
+                      No headlines for {activeSym} — open NEWS
+                    </button>
+                  )}
                   <div className={styles.fundStrip}>
                     {stripItems.map(f => (
                       <div key={f.lbl} className={styles.fundCell}>
@@ -402,6 +431,16 @@ export function TerminalTab() {
                       </div>
                     </a>
                   ))}
+                  {hasMore && (
+                    <button
+                      type="button"
+                      className={styles.showMore}
+                      onClick={loadMore}
+                      disabled={loadingMore}
+                    >
+                      {loadingMore ? '…' : '+ SHOW MORE'}
+                    </button>
+                  )}
                 </ScrollArea>
               )}
 

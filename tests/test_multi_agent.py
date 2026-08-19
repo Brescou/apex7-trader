@@ -361,8 +361,8 @@ class TestSimPaperResearchGateBypass:
 
 
 class TestSlowAgentCacheHitStillRecordsVote:
-    """economist/geopolitician cache a vote for _SLOW_AGENT_TTL_SEC (15 min
-    default) to avoid a redundant LLM call every ~90s agent cycle — but a
+    """economist/geopolitician cache a vote for _SLOW_AGENT_TTL_SEC (1 h
+    default) to avoid a redundant LLM call every 15 min cycle — but a
     cache HIT still bypassed _emit_vote() entirely, so almost every cycle
     (all but the rare cache-miss ones) left no agent_memory row at all for
     these two agents. was_correct/accuracy tracking and dynamic-weight
@@ -421,6 +421,20 @@ class TestSlowAgentCacheHitStillRecordsVote:
                 "SELECT COUNT(*) FROM agent_memory WHERE agent_name='geopolitician'"
             ).fetchone()[0]
         assert count == 1, "cache-hit vote must still be recorded in agent_memory"
+
+    def test_slow_agent_ttl_default_is_one_hour(self):
+        """LIVE cycles every 15 min; geo/economist votes stay cached for 1 h."""
+        assert multi_mod._SLOW_AGENT_TTL_SEC == 3600
+
+    def test_cached_vote_expires_at_ttl_boundary(self, monkeypatch):
+        monkeypatch.setattr(multi_mod, "_slow_agent_cache", {})
+        t0 = 1_000_000.0
+        with patch("agents.multi.time.time", return_value=t0):
+            multi_mod._set_cached_vote("economist", {"agent": "economist"})
+        with patch("agents.multi.time.time", return_value=t0 + 3599):
+            assert multi_mod._get_cached_vote("economist") is not None
+        with patch("agents.multi.time.time", return_value=t0 + 3600):
+            assert multi_mod._get_cached_vote("economist") is None
 
 
 class TestSimTechnicianSellsMostOverbought:

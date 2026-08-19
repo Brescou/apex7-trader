@@ -143,3 +143,48 @@ def test_keyboard_interrupt_not_caught():
 
     with pytest.raises(KeyboardInterrupt):
         _llm(client, "claude", [{"role": "user", "content": "x"}])
+
+
+def _tool_use_response(tool_id: str = "tu_1") -> SimpleNamespace:
+    """Anthropic-like response that requests another web_search round."""
+    block = SimpleNamespace(type="tool_use", id=tool_id)
+    return SimpleNamespace(
+        stop_reason="tool_use",
+        usage=SimpleNamespace(input_tokens=1, output_tokens=2),
+        content=[block],
+    )
+
+
+def test_web_search_loop_caps_at_two_turns():
+    """A model that keeps requesting tools must stop after two ``messages.create`` calls."""
+    client = MagicMock()
+    client.messages.create.return_value = _tool_use_response()
+
+    out = _llm(
+        client,
+        "claude",
+        [{"role": "user", "content": "x"}],
+        web_search=True,
+    )
+
+    assert out == ""
+    assert client.messages.create.call_count == 2
+
+
+def test_web_search_loop_stops_on_end_turn():
+    """A search then a final answer still completes in two API calls."""
+    client = MagicMock()
+    client.messages.create.side_effect = [
+        _tool_use_response(),
+        _success_response('{"action":"HOLD"}'),
+    ]
+
+    out = _llm(
+        client,
+        "claude",
+        [{"role": "user", "content": "x"}],
+        web_search=True,
+    )
+
+    assert out == '{"action":"HOLD"}'
+    assert client.messages.create.call_count == 2

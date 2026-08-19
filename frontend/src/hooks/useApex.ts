@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AgentAccuracy, CalendarEvent, EquityPoint, Fundamentals, NewsItem, OhlcvBar, Postmortem, SectorItem, WatchlistItem } from '../types'
 
 const BASE = '/api'
+const NEWS_PAGE = 8
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(`${BASE}${path}`)
@@ -181,16 +182,45 @@ export function useChart(symbol: string | null, period = '1mo') {
 // ── News ──────────────────────────────────────────────────────────────────────
 export function useNews(symbol: string | null) {
   const [news, setNews] = useState<NewsItem[]>([])
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [limit, setLimit] = useState(NEWS_PAGE)
+  const [prevSymbol, setPrevSymbol] = useState(symbol)
+
+  if (symbol !== prevSymbol) {
+    setPrevSymbol(symbol)
+    setLimit(NEWS_PAGE)
+    setNews([])
+    setHasMore(false)
+    setLoadingMore(false)
+  }
 
   useEffect(() => {
-    if (!symbol) { setNews([]); return }
-    fetch(`/api/market/news/${encodeURIComponent(symbol)}`)
+    if (!symbol) {
+      setNews([])
+      setHasMore(false)
+      return
+    }
+    const ac = new AbortController()
+    if (limit > NEWS_PAGE) setLoadingMore(true)
+    fetch(`/api/market/news/${encodeURIComponent(symbol)}?limit=${limit}`, { signal: ac.signal })
       .then(r => r.json())
-      .then(data => setNews(data.news ?? []))
-      .catch(() => { /* keep stale */ })
-  }, [symbol])
+      .then(data => {
+        setNews(data.news ?? [])
+        setHasMore(Boolean(data.has_more))
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+      })
+      .finally(() => setLoadingMore(false))
+    return () => ac.abort()
+  }, [symbol, limit])
 
-  return news
+  const loadMore = useCallback(() => {
+    setLimit(n => n + NEWS_PAGE)
+  }, [])
+
+  return { news, hasMore, loadMore, loadingMore }
 }
 
 // ── Fundamentals ──────────────────────────────────────────────────────────────

@@ -9,15 +9,22 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import market_data.finnhub as fh
-from market_data.finnhub import _is_plain_ticker, fetch_finnhub_quote, fetch_finnhub_quotes
+from market_data.finnhub import (
+    _is_plain_ticker,
+    fetch_finnhub_news,
+    fetch_finnhub_quote,
+    fetch_finnhub_quotes,
+)
 
 
 @pytest.fixture(autouse=True)
 def clear_finnhub_cache():
     fh._fh_cache.clear()
+    fh._fh_news_cache.clear()
     fh._missing_key_warned = False
     yield
     fh._fh_cache.clear()
+    fh._fh_news_cache.clear()
     fh._missing_key_warned = False
 
 
@@ -269,3 +276,74 @@ def test_macro_refreshes_plain_tickers_via_finnhub():
     # VIX/DXY kept from stale
     assert result["VIX"]["price"] == 20.0
     assert result["DXY"]["price"] == 104.0
+
+
+# ── fetch_finnhub_news ────────────────────────────────────────────────────────
+
+
+_NEWS_PAYLOAD = [
+    {
+        "headline": "Apple beats estimates",
+        "source": "Reuters",
+        "url": "https://example.com/r",
+        "datetime": 1765000000,
+    },
+    {
+        "headline": "",
+        "source": "SkipMe",
+        "url": "https://example.com/x",
+        "datetime": 1,
+    },
+]
+
+
+def test_news_parses_payload():
+    with patch.object(fh, "_api_key", return_value="test-key"):
+        with patch("market_data.finnhub.httpx.Client") as mock_client_cls:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = _NEWS_PAYLOAD
+            mock_resp.raise_for_status.return_value = None
+            mock_client_cls.return_value.__enter__.return_value.get.return_value = mock_resp
+            items = fetch_finnhub_news("AAPL")
+
+    assert len(items) == 1
+    assert items[0]["title"] == "Apple beats estimates"
+    assert items[0]["source"] == "Reuters"
+    assert items[0]["url"] == "https://example.com/r"
+    assert items[0]["sentiment"] in ("positive", "negative", "neutral")
+    assert "age" in items[0]
+
+
+def test_news_skips_special_symbols():
+    assert fetch_finnhub_news("^VIX") == []
+    assert fetch_finnhub_news("DX-Y.NYB") == []
+
+
+def test_news_skips_network_without_api_key():
+    with patch.object(fh, "_api_key", return_value=""):
+        with patch("market_data.finnhub.httpx.Client") as mock_client_cls:
+            items = fetch_finnhub_news("AAPL")
+    mock_client_cls.assert_not_called()
+    assert items == []
+
+
+def test_news_cached_second_call_no_http():
+    with patch.object(fh, "_api_key", return_value="test-key"):
+        with patch("market_data.finnhub.httpx.Client") as mock_client_cls:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = _NEWS_PAYLOAD
+            mock_resp.raise_for_status.return_value = None
+            mock_client_cls.return_value.__enter__.return_value.get.return_value = mock_resp
+            fetch_finnhub_news("AAPL")
+            fetch_finnhub_news("AAPL")
+    assert mock_client_cls.call_count == 1
+
+
+def test_news_returns_empty_on_network_error():
+    with patch.object(fh, "_api_key", return_value="test-key"):
+        with patch("market_data.finnhub.httpx.Client") as mock_client_cls:
+            mock_client_cls.return_value.__enter__.return_value.get.side_effect = Exception(
+                "timeout"
+            )
+            items = fetch_finnhub_news("MSFT")
+    assert items == []

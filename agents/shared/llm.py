@@ -15,7 +15,7 @@ from agents.shared.modes import get_runtime_mode
 
 logger = logging.getLogger("apex7")
 
-SONNET_ID = "claude-sonnet-4-5"
+SONNET_ID = "claude-sonnet-5"
 HAIKU_ID = "claude-haiku-4-5-20251001"
 
 _API_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
@@ -34,6 +34,9 @@ _circuit_breaker: dict = {"consecutive_failures": 0, "paused_until": 0.0}
 _circuit_breaker_lock = threading.Lock()
 _CIRCUIT_BREAKER_THRESHOLD = 3
 _CIRCUIT_BREAKER_PAUSE = 300  # 5 minutes
+# Analyst / geo / research may use web_search; 2 turns (search + answer)
+# caps Anthropic search fees without starving a single lookup.
+_WEB_SEARCH_MAX_TURNS = 2
 
 _degradation_status: dict[str, Any] = {"active": False, "reason": None}
 _degradation_lock = threading.Lock()
@@ -102,7 +105,11 @@ def _llm(
     max_tokens: int = 1024,
     web_search: bool = False,
 ) -> str:
-    """Single LLM call or agentic web-search loop with budget cap and circuit breaker."""
+    """Single LLM call or agentic web-search loop with budget cap and circuit breaker.
+
+    When ``web_search`` is True the tool loop is capped at
+    ``_WEB_SEARCH_MAX_TURNS`` API rounds (search then answer).
+    """
     with _token_counter_lock:
         _reset_token_counter_if_new_day()
         total_tokens = _token_counter["input"] + _token_counter["output"]
@@ -137,7 +144,7 @@ def _llm(
 
     resp = None
     try:
-        for _ in range(8):
+        for _ in range(_WEB_SEARCH_MAX_TURNS):
             resp = client.messages.create(**kwargs)
             # Track token usage
             if hasattr(resp, "usage"):

@@ -1,6 +1,6 @@
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { useAnalytics, useCorrelation, useMacro, useSectors, useWatchlist } from '../useApex'
+import { useAnalytics, useCorrelation, useMacro, useNews, useSectors, useWatchlist } from '../useApex'
 
 function mockFetchOnce(body: unknown, ok = true) {
   const json = vi.fn().mockResolvedValue(body)
@@ -123,5 +123,31 @@ describe('useApex hooks — API contract consumption', () => {
     await waitFor(() => expect(result.current.accuracy).toHaveLength(1))
     expect(result.current.accuracy[0].role).toBe('technician')
     expect(result.current.postmortems[0].holdDays).toBe(2)
+  })
+
+  it('useNews pages with ?limit= and loadMore', async () => {
+    const page = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        title: `t${i}`,
+        publisher: 'Wire',
+        link: '',
+        time: '1h ago',
+        sentiment: 'neutral',
+      }))
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      const limit = Number(new URL(url, 'http://local').searchParams.get('limit') || 8)
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ news: page(Math.min(limit, 20)), has_more: limit < 20 }),
+      })
+    }) as typeof fetch
+
+    const { result } = renderHook(() => useNews('AAPL'))
+    await waitFor(() => expect(result.current.news).toHaveLength(8))
+    expect(result.current.hasMore).toBe(true)
+
+    act(() => { result.current.loadMore() })
+    await waitFor(() => expect(result.current.news).toHaveLength(16))
+    expect(result.current.hasMore).toBe(true)
   })
 })

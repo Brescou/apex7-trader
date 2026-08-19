@@ -112,11 +112,10 @@ _WEIGHTS_CACHE_TTL_SEC = 600
 _MIN_EVALUATED_VOTES = 5
 
 # ── Slow-agent vote cache ─────────────────────────────────────────────────────
-# Economist and Geopolitician consume Sonnet+web or heavy FRED data that changes
-# slowly (FRED: daily/monthly; geopolitics: hourly at best). Reusing the last
-# vote for up to _SLOW_AGENT_TTL_SEC avoids a redundant LLM call every cycle
-# while still refreshing when genuinely new information may have arrived.
-_SLOW_AGENT_TTL_SEC = int(os.environ.get("SLOW_AGENT_TTL_SEC", "900"))  # default 15 min
+# Economist and Geopolitician consume Sonnet+web or heavy FRED data that
+# changes slowly (FRED daily; geo on an hourly scale). Default 1 h so LIVE
+# 15 min cycles reuse the last vote ~3 times instead of re-calling every tick.
+_SLOW_AGENT_TTL_SEC = int(os.environ.get("SLOW_AGENT_TTL_SEC", "3600"))  # default 1 h
 _slow_agent_cache: dict[str, dict] = {}  # agent_name → {"vote": dict, "ts": float}
 _slow_agent_lock = threading.Lock()
 
@@ -1144,7 +1143,7 @@ def economist_node(state: MultiAgentState) -> dict:
     # Analyse le cycle économique long : courbe des taux, trajectoire Fed, inflation, PMI.
     # Fournit un economic_score (-1 → +1) qui peut freiner les BUY en contexte récessif.
     # Modèle : Haiku (données FRED structurées fournies — pas de web search nécessaire).
-    # Cache 15 min (SLOW_AGENT_TTL_SEC) : les données FRED changent au mieux quotidiennement.
+    # Cache 1 h (SLOW_AGENT_TTL_SEC) : les données FRED changent au mieux quotidiennement.
     if _no_llm_mode():
         return sim_economist(state)
 
@@ -1158,7 +1157,7 @@ def economist_node(state: MultiAgentState) -> dict:
         ]
         # Still record this cycle's use of the cached vote in agent_memory —
         # skipping _emit_vote() here meant a cache hit (the overwhelming
-        # majority of cycles at a 15min TTL vs. a ~90s agent interval) left
+        # majority of cycles at a 15min TTL vs. a shorter agent interval) left
         # no agent_memory row at all, so was_correct/accuracy tracking and
         # dynamic-weight blending silently under-counted this agent's real
         # participation (Review Finding).
@@ -1214,7 +1213,7 @@ def geopolitician_node(state: MultiAgentState) -> dict:
     # web_search=True car les événements géopolitiques nécessitent des infos actuelles.
     # Un geo_risk > 7 dampène les BUY de 50 % dans arbitrate_node.
     # Modèle : Sonnet (interprétation nuancée des tensions internationales).
-    # Cache 15 min (SLOW_AGENT_TTL_SEC) : les situations géo évoluent à l'heure, pas à la minute.
+    # Cache 1 h (SLOW_AGENT_TTL_SEC) : les situations géo évoluent à l'heure, pas à la minute.
     if _no_llm_mode():
         return sim_geopolitician(state)
 

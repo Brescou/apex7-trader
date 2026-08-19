@@ -8,8 +8,8 @@ X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN", "")
 # FRED (Federal Reserve Economic Data) — optional; improves reliability/limits.
 FRED_API_KEY = os.getenv("FRED_API_KEY", "").strip()
 
-# Finnhub — used as fallback quote provider when the yfinance circuit breaker
-# trips. The free tier works without a key (30 req/min); a key lifts it to 60.
+# Finnhub — fallback quotes when the yfinance breaker is open, and company
+# news when yfinance Ticker.news is empty. Unauthenticated calls 401.
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "").strip()
 
 WATCHLIST = [
@@ -25,9 +25,10 @@ DEATH_THRESHOLD = 50.0
 MAX_POSITIONS = 3
 MAX_ALLOC_PCT = 40
 MAX_PYRAMID_LAYERS = int(os.getenv("MAX_PYRAMID_LAYERS", "3"))
-# Increased from 30s: 2 parallel Sonnet+web_search agents (Analyst + Geopolitician)
-# can each take 10-30s; at 30s the cycle would constantly overrun its own interval.
-AGENT_INTERVAL = 90
+# LIVE/PAPER agent cadence. SIM stays at 3s in runtime.controller.
+# 15 min keeps ~26 cycles in a 6.5h NYSE/TSX cash session (fits the 500k
+# daily token budget better than 90s).
+AGENT_INTERVAL = 900
 
 SIMULATION_MODE = os.getenv("SIMULATION_MODE", "false").lower() == "true"
 PAPER_MODE = os.getenv("PAPER_MODE", "false").lower() == "true"
@@ -61,7 +62,8 @@ EVAL_HORIZON_CALENDAR_DAYS = 7
 MACRO_SYMBOLS = {"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}
 MARKET_DATA_CACHE_SEC = 60
 WATCHLIST_CACHE_SEC = 10
-NEWS_MAX_ITEMS = 8
+NEWS_MAX_ITEMS = 8  # page size (terminal NEWS "show more")
+NEWS_MAX_TOTAL = 40  # hard cap per symbol (5 pages)
 
 USE_LIVEFEED = os.getenv("USE_LIVEFEED", "true").lower() == "true"
 PORTFOLIO_STATE_PATH = os.getenv("PORTFOLIO_STATE_PATH", "portfolio_state.json")

@@ -40,8 +40,8 @@ _earnings_cache: dict[str, Any] = {"data": None, "ts": 0.0, "key": ""}
 _earnings_lock = threading.Lock()
 EARNINGS_TTL = 300  # 5 min
 
-# Per-(symbol, max_items) TTL cache (120s) so the headline strip and news
-# panel share one fetch instead of double-hitting yfinance every tick.
+# Per-symbol TTL cache (120s) of the full headline pool (up to NEWS_MAX_TOTAL).
+# Pagination slices this list; the strip and NEWS panel share one fetch.
 _news_cache: dict[str, dict[str, Any]] = {}
 _news_lock = threading.Lock()
 NEWS_CACHE_SEC = 120

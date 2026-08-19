@@ -201,10 +201,10 @@ Shared nodes (defined in `agents/shared/nodes.py`, used by `agents/multi.py`): `
 
 ### Model usage
 
-- `claude-sonnet-4-5` — `analyst_node`, `geopolitician_node`, `arbitrate_node` (complex reasoning + web search)
+- `claude-sonnet-5` — `analyst_node`, `geopolitician_node`, `arbitrate_node` (complex reasoning + web search)
 - `claude-haiku-4-5-20251001` — `load_memory_node` (pattern extraction), `save_memory_node` (lesson generation), `technician_node`, `risk_manager_node`, `macro_watcher_node`, `economist_node`, `supervisor_node`
 
-The `_llm()` helper in `agents/shared/llm.py` handles the agentic web-search tool loop (up to 8 iterations) using Claude's `web_search_20250305` tool directly via the Anthropic SDK. It includes a daily token budget cap and circuit breaker (3 consecutive failures → 5-minute pause). On `anthropic.RateLimitError`, the breaker opens immediately so later `_llm()` calls respect `Retry-After` / pause.
+The `_llm()` helper in `agents/shared/llm.py` handles the agentic web-search tool loop (up to 2 iterations: search then answer) using Claude's `web_search_20250305` tool directly via the Anthropic SDK. It includes a daily token budget cap and circuit breaker (3 consecutive failures → 5-minute pause). On `anthropic.RateLimitError`, the breaker opens immediately so later `_llm()` calls respect `Retry-After` / pause. Economist / geopolitician votes are reused for `SLOW_AGENT_TTL_SEC` (default 1 h) so LIVE 15 min cycles do not re-call those two every tick.
 
 ### Runtime modes (LIVE / PAPER / SIM)
 
@@ -216,12 +216,13 @@ in `agents/shared/modes.py` (re-exported from `agents/shared/nodes.py`) enforce 
 
 | Mode | Prices | Decisions | DB | Cycle | LLM cost |
 |------|--------|-----------|----|-------|----------|
-| `LIVE` | yfinance real-time | LLM (Sonnet + Haiku + web_search) | `trades.db` | `AGENT_INTERVAL` (90 s) | $$$ |
-| `PAPER` | yfinance real-time | Rule-based (`sim_*` nodes) — **zero LLM** | `trades_paper.db` | `AGENT_INTERVAL` (90 s) | 0 |
+| `LIVE` | yfinance real-time | LLM (Sonnet + Haiku + web_search) | `trades.db` | `AGENT_INTERVAL` (15 min, NYSE/TSX cash hours) | $$$ |
+| `PAPER` | yfinance real-time | Rule-based (`sim_*` nodes) — **zero LLM** | `trades_paper.db` | `AGENT_INTERVAL` (15 min, NYSE/TSX cash hours) | 0 |
 | `SIM` | Random walk (`SIM_DRIFT`/`SIM_VOLATILITY`) | Rule-based (`sim_*` nodes) | `trades_sim.db` | 3 s (fast loop) | 0 |
 
 Implementation details:
 - `_no_llm_mode()` returns `True` for sim **or** paper. Every Anthropic-bound branch (`analyst_node`, `arbitrate_node`, `supervisor_node`, `technician_node`, `risk_manager_node`, `macro_watcher_node`, `economist_node`, `geopolitician_node`, `research_node`, `load_memory_node`, `save_memory_node`, `run_daily_postmortem`) is gated by this helper.
+- LIVE/PAPER skip `graph.invoke` outside NYSE/TSX cash hours (weekdays 09:30–16:00 `America/New_York`, `core/session.py`). The FastAPI UI stays up. SIM is not gated.
 - `_get_db_path()` priority: `paper > sim > live` (defensive: paper wins if both flags are accidentally on).
 - `source` column values: `'live'`, `'paper'`, `'simulation'`.
 - Mode switch takes effect on the next cycle — no thread restart needed.
@@ -343,10 +344,13 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 | `PORTFOLIO_SAVE_ENABLED` | `true` | Enable/disable Portfolio save_state(); set `false` in unit tests |
 | `DISCORD_WEBHOOK_URL` | — | Optional Discord webhook for `core.notifications` (trades, death, stagnation, rate-limit, startup, **daily digest**, **weekly report**, **evaluation**) |
 | `FRED_API_KEY` | — | Optional; FRED JSON works for many series without a key but is **rate-limited** — key improves limits |
+| `FINNHUB_API_KEY` | — | Optional; fallback quotes when the yfinance breaker is open, and company news when `Ticker.news` is empty (`market_data/finnhub.py`) |
 | `MACRO_SYMBOLS` | `{"VIX": "^VIX", "SPY": "SPY", "DXY": "DX-Y.NYB"}` | Symbols for the TERMINAL macro header bar |
 | `MARKET_DATA_CACHE_SEC` | `60` | TTL for macro data cache (`market_data.caches` / `macro.py`) |
 | `WATCHLIST_CACHE_SEC` | `10` | TTL for watchlist prices cache (`market_data.caches` / `quotes.py`) |
-| `NEWS_MAX_ITEMS` | `8` | Max news items returned by `fetch_news()` |
+| `NEWS_MAX_ITEMS` | `8` | Page size for terminal NEWS (`GET /api/market/news/{symbol}?limit=`) |
+| `NEWS_MAX_TOTAL` | `40` | Hard cap of headlines cached per symbol (5 pages of "show more") |
+| `SLOW_AGENT_TTL_SEC` | `3600` | Reuse economist / geopolitician votes this many seconds (LIVE still cycles every 15 min) |
 | `MAX_PYRAMID_LAYERS` | `3` | Env `MAX_PYRAMID_LAYERS` — max BUY layers per symbol (`Portfolio.buy` pyramiding; weighted `avg_price`) |
 | `DASHBOARD_PASSWORD` | — | Optional; when set, requires a matching Bearer token on REST routes and `?token=` on `/ws` (`/health` stays open for monitoring). Unset = no auth (localhost default) |
 
@@ -355,6 +359,7 @@ All tuneable constants are in `config.py`. Env vars override at startup:
 ## Known pitfalls
 
 - **FRED API** — works without `FRED_API_KEY` for many popular JSON series, but responses are **rate-limited**. Set `FRED_API_KEY` in `.env` for higher quotas and more predictable access (`core/external_data.fetch_fred_latest`).
+- **Finnhub** — `FINNHUB_API_KEY` in `.env` (restart after adding). Unauthenticated `/quote` and `/company-news` 401. Used for quotes when the yfinance breaker is open, and for terminal headlines when `yf.Ticker.news` is empty.
 - **Fear & Greed** — CNN `production.dataviz.cnn.io` endpoint is **undocumented** and may change without notice. `fetch_fear_greed` is **fail-silent** (bar shows `F&G: —` on failure).
 - **Earnings calendar** — `yf.Ticker.calendar` shape varies across **yfinance** versions (dict vs DataFrame, column names). `market_data.fetch_earnings_calendar` and `build_economic_calendar_rows` must stay wrapped in **try/except**; never assume a single format.
 - **`_SCHEDULED_MACRO_EVENTS`** — calendrier macro **fallback** dans `market_data/economic_calendar.py`. CPI/NFP sont désormais récupérés via FRED (`fetch_fred_release_dates`, ids 10/50) par `_get_macro_events()` ; le **FOMC** (pas un *release* FRED) et le mode **hors-ligne** retombent sur cette liste statique — **toujours à mettre à jour trimestriellement**. `logger.warning` se déclenche si la date du jour dépasse la dernière date de la liste.

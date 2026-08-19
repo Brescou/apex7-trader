@@ -138,7 +138,7 @@ The compiled graph is also exposed to **LangGraph Studio** via `langgraph.json` 
 
 | Task | Model | Why |
 |------|-------|-----|
-| Analysis, research, arbitration, geopolitics | `claude-sonnet-4-5` | Complex reasoning, web search, JSON output |
+| Analysis, research, arbitration, geopolitics | `claude-sonnet-5` | Complex reasoning, web search, JSON output |
 | Memory extraction, supervisor brief | `claude-haiku-4-5-20251001` | Fast, cheap — runs on every cycle |
 | Technician, risk manager, macro watcher, economist | `claude-haiku-4-5-20251001` | Structured output, latency-sensitive |
 
@@ -148,7 +148,7 @@ This keeps the expensive model where reasoning quality matters and the cheap mod
 
 ### Web search as a native tool
 
-Claude's `web_search_20250305` tool is used directly via the Anthropic SDK in an agentic loop — not as a LangChain wrapper. The `_llm()` helper handles the tool-use cycle (up to 8 iterations) and returns the final assistant text. This gives the agent real-time market intel without maintaining a separate search API integration.
+Claude's `web_search_20250305` tool is used directly via the Anthropic SDK in an agentic loop — not as a LangChain wrapper. The `_llm()` helper handles the tool-use cycle (up to 2 iterations: search then answer) and returns the final assistant text. This gives the agent real-time market intel without maintaining a separate search API integration. Economist and geopolitician votes are cached for 1 hour (`SLOW_AGENT_TTL_SEC`) so they are not re-called on every 15 min LIVE cycle.
 
 ### Pydantic validation for LLM outputs
 
@@ -336,7 +336,7 @@ SIM_DRIFT=0.0001            # slight upward drift (default 0.01%)
 # Optional — FRED (many series work without a key, but are rate-limited)
 # FRED_API_KEY=...
 
-# Optional — Finnhub fallback quotes when the yfinance breaker is open
+# Optional — Finnhub fallback quotes (yfinance breaker) + company news
 # FINNHUB_API_KEY=...
 ```
 
@@ -348,7 +348,7 @@ INITIAL_BALANCE = 1000      # starting cash ($)
 DEATH_THRESHOLD = 50        # portfolio floor ($) — agent dies below this
 MAX_POSITIONS   = 3         # maximum simultaneous open positions
 MAX_ALLOC_PCT   = 40        # max % of portfolio per trade
-AGENT_INTERVAL  = 90        # seconds between live cycles (parallel Sonnet+web_search calls take 10-30s each)
+AGENT_INTERVAL  = 900       # 15 min between LIVE/PAPER cycles (NYSE/TSX cash hours only)
 STOP_LOSS_PCT   = 0.05      # stop-loss threshold (5%) — enforced before agent decision
 POSTMORTEM_HOUR = 22        # hour (0-23) at which daily postmortem runs
 ```
@@ -464,7 +464,7 @@ The market screener (`market_data/screener.py`) still exists and is covered by t
 | Decisions | RSI rule-based | RSI rule-based — **zero LLM** | Claude Sonnet + web search |
 | Memory | Rule-generated lessons | Rule-generated lessons | Claude Haiku lesson extraction |
 | Database | `trades_sim.db` | `trades_paper.db` | `trades.db` |
-| Cycle interval | 3s | 90s (`AGENT_INTERVAL`) | 90s (`AGENT_INTERVAL`) |
+| Cycle interval | 3s | 15 min (`AGENT_INTERVAL`, cash hours) | 15 min (`AGENT_INTERVAL`, cash hours) |
 | API costs | None | None | ~$0.01-0.05 per cycle |
 
 Toggle from the frontend topbar — takes effect on the next cycle.

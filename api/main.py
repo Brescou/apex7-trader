@@ -84,6 +84,7 @@ app.include_router(ws_router)  # WebSocket auth is handled inside the route (see
 @app.get("/health")
 def health():
     from agents.shared.nodes import get_runtime_mode
+    from core.session import is_cash_session_open
     from runtime.controller import _controller_lock, _ctrl, _state
 
     with _controller_lock:
@@ -96,6 +97,7 @@ def health():
         "agent_alive": alive,
         "cycle": cycle,
         "mode": mode,
+        "cash_session_open": is_cash_session_open(),
     }
     # A dead or missing portfolio must fail the HTTP status too, not just
     # the JSON ``status`` field — otherwise ``curl -f`` never notices.

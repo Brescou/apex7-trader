@@ -17,6 +17,7 @@ from agents.multi import run_daily_digest, run_daily_postmortem, run_weekly_repo
 from agents.registry import get_graph
 from config import AGENT_INTERVAL, POSTMORTEM_HOUR
 from core.data import Portfolio
+from core.session import is_cash_session_open
 
 logger = logging.getLogger("apex7.controller")
 
@@ -43,6 +44,7 @@ def _agent_loop(p: Portfolio) -> None:
 
     graph = get_graph(p)
     cycle = 0
+    session_closed_logged = False
 
     while not p.is_dead:
         while True:
@@ -56,6 +58,24 @@ def _agent_loop(p: Portfolio) -> None:
             time.sleep(0.3)
         if p.is_dead:
             break
+
+        # LIVE/PAPER: no LLM (or paper rules) outside NYSE/TSX cash hours.
+        # SIM keeps the fast random-walk loop around the clock.
+        if not get_simulation_mode() and not is_cash_session_open():
+            if not session_closed_logged:
+                logger.info(
+                    "NYSE/TSX cash session closed — skipping agent cycles "
+                    "until 09:30 America/New_York"
+                )
+                p.log("SESSION CLOSED — waiting for 09:30–16:00 ET")
+                session_closed_logged = True
+            for _ in range(60):
+                if p.is_dead:
+                    break
+                time.sleep(1.0)
+            continue
+        session_closed_logged = False
+
         cycle += 1
         with _controller_lock:
             _ctrl["step"] = False
@@ -130,7 +150,7 @@ def _agent_loop(p: Portfolio) -> None:
             p.log("AGENT HALTED — DEATH CONDITION MET", "critical")
             break
         # Sim runs fast (random walk). Paper and live both pace at AGENT_INTERVAL
-        # so the paper feedback loop matches live.
+        # (15 min) so the paper feedback loop matches live.
         sleep_s = 3 if get_simulation_mode() else AGENT_INTERVAL
         p.log(f"=== CYCLE {cycle} DONE — sleeping {sleep_s}s ===")
         elapsed = 0.0

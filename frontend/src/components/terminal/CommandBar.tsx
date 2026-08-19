@@ -2,10 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TextInput } from '@mantine/core'
 import styles from './CommandBar.module.css'
 
+export type TerminalView = 'overview' | 'news' | 'financials'
+
 interface Props {
   symbols: string[]
-  onSelect: (sym: string) => void
+  onSelect: (sym: string, view?: TerminalView) => void
   onAdd: (sym: string) => Promise<boolean> | boolean
+}
+
+function fnToView(code: string): TerminalView {
+  if (code === 'N') return 'news'
+  if (code === 'DES') return 'financials'
+  return 'overview'
 }
 
 const FUNCTIONS = [
@@ -64,9 +72,9 @@ export function CommandBar({ symbols, onSelect, onAdd }: Props) {
     if (fnCode === 'ADD' || (!known && fnCode === '')) {
       const ok = await onAdd(sym)
       notify(ok ? `${sym} added` : `${sym} — add failed (max 20 / invalid)`, ok)
-      if (ok) onSelect(sym)
+      if (ok) onSelect(sym, fnToView(fnCode))
     } else if (known) {
-      onSelect(sym)
+      onSelect(sym, fnToView(fnCode))
       notify(`${sym} → ${fnCode || 'GP'}`, true)
     } else {
       notify(`${sym} unknown — try "${sym} ADD"`, false)
